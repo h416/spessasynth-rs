@@ -1,0 +1,13 @@
+pub mod compute_modulator;
+pub mod controller_tables;
+pub mod dsp_chain;
+pub mod dynamic_modulator_system;
+pub mod key_modifier_manager;
+pub mod master_parameters;
+pub mod modulator_curves;
+pub mod sound_bank_manager;
+pub mod synth_constants;
+pub mod synth_processor_options;
+pub mod unit_converter;
+pub mod voice;
+pub mod voice_cache;
