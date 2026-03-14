@@ -2,7 +2,9 @@
 /// purpose: MIDI controller change handler for MidiChannel.
 /// Ported from: src/synthesizer/audio_engine/engine_methods/controller_control/controller_change.ts
 use crate::midi::enums::midi_controllers;
-use crate::synthesizer::audio_engine::engine_components::synth_constants::DEFAULT_PERCUSSION;
+use crate::synthesizer::audio_engine::engine_components::synth_constants::{
+    DEFAULT_PERCUSSION, MIN_NOTE_LENGTH,
+};
 use crate::synthesizer::audio_engine::engine_components::voice::Voice;
 use crate::synthesizer::audio_engine::synthesizer_core::MidiChannel;
 use crate::synthesizer::enums::{custom_controllers, data_entry_states};
@@ -195,7 +197,7 @@ impl MidiChannel {
                         for v in voices.iter_mut() {
                             if v.channel == self.channel && v.is_active && v.is_held {
                                 v.is_held = false;
-                                v.release_voice(current_time, 0.0);
+                                v.release_voice(current_time, MIN_NOTE_LENGTH);
                                 vc += 1;
                                 if vc >= self.voice_count {
                                     break;

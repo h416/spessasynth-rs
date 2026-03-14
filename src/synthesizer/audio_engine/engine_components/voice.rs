@@ -306,6 +306,7 @@ impl Voice {
         self.is_active = true;
         self.is_in_release = false;
         self.has_rendered = false;
+        self.is_held = false;
         self.release_start_time = f64::INFINITY;
         self.pressure = 0;
         self.channel = channel;
