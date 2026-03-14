@@ -21,6 +21,7 @@ pub const DEFAULT_MASTER_PARAMETERS: MasterParameterType = MasterParameterType {
     black_midi_mode: false,
     transposition: 0.0,
     device_id: ALL_CHANNELS_OR_DIFFERENT_ACTION,
+    delay_gain: 1.0,
 };
 
 impl Default for MasterParameterType {

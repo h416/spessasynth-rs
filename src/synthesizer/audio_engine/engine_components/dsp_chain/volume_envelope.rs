@@ -449,6 +449,8 @@ impl VolumeEnvelope {
             // During attack, attenuation is 0 (peak) for accounting purposes.
             self.attenuation_cb = 0.0;
 
+            // Apply gain offset (e.g. from LFO volume modulation) during attack phase.
+            let gain_offset = cb_attenuation_to_gain_f64(centibel_offset) as f64;
             while sample_time < attack_end {
                 if smooth {
                     current_gain += (gain_target - current_gain) * gain_smoothing;
@@ -462,8 +464,8 @@ impl VolumeEnvelope {
                 };
 
                 // Emulate JS Float32Array *= semantics:
-                // JS: buffer[i] *= linearGain * currentGain  → buffer[i] * (linearGain * currentGain)
-                buffer[filled_buffer] = (buffer[filled_buffer] as f64 * (linear_gain * current_gain)) as f32;
+                // JS: buffer[i] *= linearGain * currentGain * gainOffset
+                buffer[filled_buffer] = (buffer[filled_buffer] as f64 * (linear_gain * current_gain * gain_offset)) as f32;
 
                 sample_time += 1.0;
                 filled_buffer += 1;

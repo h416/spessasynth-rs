@@ -25,6 +25,13 @@ pub mod registered_parameter_types {
 /// Equivalent to: nonRegisteredMSB
 pub mod non_registered_msb {
     pub const PART_PARAMETER: u8 = 0x01;
+    pub const DRUM_PITCH: u8 = 0x18;
+    pub const DRUM_PITCH_FINE: u8 = 0x19;
+    pub const DRUM_LEVEL: u8 = 0x1a;
+    pub const DRUM_PAN: u8 = 0x1c;
+    pub const DRUM_REVERB: u8 = 0x1d;
+    pub const DRUM_CHORUS: u8 = 0x1e;
+    pub const DRUM_DELAY: u8 = 0x1f;
     pub const AWE32: u8 = 0x7f;
     pub const SF2: u8 = 120;
 }
@@ -102,6 +109,85 @@ impl MidiChannel {
                             enable_event_system,
                         );
                         events.append(&mut sub_events);
+                    }
+
+                    non_registered_msb::DRUM_PITCH => {
+                        if self.drum_channel && (nrpn_fine as usize) < 128 {
+                            let pitch = if self.channel_system(current_system) == SynthSystem::Xg {
+                                (data_value as i32 - 64) * 100
+                            } else {
+                                (data_value as i32 - 64) * 50
+                            };
+                            self.drum_params[nrpn_fine as usize].pitch = pitch as f64;
+                            spessa_synth_info(&format!(
+                                "Drum pitch for note {} on ch {}: {} cents",
+                                nrpn_fine, self.channel, pitch
+                            ));
+                        }
+                    }
+
+                    non_registered_msb::DRUM_PITCH_FINE => {
+                        if self.drum_channel && (nrpn_fine as usize) < 128 {
+                            let fine = data_value as i32 - 64;
+                            self.drum_params[nrpn_fine as usize].pitch += fine as f64;
+                            spessa_synth_info(&format!(
+                                "Drum pitch fine for note {} on ch {}: {} cents",
+                                nrpn_fine, self.channel, fine
+                            ));
+                        }
+                    }
+
+                    non_registered_msb::DRUM_LEVEL => {
+                        if self.drum_channel && (nrpn_fine as usize) < 128 {
+                            self.drum_params[nrpn_fine as usize].gain = data_value as f64 / 120.0;
+                            spessa_synth_info(&format!(
+                                "Drum level for note {} on ch {}: {}",
+                                nrpn_fine, self.channel, data_value
+                            ));
+                        }
+                    }
+
+                    non_registered_msb::DRUM_PAN => {
+                        if self.drum_channel && (nrpn_fine as usize) < 128 {
+                            self.drum_params[nrpn_fine as usize].pan = data_value;
+                            spessa_synth_info(&format!(
+                                "Drum pan for note {} on ch {}: {}",
+                                nrpn_fine, self.channel, data_value
+                            ));
+                        }
+                    }
+
+                    non_registered_msb::DRUM_REVERB => {
+                        if self.drum_channel && (nrpn_fine as usize) < 128 {
+                            self.drum_params[nrpn_fine as usize].reverb_gain =
+                                data_value as f64 / 127.0;
+                            spessa_synth_info(&format!(
+                                "Drum reverb for note {} on ch {}: {}",
+                                nrpn_fine, self.channel, data_value
+                            ));
+                        }
+                    }
+
+                    non_registered_msb::DRUM_CHORUS => {
+                        if self.drum_channel && (nrpn_fine as usize) < 128 {
+                            self.drum_params[nrpn_fine as usize].chorus_gain =
+                                data_value as f64 / 127.0;
+                            spessa_synth_info(&format!(
+                                "Drum chorus for note {} on ch {}: {}",
+                                nrpn_fine, self.channel, data_value
+                            ));
+                        }
+                    }
+
+                    non_registered_msb::DRUM_DELAY => {
+                        if self.drum_channel && (nrpn_fine as usize) < 128 {
+                            self.drum_params[nrpn_fine as usize].delay_gain =
+                                data_value as f64 / 127.0;
+                            spessa_synth_info(&format!(
+                                "Drum delay for note {} on ch {}: {}",
+                                nrpn_fine, self.channel, data_value
+                            ));
+                        }
                     }
 
                     non_registered_msb::AWE32 => {
@@ -324,7 +410,7 @@ impl MidiChannel {
                 let semitones = data_value as i32 - 64;
                 self.set_custom_controller(
                     custom_controllers::CHANNEL_TUNING_SEMITONES,
-                    semitones as f32,
+                    semitones as f64,
                 );
                 spessa_synth_info(&format!(
                     "Coarse tuning for {}: {} semitones",
@@ -334,11 +420,11 @@ impl MidiChannel {
 
             rpt::FINE_TUNING => {
                 // Store raw value; LSB will be adjusted in data_entry_fine
-                self.set_tuning(data_value as f32 - 64.0, false);
+                self.set_tuning(data_value as f64 - 64.0, false);
             }
 
             rpt::MODULATION_DEPTH => {
-                self.set_modulation_depth(data_value as f32 * 100.0);
+                self.set_modulation_depth(data_value as f64 * 100.0);
             }
 
             rpt::RESET_PARAMETERS => {

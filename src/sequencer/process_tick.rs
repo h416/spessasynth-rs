@@ -156,9 +156,7 @@ mod tests {
         // Render some audio to advance synth time
         let samples = 44100; // 1 second
         let mut out = vec![vec![0.0f32; samples]; 2];
-        let mut rev = vec![vec![0.0f32; samples]; 2];
-        let mut cho = vec![vec![0.0f32; samples]; 2];
-        seq.synth.render_audio(&mut out, &mut rev, &mut cho, 0, samples);
+        seq.synth.render_audio(&mut out, 0, samples);
 
         // Now process tick should advance
         seq.process_tick();
@@ -185,9 +183,7 @@ mod tests {
         // Advance synth time past the song duration
         let samples = 44100 * 2; // 2 seconds
         let mut out = vec![vec![0.0f32; samples]; 2];
-        let mut rev = vec![vec![0.0f32; samples]; 2];
-        let mut cho = vec![vec![0.0f32; samples]; 2];
-        seq.synth.render_audio(&mut out, &mut rev, &mut cho, 0, samples);
+        seq.synth.render_audio(&mut out, 0, samples);
 
         seq.process_tick();
         assert!(seq.is_finished);
@@ -218,9 +214,7 @@ mod tests {
         // Advance synth time
         let samples = 44100 * 3;
         let mut out = vec![vec![0.0f32; samples]; 2];
-        let mut rev = vec![vec![0.0f32; samples]; 2];
-        let mut cho = vec![vec![0.0f32; samples]; 2];
-        seq.synth.render_audio(&mut out, &mut rev, &mut cho, 0, samples);
+        seq.synth.render_audio(&mut out, 0, samples);
 
         seq.process_tick();
         // Loop count should have decremented

@@ -248,17 +248,65 @@ impl SynthesizerCore {
             return;
         }
 
-        // Random pan override (-500 to 500, 0 = disabled)
-        let pan_override: f64 = if self.midi_channels[channel].random_pan {
-            // Simple pseudo-random from current_time bits
+        // Drum parameters and pan override
+        let mut pan_override: f64 = 0.0;
+        let mut pitch_offset: f64 = 0.0;
+        let mut reverb_send: f64 = 1.0;
+        let mut chorus_send: f64 = 1.0;
+        let mut delay_send: f64 = 1.0;
+        let mut exclusive_override: i32 = 0;
+        let mut voice_gain = voice_gain;
+
+        if self.midi_channels[channel].drum_channel {
+            let p = &self.midi_channels[channel].drum_params[internal_midi_note as usize];
+
+            // Check if note on is allowed
+            if !p.rx_note_on {
+                return;
+            }
+
+            // Pan handling
+            let drum_pan = p.pan;
+            if drum_pan != 64 {
+                if drum_pan == 0 {
+                    // Random pan
+                    let bits = self.current_time.to_bits();
+                    let h = bits
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1_442_695_040_888_963_407);
+                    let normalized = (h >> 33) as f64 / u32::MAX as f64;
+                    pan_override = (normalized * 1000.0 - 500.0).round();
+                } else {
+                    // Calculate with channel pan
+                    let channel_pan = (self.midi_channels[channel].midi_controllers
+                        [midi_controllers::PAN as usize]
+                        >> 7) as i32
+                        - 64;
+                    let target_pan =
+                        (drum_pan as i32 - 64 + channel_pan).clamp(-63, 63);
+                    let target_pan = if target_pan == 0 { 1 } else { target_pan };
+                    pan_override = (target_pan as f64 / 63.0) * 500.0;
+                }
+            }
+
+            pitch_offset = p.pitch;
+            exclusive_override = p.exclusive_class as i32;
+            reverb_send = p.reverb_gain;
+            chorus_send = p.chorus_gain;
+            delay_send = p.delay_gain;
+
+            // Gain override only if not set by key modifier
+            if voice_gain == 1.0 {
+                voice_gain = p.gain;
+            }
+        } else if self.midi_channels[channel].random_pan {
+            // Non-drum random pan
             let bits = self.current_time.to_bits();
             let h = bits
                 .wrapping_mul(6_364_136_223_846_793_005)
                 .wrapping_add(1_442_695_040_888_963_407);
-            let normalized = (h >> 33) as f32 / u32::MAX as f32; // [0,1)
-            (normalized * 1000.0 - 500.0).round() as f64
-        } else {
-            0.0
+            let normalized = (h >> 33) as f64 / u32::MAX as f64;
+            pan_override = (normalized * 1000.0 - 500.0).round();
         };
 
         // -----------------------------------------------------------------------
@@ -375,6 +423,10 @@ impl SynthesizerCore {
             // -----------------------------------------------------------------------
             // Exclusive class: kill same-class voices (except in mono mode, already killed)
             // -----------------------------------------------------------------------
+            // Apply drum exclusive class override
+            if exclusive_override != 0 {
+                self.voices[voice_idx].exclusive_class = exclusive_override;
+            }
             let excl_class = self.voices[voice_idx].exclusive_class;
             if excl_class != 0 && self.midi_channels[channel].poly_mode {
                 let ch_channel = self.midi_channels[channel].channel;
@@ -484,10 +536,19 @@ impl SynthesizerCore {
             self.voices[voice_idx].portamento_duration = portamento_duration;
             self.voices[voice_idx].override_pan = pan_override;
             self.voices[voice_idx].gain_modifier = voice_gain;
+            self.voices[voice_idx].pitch_offset = pitch_offset;
+            self.voices[voice_idx].reverb_send = reverb_send;
+            self.voices[voice_idx].chorus_send = chorus_send;
+            self.voices[voice_idx].delay_send = delay_send;
 
             // Set initial pan to prevent a brief pop from center to actual pan
-            let pan_val = modulated_copy[gt::PAN as usize];
-            self.voices[voice_idx].current_pan = pan_val.clamp(-500, 500) as f64;
+            // TS: voice.currentPan = clamp(panOverride || modulatedGenerators[pan])
+            let initial_pan = if pan_override != 0.0 {
+                pan_override
+            } else {
+                modulated_copy[gt::PAN as usize] as f64
+            };
+            self.voices[voice_idx].current_pan = initial_pan.clamp(-500.0, 500.0);
         }
 
         // -----------------------------------------------------------------------

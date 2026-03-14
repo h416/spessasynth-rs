@@ -169,7 +169,7 @@ impl LowpassFilter {
         sample_count: usize,
         modulated_generators: &[i16],
         output_buffer: &mut [f32],
-        fc_offset: f32,
+        fc_offset: f64,
     ) {
         // Use f64 for filter cutoff arithmetic to match TS (JS number is f64).
         let initial_fc = modulated_generators[gt::INITIAL_FILTER_FC as usize] as f64;
@@ -184,7 +184,7 @@ impl LowpassFilter {
             self.current_initial_fc = initial_fc;
         }
 
-        let target_cutoff = self.current_initial_fc + fc_offset as f64;
+        let target_cutoff = self.current_initial_fc + fc_offset;
         let modulated_resonance = modulated_generators[gt::INITIAL_FILTER_Q as usize];
 
         // Filter bypass: fully open + no resonance.

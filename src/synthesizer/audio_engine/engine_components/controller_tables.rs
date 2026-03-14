@@ -47,6 +47,8 @@ const fn build_default_midi_controller_values() -> [i16; CONTROLLER_TABLE_SIZE] 
     arr[midi_controllers::GENERAL_PURPOSE_CONTROLLER6 as usize] = 64 << 7;
     arr[midi_controllers::GENERAL_PURPOSE_CONTROLLER8 as usize] = 64 << 7;
 
+    arr[midi_controllers::REVERB_DEPTH as usize] = 40 << 7;
+
     arr[midi_controllers::REGISTERED_PARAMETER_LSB as usize] = 127 << 7;
     arr[midi_controllers::REGISTERED_PARAMETER_MSB as usize] = 127 << 7;
     arr[midi_controllers::NON_REGISTERED_PARAMETER_LSB as usize] = 127 << 7;

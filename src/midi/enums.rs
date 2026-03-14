@@ -146,7 +146,7 @@ pub mod midi_controllers {
     pub const REVERB_DEPTH: u8 = 91;
     pub const TREMOLO_DEPTH: u8 = 92;
     pub const CHORUS_DEPTH: u8 = 93;
-    pub const DETUNE_DEPTH: u8 = 94;
+    pub const VARIATION_DEPTH: u8 = 94;
     pub const PHASER_DEPTH: u8 = 95;
     pub const DATA_INCREMENT: u8 = 96;
     pub const DATA_DECREMENT: u8 = 97;

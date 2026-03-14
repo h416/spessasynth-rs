@@ -56,14 +56,14 @@ impl MidiChannel {
                             self.custom_controllers[custom_controllers::CHANNEL_TUNING as usize];
                         let final_tuning = ((coarse as i32) << 7) | data_value as i32;
                         // Multiply by 8192/100 to get cent increments: 0.01220703125
-                        self.set_tuning(final_tuning as f32 * 0.012_207_031_f32, true);
+                        self.set_tuning(final_tuning as f64 * 0.012_207_031, true);
                     }
 
                     rpt::MODULATION_DEPTH => {
                         let current_cents = self.custom_controllers
                             [custom_controllers::MODULATION_MULTIPLIER as usize]
                             * 50.0;
-                        let cents = current_cents + (data_value as f32 / 128.0) * 100.0;
+                        let cents = current_cents as f64 + (data_value as f64 / 128.0) * 100.0;
                         self.set_modulation_depth(cents);
                     }
 

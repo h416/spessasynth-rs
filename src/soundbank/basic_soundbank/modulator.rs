@@ -535,16 +535,7 @@ pub static SPESSASYNTH_DEFAULT_MODULATORS: LazyLock<Vec<Modulator>> = LazyLock::
         decoded_mod(0x00dd, 0x0, generator_types::CHORUS_EFFECTS_SEND, 200, 0),
         // --- SpessaSynth custom default modulators ---
 
-        // 10. CC 92 (tremolo depth) → modLFO volume (linear, unipolar, positive, CC)
-        //     source_enum = 0|(0<<9)|(0<<8)|(1<<7)|92 = 128+92 = 220 = 0x00dc
-        decoded_mod(
-            get_mod_source_enum(linear, false, false, true, TREMOLO_DEPTH),
-            0x0,
-            generator_types::MOD_LFO_TO_VOLUME,
-            24,
-            0,
-        ),
-        // 11. CC 73 (attack time) → volEnv attack (convex, bipolar, positive, CC)
+        // 10. CC 73 (attack time) → volEnv attack (convex, bipolar, positive, CC)
         //     source_enum = (2<<10)|(1<<9)|(0<<8)|(1<<7)|73 = 2048+512+128+73 = 2761 = 0x0ac9
         decoded_mod(
             get_mod_source_enum(convex, true, false, true, ATTACK_TIME),
@@ -1007,8 +998,8 @@ mod tests {
         let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
         assert_eq!(
             mods.len(),
-            18,
-            "Expected 9 SF2 + 9 SpessaSynth = 18 modulators"
+            17,
+            "Expected 9 SF2 + 8 SpessaSynth = 17 modulators"
         );
     }
 
@@ -1067,10 +1058,10 @@ mod tests {
     }
 
     #[test]
-    fn test_default_mod_14_resonant_is_default_resonant() {
-        // Entry 14 (index 14, 0-based) = CC 71 filter Q → initialFilterQ (default resonant)
+    fn test_default_mod_13_resonant_is_default_resonant() {
+        // Entry 13 (index 13, 0-based) = CC 71 filter Q → initialFilterQ (default resonant)
         let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
-        let m = &mods[14];
+        let m = &mods[13];
         assert_eq!(m.destination, generator_types::INITIAL_FILTER_Q);
         assert_eq!(m.transform_amount, 200.0);
         assert!(m.is_default_resonant_modulator);
@@ -1078,19 +1069,19 @@ mod tests {
     }
 
     #[test]
-    fn test_default_mod_16_soft_pedal_filter_fc_negative_amount() {
-        // Entry 16 (index 16) = CC 67 soft pedal → initialFilterFc, amount=-2400
+    fn test_default_mod_15_soft_pedal_filter_fc_negative_amount() {
+        // Entry 15 (index 15) = CC 67 soft pedal → initialFilterFc, amount=-2400
         let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
-        let m = &mods[16];
+        let m = &mods[15];
         assert_eq!(m.destination, generator_types::INITIAL_FILTER_FC);
         assert_eq!(m.transform_amount, -2400.0);
     }
 
     #[test]
-    fn test_default_mod_17_balance_to_pan() {
-        // Entry 17 (index 17) = CC 8 balance → pan, amount=500
+    fn test_default_mod_16_balance_to_pan() {
+        // Entry 16 (index 16) = CC 8 balance → pan, amount=500
         let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
-        let m = &mods[17];
+        let m = &mods[16];
         assert_eq!(m.destination, generator_types::PAN);
         assert_eq!(m.transform_amount, 500.0);
         assert!(m.primary_source.is_cc);

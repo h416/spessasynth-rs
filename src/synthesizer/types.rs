@@ -135,6 +135,8 @@ pub struct MasterParameterType {
     pub transposition: f64,
     /// Synthesizer's device ID for system exclusive messages. -1 to accept all.
     pub device_id: i32,
+    /// Delay gain, from 0 to any number. 1 is 100% delay.
+    pub delay_gain: f64,
 }
 
 /// Discriminated union for master parameter changes.
@@ -392,6 +394,7 @@ mod tests {
             black_midi_mode: false,
             transposition: 0.0,
             device_id: -1,
+            delay_gain: 1.0,
         };
         assert_eq!(mp.voice_cap, 350);
         assert_eq!(mp.device_id, -1);
