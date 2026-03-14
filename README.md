@@ -16,7 +16,7 @@ cargo run --release --example midi_to_wav -- GeneralUser-GS.sf2 J-cycle.mid J-cy
 
 ## Differences from the original
 
-This is a partial port of spessasynth_core v4.1.0. The following limitations apply:
+This is a partial port of spessasynth_core v4.2.0. The following limitations apply:
 
 - **MIDI to WAV offline rendering only** — real-time playback and other features are not included
 - **No SoundFont3 (SF3 / Vorbis) support** — only SoundFont2 (.sf2) is supported
@@ -90,7 +90,7 @@ fn main() {
 
 ## Credits
 
-- [SpessaSynth](https://github.com/spessasus/SpessaSynth) by spessasus - Original TypeScript implementation (spessasynth_core v4.1.0)
+- [SpessaSynth](https://github.com/spessasus/SpessaSynth) by spessasus - Original TypeScript implementation (spessasynth_core v4.2.0)
 - Rust port by h416
 - Ported with the assistance of [Claude Code](https://claude.ai/code)
 
