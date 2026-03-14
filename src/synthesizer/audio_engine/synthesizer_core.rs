@@ -1392,6 +1392,7 @@ impl SynthesizerCore {
                 ins_r_slice,
                 insertion_active,
             );
+
         }
 
         // Process effect chain: Insertion → Chorus → Delay → Reverb
