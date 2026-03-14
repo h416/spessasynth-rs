@@ -178,7 +178,7 @@ impl SynthesizerCore {
                     } else {
                         self.midi_channels[channel].set_custom_controller(
                             custom_controllers::CHANNEL_KEY_SHIFT,
-                            (value as i32 - 64) as f32,
+                            (value as i32 - 64) as f64,
                         );
                     }
                 }

@@ -21,6 +21,18 @@ pub fn get_lfo_value(start_time: f64, frequency: f64, current_time: f64) -> f64 
     (x_val - trunc).abs() * 4.0 - 1.0
 }
 
+/// Gets the current value of a sine-wave LFO at a given time.
+/// The output oscillates between -1.0 and 1.0.
+/// Returns 0.0 if current_time is before start_time.
+/// Equivalent to: getLFOValueSine
+pub fn get_lfo_value_sine(start_time: f64, frequency: f64, current_time: f64) -> f64 {
+    if current_time < start_time {
+        return 0.0;
+    }
+    let elapsed = current_time - start_time;
+    (std::f64::consts::TAU * frequency * elapsed).sin()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

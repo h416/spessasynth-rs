@@ -11,6 +11,7 @@ use crate::soundbank::basic_soundbank::midi_patch::MidiPatchNamed;
 use crate::synthesizer::audio_engine::engine_components::controller_tables::{
     CONTROLLER_TABLE_SIZE, CUSTOM_CONTROLLER_TABLE_SIZE,
 };
+use crate::synthesizer::audio_engine::engine_components::drum_parameters::DrumParameters;
 use crate::synthesizer::audio_engine::synthesizer_core::{ChannelVibrato, SynthesizerCore};
 use crate::synthesizer::types::SynthSystem;
 
@@ -70,6 +71,12 @@ pub struct ChannelSnapshot {
     /// Zero-based channel index this snapshot represents.
     /// Equivalent to: channelNumber
     pub channel_number: u8,
+
+    /// Per-drum-note parameters (128 entries).
+    pub drum_params: Vec<DrumParameters>,
+
+    /// Whether insertion effect routing is enabled for this channel.
+    pub insertion_enabled: bool,
 }
 
 impl ChannelSnapshot {
@@ -90,6 +97,7 @@ impl ChannelSnapshot {
         is_muted: bool,
         drum_channel: bool,
         channel_number: u8,
+        drum_params: Vec<DrumParameters>,
     ) -> Self {
         Self {
             patch,
@@ -105,6 +113,8 @@ impl ChannelSnapshot {
             is_muted,
             drum_channel,
             channel_number,
+            drum_params,
+            insertion_enabled: false,
         }
     }
 
@@ -144,6 +154,8 @@ impl ChannelSnapshot {
             is_muted: ch.is_muted,
             drum_channel: ch.drum_channel,
             channel_number: channel_number as u8,
+            drum_params: ch.drum_params.clone(),
+            insertion_enabled: ch.insertion_enabled,
         }
     }
 
@@ -201,6 +213,15 @@ impl ChannelSnapshot {
         // also restore the exact `locked_system` value from the snapshot.
         core.midi_channels[channel_idx].lock_preset = self.lock_preset;
         core.midi_channels[channel_idx].locked_system = self.locked_system;
+
+        // Restore drum parameters
+        core.midi_channels[channel_idx].drum_params = self.drum_params.clone();
+
+        // Restore insertion effect assignment
+        core.midi_channels[channel_idx].insertion_enabled = self.insertion_enabled;
+        if self.insertion_enabled {
+            core.insertion_active = true;
+        }
 
         // Dispatch events collected during program_change
         for ev in events {
@@ -287,6 +308,7 @@ mod tests {
             true,
             false,
             3,
+            (0..128).map(|_| DrumParameters::default()).collect(),
         );
 
         assert_eq!(snap.patch.name, "Piano");
@@ -325,6 +347,7 @@ mod tests {
             false,
             false,
             0,
+            (0..128).map(|_| DrumParameters::default()).collect(),
         );
         let mut copy = ChannelSnapshot::copy_from(&snap);
 
@@ -361,6 +384,7 @@ mod tests {
             true,
             true,
             9,
+            (0..128).map(|_| DrumParameters::default()).collect(),
         );
         let copy = ChannelSnapshot::copy_from(&snap);
 

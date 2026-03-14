@@ -94,6 +94,16 @@ pub struct ModulationEnvelope {
 }
 
 impl ModulationEnvelope {
+    /// Converts timecents to seconds, clamping values ≤ -10114 to 0.
+    /// This prevents clicks from extremely short envelope phases.
+    /// Equivalent to: tc2Sec(timecents)
+    fn tc2sec(timecents: i32) -> f64 {
+        if timecents <= -10114 {
+            return 0.0;
+        }
+        timecents_to_seconds(timecents) as f64
+    }
+
     /// Creates a new ModulationEnvelope with all fields at zero / false.
     /// Equivalent to: new ModulationEnvelope()
     pub fn new() -> Self {
@@ -189,7 +199,7 @@ impl ModulationEnvelope {
 
         // Min is set to -7200 to prevent lowpass clicks
         let release_tc = (modulated_generators[gt::RELEASE_MOD_ENV as usize] as i32).max(-7200);
-        let release_time = timecents_to_seconds(release_tc) as f64;
+        let release_time = Self::tc2sec(release_tc);
 
         // Release time is from full level to 0%; scale by the actual start level
         self.release_duration = release_time * self.release_start_level;
@@ -208,29 +218,29 @@ impl ModulationEnvelope {
             1.0 - modulated_generators[gt::SUSTAIN_MOD_ENV as usize] as f64 / 1000.0;
 
         self.attack_duration =
-            timecents_to_seconds(modulated_generators[gt::ATTACK_MOD_ENV as usize] as i32) as f64;
+            Self::tc2sec(modulated_generators[gt::ATTACK_MOD_ENV as usize] as i32);
 
         // Decay time with key excursion
         let decay_key_excursion_cents = (60 - midi_note as i32) as f64
             * modulated_generators[gt::KEY_NUM_TO_MOD_ENV_DECAY as usize] as f64;
-        let decay_time = timecents_to_seconds(
+        let decay_time = Self::tc2sec(
             (modulated_generators[gt::DECAY_MOD_ENV as usize] as f64 + decay_key_excursion_cents)
                 as i32,
-        ) as f64;
+        );
         // Decay time is from 100% to 0%; scale to reach the actual sustain level
         self.decay_duration = decay_time * (1.0 - self.sustain_level);
 
         // Hold time with key excursion
         let hold_key_excursion_cents = (60 - midi_note as i32) as f64
             * modulated_generators[gt::KEY_NUM_TO_MOD_ENV_HOLD as usize] as f64;
-        self.hold_duration = timecents_to_seconds(
+        self.hold_duration = Self::tc2sec(
             (hold_key_excursion_cents + modulated_generators[gt::HOLD_MOD_ENV as usize] as f64)
                 as i32,
-        ) as f64;
+        );
 
         // Compute absolute phase end times
         self.delay_end = start_time
-            + timecents_to_seconds(modulated_generators[gt::DELAY_MOD_ENV as usize] as i32) as f64;
+            + Self::tc2sec(modulated_generators[gt::DELAY_MOD_ENV as usize] as i32);
         self.attack_end = self.delay_end + self.attack_duration;
         self.hold_end = self.attack_end + self.hold_duration;
         self.decay_end = self.hold_end + self.decay_duration;

@@ -1,5 +1,6 @@
 pub mod compute_modulator;
 pub mod controller_tables;
+pub mod drum_parameters;
 pub mod dsp_chain;
 pub mod dynamic_modulator_system;
 pub mod key_modifier_manager;

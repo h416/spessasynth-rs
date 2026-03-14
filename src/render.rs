@@ -52,7 +52,7 @@ pub fn render_midi_to_wav(
         |_| {},
         SynthProcessorOptions {
             enable_event_system: false,
-            enable_effects: false,
+            enable_effects: true,
             ..Default::default()
         },
     );
@@ -74,8 +74,6 @@ pub fn render_midi_to_wav(
     seq.play();
 
     // Prepare output buffers
-    let mut reverb: Vec<Vec<f32>> = Vec::new();
-    let mut chorus: Vec<Vec<f32>> = Vec::new();
     let mut output_array = vec![vec![0.0f32; sample_count], vec![0.0f32; sample_count]];
 
     let start = Instant::now();
@@ -90,8 +88,6 @@ pub fn render_midi_to_wav(
         let buf_size = opts.buffer_size.min(sample_count - filled_samples);
         seq.synth.render_audio(
             &mut output_array,
-            &mut reverb,
-            &mut chorus,
             filled_samples,
             buf_size,
         );

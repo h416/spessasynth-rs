@@ -13,10 +13,27 @@
 /// internal representation.
 use std::collections::HashMap;
 
+use crate::synthesizer::audio_engine::effects::chorus::ChorusSnapshot;
+use crate::synthesizer::audio_engine::effects::delay::DelaySnapshot;
+use crate::synthesizer::audio_engine::effects::reverb::ReverbSnapshot;
 use crate::synthesizer::audio_engine::engine_components::key_modifier_manager::KeyModifier;
 use crate::synthesizer::audio_engine::snapshot::channel_snapshot::ChannelSnapshot;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::types::{MasterParameterChangeCallback, MasterParameterType};
+
+/// Snapshot of insertion effect state.
+/// Equivalent to: InsertionProcessorSnapshot in types.ts
+#[derive(Clone, Debug)]
+pub struct InsertionSnapshot {
+    /// EFX type (MSB << 8 | LSB).
+    pub efx_type: u16,
+    /// Parameter cache (255 = unchanged).
+    pub params: [u8; 20],
+    /// Send levels (0-127 scale).
+    pub send_level_to_reverb: u8,
+    pub send_level_to_chorus: u8,
+    pub send_level_to_delay: u8,
+}
 
 /// Snapshot of the complete synthesizer state.
 /// Equivalent to: class SynthesizerSnapshot
@@ -35,6 +52,18 @@ pub struct SynthesizerSnapshot {
     /// `HashMap<(channel, midi_note), KeyModifier>` as `KeyModifierManager`.
     /// Equivalent to: keyMappings: (KeyModifier | undefined)[][]
     pub key_mappings: HashMap<(u8, u8), KeyModifier>,
+
+    /// Reverb effect processor snapshot.
+    pub reverb_snapshot: ReverbSnapshot,
+
+    /// Chorus effect processor snapshot.
+    pub chorus_snapshot: ChorusSnapshot,
+
+    /// Delay effect processor snapshot.
+    pub delay_snapshot: DelaySnapshot,
+
+    /// Insertion effect processor snapshot.
+    pub insertion_snapshot: InsertionSnapshot,
 }
 
 impl SynthesizerSnapshot {
@@ -44,11 +73,24 @@ impl SynthesizerSnapshot {
         channel_snapshots: Vec<ChannelSnapshot>,
         master_parameters: MasterParameterType,
         key_mappings: HashMap<(u8, u8), KeyModifier>,
+        reverb_snapshot: ReverbSnapshot,
+        chorus_snapshot: ChorusSnapshot,
+        delay_snapshot: DelaySnapshot,
     ) -> Self {
         Self {
             channel_snapshots,
             master_parameters,
             key_mappings,
+            reverb_snapshot,
+            chorus_snapshot,
+            delay_snapshot,
+            insertion_snapshot: InsertionSnapshot {
+                efx_type: 0x0000,
+                params: [255u8; 20],
+                send_level_to_reverb: 40,
+                send_level_to_chorus: 0,
+                send_level_to_delay: 0,
+            },
         }
     }
 
@@ -66,6 +108,16 @@ impl SynthesizerSnapshot {
             channel_snapshots,
             master_parameters: core.get_all_master_parameters(),
             key_mappings: core.key_modifier_manager.get_mappings().clone(),
+            reverb_snapshot: core.reverb_processor.get_snapshot(),
+            chorus_snapshot: core.chorus_processor.get_snapshot(),
+            delay_snapshot: core.delay_processor.get_snapshot(),
+            insertion_snapshot: InsertionSnapshot {
+                efx_type: core.insertion_processor.effect_type(),
+                params: core.insertion_params,
+                send_level_to_reverb: (core.insertion_processor.send_level_to_reverb() * 127.0).round() as u8,
+                send_level_to_chorus: (core.insertion_processor.send_level_to_chorus() * 127.0).round() as u8,
+                send_level_to_delay: (core.insertion_processor.send_level_to_delay() * 127.0).round() as u8,
+            },
         }
     }
 
@@ -114,6 +166,56 @@ impl SynthesizerSnapshot {
         core.key_modifier_manager
             .set_mappings(self.key_mappings.clone());
 
+        // --- Effect snapshots ---
+        let rev = &self.reverb_snapshot;
+        core.reverb_processor.set_character(rev.character);
+        core.reverb_processor.set_pre_lowpass(rev.pre_lowpass);
+        core.reverb_processor.set_level(rev.level);
+        core.reverb_processor.set_time(rev.time);
+        core.reverb_processor.set_delay_feedback(rev.delay_feedback);
+        core.reverb_processor.set_pre_delay_time(rev.pre_delay_time);
+
+        let chr = &self.chorus_snapshot;
+        core.chorus_processor.set_level(chr.level);
+        core.chorus_processor.set_pre_lowpass(chr.pre_lowpass);
+        core.chorus_processor.set_depth(chr.depth);
+        core.chorus_processor.set_delay(chr.delay);
+        core.chorus_processor.set_send_level_to_delay(chr.send_level_to_delay);
+        core.chorus_processor.set_send_level_to_reverb(chr.send_level_to_reverb);
+        core.chorus_processor.set_rate(chr.rate);
+        core.chorus_processor.set_feedback(chr.feedback);
+
+        let dly = &self.delay_snapshot;
+        core.delay_processor.set_level(dly.level);
+        core.delay_processor.set_pre_lowpass(dly.pre_lowpass);
+        core.delay_processor.set_time_center(dly.time_center);
+        core.delay_processor.set_time_ratio_right(dly.time_ratio_right);
+        core.delay_processor.set_time_ratio_left(dly.time_ratio_left);
+        core.delay_processor.set_level_center(dly.level_center);
+        core.delay_processor.set_level_left(dly.level_left);
+        core.delay_processor.set_level_right(dly.level_right);
+        core.delay_processor.set_feedback(dly.feedback);
+        core.delay_processor.set_send_level_to_reverb(dly.send_level_to_reverb);
+
+        // --- Insertion effect snapshot ---
+        let ins = &self.insertion_snapshot;
+        if let Some(proc) = crate::synthesizer::audio_engine::effects::insertion::create_insertion_processor(ins.efx_type, core.sample_rate) {
+            core.insertion_processor = proc;
+        } else {
+            core.insertion_processor = Box::new(crate::synthesizer::audio_engine::effects::insertion::thru::ThruFx::new(core.sample_rate));
+        }
+        core.insertion_processor.reset();
+        core.insertion_params = ins.params;
+        // Restore parameters from cache
+        for (i, &p) in ins.params.iter().enumerate() {
+            if p != 255 {
+                core.insertion_processor.set_parameter((i + 3) as u8, p);
+            }
+        }
+        core.insertion_processor.set_send_level_to_reverb(ins.send_level_to_reverb as f64 / 127.0);
+        core.insertion_processor.set_send_level_to_chorus(ins.send_level_to_chorus as f64 / 127.0);
+        core.insertion_processor.set_send_level_to_delay(ins.send_level_to_delay as f64 / 127.0);
+
         // --- Channels: add missing ones, then restore each ---
         while core.midi_channels.len() < self.channel_snapshots.len() {
             core.create_midi_channel(false);
@@ -135,6 +237,23 @@ mod tests {
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
+
+    fn default_effect_snapshots() -> (ReverbSnapshot, ChorusSnapshot, DelaySnapshot) {
+        (
+            ReverbSnapshot { level: 0, pre_lowpass: 0, character: 0, time: 0, delay_feedback: 0, pre_delay_time: 0 },
+            ChorusSnapshot { level: 64, pre_lowpass: 0, depth: 0, delay: 0, send_level_to_delay: 0, send_level_to_reverb: 0, rate: 0, feedback: 0 },
+            DelaySnapshot { level: 64, pre_lowpass: 0, time_center: 0, time_ratio_right: 0, time_ratio_left: 0, level_center: 127, level_left: 0, level_right: 0, feedback: 16, send_level_to_reverb: 0 },
+        )
+    }
+
+    fn test_snap_new(
+        channels: Vec<ChannelSnapshot>,
+        mp: MasterParameterType,
+        km: HashMap<(u8, u8), KeyModifier>,
+    ) -> SynthesizerSnapshot {
+        let (r, c, d) = default_effect_snapshots();
+        SynthesizerSnapshot::new(channels, mp, km, r, c, d)
+    }
 
     fn make_core() -> (SynthesizerCore, Arc<Mutex<Vec<SynthProcessorEvent>>>) {
         let events: Arc<Mutex<Vec<SynthProcessorEvent>>> = Arc::new(Mutex::new(Vec::new()));
@@ -166,7 +285,7 @@ mod tests {
 
     #[test]
     fn test_new_stores_channel_snapshots() {
-        let snap = SynthesizerSnapshot::new(
+        let snap = test_snap_new(
             Vec::new(),
             MasterParameterType::default(),
             HashMap::new(),
@@ -178,7 +297,7 @@ mod tests {
     fn test_new_stores_master_parameters() {
         let mut mp = MasterParameterType::default();
         mp.master_gain = 2.5;
-        let snap = SynthesizerSnapshot::new(Vec::new(), mp, HashMap::new());
+        let snap = test_snap_new(Vec::new(), mp, HashMap::new());
         assert!((snap.master_parameters.master_gain - 2.5).abs() < 1e-9);
     }
 
@@ -186,7 +305,7 @@ mod tests {
     fn test_new_stores_key_mappings() {
         let mut km: HashMap<(u8, u8), KeyModifier> = HashMap::new();
         km.insert((0, 60), KeyModifier::default());
-        let snap = SynthesizerSnapshot::new(Vec::new(), MasterParameterType::default(), km);
+        let snap = test_snap_new(Vec::new(), MasterParameterType::default(), km);
         assert!(snap.key_mappings.contains_key(&(0, 60)));
     }
 
@@ -196,7 +315,7 @@ mod tests {
 
     #[test]
     fn test_copy_from_is_independent_master_gain() {
-        let mut snap = SynthesizerSnapshot::new(
+        let mut snap = test_snap_new(
             Vec::new(),
             MasterParameterType::default(),
             HashMap::new(),
@@ -209,7 +328,7 @@ mod tests {
 
     #[test]
     fn test_copy_from_is_independent_key_mappings() {
-        let mut snap = SynthesizerSnapshot::new(
+        let mut snap = test_snap_new(
             Vec::new(),
             MasterParameterType::default(),
             HashMap::new(),
@@ -224,7 +343,7 @@ mod tests {
     fn test_copy_from_preserves_voice_cap() {
         let mut mp = MasterParameterType::default();
         mp.voice_cap = 128;
-        let snap = SynthesizerSnapshot::new(Vec::new(), mp, HashMap::new());
+        let snap = test_snap_new(Vec::new(), mp, HashMap::new());
         let copy = SynthesizerSnapshot::copy_from(&snap);
         assert_eq!(copy.master_parameters.voice_cap, 128);
     }
@@ -306,7 +425,11 @@ mod tests {
     fn test_apply_restores_master_gain() {
         let (mut core, _) = make_core();
         let mut snap =
-            SynthesizerSnapshot::new(Vec::new(), MasterParameterType::default(), HashMap::new());
+            test_snap_new(
+                Vec::new(),
+                MasterParameterType::default(),
+                HashMap::new(),
+            );
         snap.master_parameters.master_gain = 0.5;
         snap.apply(&mut core);
         assert!((core.master_parameters.master_gain - 0.5).abs() < 1e-9);
@@ -316,7 +439,11 @@ mod tests {
     fn test_apply_restores_voice_cap() {
         let (mut core, _) = make_core();
         let mut snap =
-            SynthesizerSnapshot::new(Vec::new(), MasterParameterType::default(), HashMap::new());
+            test_snap_new(
+                Vec::new(),
+                MasterParameterType::default(),
+                HashMap::new(),
+            );
         snap.master_parameters.voice_cap = 100;
         snap.apply(&mut core);
         assert_eq!(core.master_parameters.voice_cap, 100);
@@ -326,7 +453,11 @@ mod tests {
     fn test_apply_restores_device_id() {
         let (mut core, _) = make_core();
         let mut snap =
-            SynthesizerSnapshot::new(Vec::new(), MasterParameterType::default(), HashMap::new());
+            test_snap_new(
+                Vec::new(),
+                MasterParameterType::default(),
+                HashMap::new(),
+            );
         snap.master_parameters.device_id = 10;
         snap.apply(&mut core);
         assert_eq!(core.master_parameters.device_id, 10);
@@ -336,7 +467,11 @@ mod tests {
     fn test_apply_restores_reverb_gain() {
         let (mut core, _) = make_core();
         let mut snap =
-            SynthesizerSnapshot::new(Vec::new(), MasterParameterType::default(), HashMap::new());
+            test_snap_new(
+                Vec::new(),
+                MasterParameterType::default(),
+                HashMap::new(),
+            );
         snap.master_parameters.reverb_gain = 0.3;
         snap.apply(&mut core);
         assert!((core.master_parameters.reverb_gain - 0.3).abs() < 1e-9);
@@ -346,7 +481,11 @@ mod tests {
     fn test_apply_restores_chorus_gain() {
         let (mut core, _) = make_core();
         let mut snap =
-            SynthesizerSnapshot::new(Vec::new(), MasterParameterType::default(), HashMap::new());
+            test_snap_new(
+                Vec::new(),
+                MasterParameterType::default(),
+                HashMap::new(),
+            );
         snap.master_parameters.chorus_gain = 0.7;
         snap.apply(&mut core);
         assert!((core.master_parameters.chorus_gain - 0.7).abs() < 1e-9);
@@ -356,7 +495,11 @@ mod tests {
     fn test_apply_restores_black_midi_mode() {
         let (mut core, _) = make_core();
         let mut snap =
-            SynthesizerSnapshot::new(Vec::new(), MasterParameterType::default(), HashMap::new());
+            test_snap_new(
+                Vec::new(),
+                MasterParameterType::default(),
+                HashMap::new(),
+            );
         snap.master_parameters.black_midi_mode = true;
         snap.apply(&mut core);
         assert!(core.master_parameters.black_midi_mode);
@@ -366,7 +509,11 @@ mod tests {
     fn test_apply_restores_monophonic_retrigger_mode() {
         let (mut core, _) = make_core();
         let mut snap =
-            SynthesizerSnapshot::new(Vec::new(), MasterParameterType::default(), HashMap::new());
+            test_snap_new(
+                Vec::new(),
+                MasterParameterType::default(),
+                HashMap::new(),
+            );
         snap.master_parameters.monophonic_retrigger_mode = true;
         snap.apply(&mut core);
         assert!(core.master_parameters.monophonic_retrigger_mode);
@@ -378,7 +525,7 @@ mod tests {
         let mut km: HashMap<(u8, u8), KeyModifier> = HashMap::new();
         km.insert((2, 48), KeyModifier::default());
         let snap =
-            SynthesizerSnapshot::new(Vec::new(), MasterParameterType::default(), km);
+            test_snap_new(Vec::new(), MasterParameterType::default(), km);
         snap.apply(&mut core);
         assert!(core.key_modifier_manager.get_mappings().contains_key(&(2, 48)));
     }
@@ -391,7 +538,11 @@ mod tests {
 
         // Snapshot has empty key mappings → existing should be cleared
         let snap =
-            SynthesizerSnapshot::new(Vec::new(), MasterParameterType::default(), HashMap::new());
+            test_snap_new(
+                Vec::new(),
+                MasterParameterType::default(),
+                HashMap::new(),
+            );
         snap.apply(&mut core);
         assert!(core.key_modifier_manager.get_mappings().is_empty());
     }

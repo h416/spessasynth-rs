@@ -73,7 +73,7 @@ impl SynthesizerCore {
                                 let key_shift = message_value as i32 - 64;
                                 self.midi_channels[channel].set_custom_controller(
                                     custom_controllers::CHANNEL_KEY_SHIFT,
-                                    key_shift as f32,
+                                    key_shift as f64,
                                 );
                                 sys_ex_logging(syx, channel as u8, &key_shift, "key shift", "keys");
                             }
@@ -152,7 +152,7 @@ impl SynthesizerCore {
                                     "octave scale tuning",
                                     "cents",
                                 );
-                                self.midi_channels[channel].set_tuning(cents as f32, false);
+                                self.midi_channels[channel].set_tuning(cents as f64, false);
                             }
 
                             _ => {
@@ -469,6 +469,58 @@ impl SynthesizerCore {
                                 sys_ex_not_recognized(syx, "Roland GS");
                             }
                         }
+                    } else if syx[5] == 0x03 {
+                        // EFX (Insertion Effect) Parameter
+                        let addr3 = syx[6];
+                        let data = syx[7].min(127);
+
+                        if addr3 >= 0x03 && addr3 <= 0x16 {
+                            // EFX parameter set
+                            self.insertion_processor.set_parameter(addr3, data);
+                            if (addr3 - 3) < 20 {
+                                self.insertion_params[(addr3 - 3) as usize] = data;
+                            }
+                            spessa_synth_info(&format!("GS EFX Parameter {} = {}", addr3 - 2, data));
+                            return;
+                        }
+                        match addr3 {
+                            0x00 => {
+                                // EFX Type selection (16-bit: data << 8 | syx[8])
+                                let efx_type = (data as u16) << 8 | syx.get(8).copied().unwrap_or(0) as u16;
+                                if let Some(proc) = crate::synthesizer::audio_engine::effects::insertion::create_insertion_processor(efx_type, self.sample_rate) {
+                                    spessa_synth_info(&format!("GS EFX Type: {:04X}", efx_type));
+                                    self.insertion_processor = proc;
+                                } else {
+                                    spessa_synth_info(&format!("Unsupported EFX processor: {:04X}, using Thru", efx_type));
+                                    self.insertion_processor = Box::new(crate::synthesizer::audio_engine::effects::insertion::thru::ThruFx::new(self.sample_rate));
+                                }
+                                self.insertion_params = [255u8; 20];
+                                self.insertion_processor.reset();
+                            }
+
+                            0x17 => {
+                                // EFX send level to reverb
+                                self.insertion_processor.set_send_level_to_reverb(data as f64 / 127.0);
+                                spessa_synth_info(&format!("GS EFX Send Level to Reverb: {}", data));
+                            }
+
+                            0x18 => {
+                                // EFX send level to chorus
+                                self.insertion_processor.set_send_level_to_chorus(data as f64 / 127.0);
+                                spessa_synth_info(&format!("GS EFX Send Level to Chorus: {}", data));
+                            }
+
+                            0x19 => {
+                                // EFX send level to delay
+                                self.insertion_processor.set_send_level_to_delay(data as f64 / 127.0);
+                                self.delay_active = true;
+                                spessa_synth_info(&format!("GS EFX Send Level to Delay: {}", data));
+                            }
+
+                            _ => {
+                                sys_ex_not_recognized(syx, "Roland GS EFX");
+                            }
+                        }
                     } else if syx[5] == 0x01 {
                         // This is also a global system parameter
                         match syx[6] {
@@ -478,38 +530,203 @@ impl SynthesizerCore {
                                 spessa_synth_info(&format!("GS Patch name: {}", patch_name));
                             }
 
+                            // --- Reverb parameters (0x30-0x37) ---
+                            0x30 => {
+                                // Reverb macro
+                                spessa_synth_info(&format!("GS Reverb Macro: {}", message_value));
+                                self.set_reverb_macro(message_value);
+                            }
+                            0x31 => {
+                                // Reverb character
+                                spessa_synth_info(&format!("GS Reverb Character: {}", message_value));
+                                self.reverb_processor.set_character(message_value);
+                            }
+                            0x32 => {
+                                // Reverb pre-LPF
+                                spessa_synth_info(&format!("GS Reverb Pre-LPF: {}", message_value));
+                                self.reverb_processor.set_pre_lowpass(message_value);
+                            }
                             0x33 => {
                                 // Reverb level
-                                spessa_synth_info(&format!("GS Reverb level: {}", message_value));
-                                // 64 is the default
-                                self.reverb_send = message_value as f64 / 64.0;
+                                spessa_synth_info(&format!("GS Reverb Level: {}", message_value));
+                                self.reverb_processor.set_level(message_value);
+                            }
+                            0x34 => {
+                                // Reverb time
+                                spessa_synth_info(&format!("GS Reverb Time: {}", message_value));
+                                self.reverb_processor.set_time(message_value);
+                            }
+                            0x35 => {
+                                // Reverb delay feedback
+                                spessa_synth_info(&format!("GS Reverb Delay Feedback: {}", message_value));
+                                self.reverb_processor.set_delay_feedback(message_value);
+                            }
+                            0x36 => {
+                                // Reverb send to chorus (legacy SC-55, unsupported)
+                            }
+                            0x37 => {
+                                // Reverb predelay time
+                                spessa_synth_info(&format!("GS Reverb Predelay Time: {}", message_value));
+                                self.reverb_processor.set_pre_delay_time(message_value);
                             }
 
-                            // Unsupported reverb params
-                            0x30 | 0x31 | 0x32 | 0x34 | 0x35 | 0x37 => {
-                                spessa_synth_info(&format!(
-                                    "Unsupported GS Reverb Parameter: {:02x}",
-                                    syx[6]
-                                ));
+                            // --- Chorus parameters (0x38-0x40) ---
+                            0x38 => {
+                                // Chorus macro
+                                spessa_synth_info(&format!("GS Chorus Macro: {}", message_value));
+                                self.set_chorus_macro(message_value);
                             }
-
+                            0x39 => {
+                                // Chorus pre-LPF
+                                spessa_synth_info(&format!("GS Chorus Pre-LPF: {}", message_value));
+                                self.chorus_processor.set_pre_lowpass(message_value);
+                            }
                             0x3a => {
                                 // Chorus level
-                                spessa_synth_info(&format!("GS Chorus level: {}", message_value));
-                                // 64 is the default
-                                self.chorus_send = message_value as f64 / 64.0;
+                                spessa_synth_info(&format!("GS Chorus Level: {}", message_value));
+                                self.chorus_processor.set_level(message_value);
+                            }
+                            0x3b => {
+                                // Chorus feedback
+                                spessa_synth_info(&format!("GS Chorus Feedback: {}", message_value));
+                                self.chorus_processor.set_feedback(message_value);
+                            }
+                            0x3c => {
+                                // Chorus delay
+                                spessa_synth_info(&format!("GS Chorus Delay: {}", message_value));
+                                self.chorus_processor.set_delay(message_value);
+                            }
+                            0x3d => {
+                                // Chorus rate
+                                spessa_synth_info(&format!("GS Chorus Rate: {}", message_value));
+                                self.chorus_processor.set_rate(message_value);
+                            }
+                            0x3e => {
+                                // Chorus depth
+                                spessa_synth_info(&format!("GS Chorus Depth: {}", message_value));
+                                self.chorus_processor.set_depth(message_value);
+                            }
+                            0x3f => {
+                                // Chorus send level to reverb
+                                spessa_synth_info(&format!("GS Chorus Send To Reverb: {}", message_value));
+                                self.chorus_processor.set_send_level_to_reverb(message_value);
+                            }
+                            0x40 => {
+                                // Chorus send level to delay — also activates delay
+                                spessa_synth_info(&format!("GS Chorus Send To Delay: {}", message_value));
+                                self.chorus_processor.set_send_level_to_delay(message_value);
+                                self.delay_active = true;
                             }
 
-                            // Unsupported chorus params
-                            0x38 | 0x39 | 0x3b | 0x3c | 0x3d | 0x3e | 0x3f | 0x40 => {
-                                spessa_synth_info(&format!(
-                                    "Unsupported GS Chorus Parameter: {:02x}",
-                                    syx[6]
-                                ));
+                            // --- Delay parameters (0x50-0x5A) ---
+                            0x50 => {
+                                // Delay macro
+                                spessa_synth_info(&format!("GS Delay Macro: {}", message_value));
+                                self.set_delay_macro(message_value);
+                                self.delay_active = true;
+                            }
+                            0x51 => {
+                                // Delay pre-LPF
+                                spessa_synth_info(&format!("GS Delay Pre-LPF: {}", message_value));
+                                self.delay_processor.set_pre_lowpass(message_value);
+                                self.delay_active = true;
+                            }
+                            0x52 => {
+                                // Delay time center
+                                spessa_synth_info(&format!("GS Delay Time Center: {}", message_value));
+                                self.delay_processor.set_time_center(message_value);
+                                self.delay_active = true;
+                            }
+                            0x53 => {
+                                // Delay time ratio left
+                                spessa_synth_info(&format!("GS Delay Time Ratio Left: {}", message_value));
+                                self.delay_processor.set_time_ratio_left(message_value);
+                                self.delay_active = true;
+                            }
+                            0x54 => {
+                                // Delay time ratio right
+                                spessa_synth_info(&format!("GS Delay Time Ratio Right: {}", message_value));
+                                self.delay_processor.set_time_ratio_right(message_value);
+                                self.delay_active = true;
+                            }
+                            0x55 => {
+                                // Delay level center
+                                spessa_synth_info(&format!("GS Delay Level Center: {}", message_value));
+                                self.delay_processor.set_level_center(message_value);
+                                self.delay_active = true;
+                            }
+                            0x56 => {
+                                // Delay level left
+                                spessa_synth_info(&format!("GS Delay Level Left: {}", message_value));
+                                self.delay_processor.set_level_left(message_value);
+                                self.delay_active = true;
+                            }
+                            0x57 => {
+                                // Delay level right
+                                spessa_synth_info(&format!("GS Delay Level Right: {}", message_value));
+                                self.delay_processor.set_level_right(message_value);
+                                self.delay_active = true;
+                            }
+                            0x58 => {
+                                // Delay level
+                                spessa_synth_info(&format!("GS Delay Level: {}", message_value));
+                                self.delay_processor.set_level(message_value);
+                                self.delay_active = true;
+                            }
+                            0x59 => {
+                                // Delay feedback
+                                spessa_synth_info(&format!("GS Delay Feedback: {}", message_value));
+                                self.delay_processor.set_feedback(message_value);
+                                self.delay_active = true;
+                            }
+                            0x5a => {
+                                // Delay send level to reverb
+                                spessa_synth_info(&format!("GS Delay Send To Reverb: {}", message_value));
+                                self.delay_processor.set_send_level_to_reverb(message_value);
+                                self.delay_active = true;
                             }
 
                             _ => {
                                 sys_ex_not_recognized(syx, "Roland GS");
+                            }
+                        }
+                    } else if (syx[5] >> 4) == 4 {
+                        // Patch Parameter Tone Map (addr2 = 0x4X)
+                        let channel_table =
+                            [9u8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15];
+                        let channel =
+                            channel_table[(syx[5] & 0x0f) as usize] as usize + channel_offset;
+                        match syx[6] {
+                            0x00 | 0x01 => {
+                                // Tone map number (bank select LSB)
+                                let voices = &mut self.voices;
+                                let evs = self.midi_channels[channel].controller_change(
+                                    midi_controllers::BANK_SELECT_LSB,
+                                    message_value,
+                                    voices,
+                                    self.current_time,
+                                    self.master_parameters.midi_system,
+                                    self.enable_event_system,
+                                );
+                                for ev in evs {
+                                    self.call_event(ev);
+                                }
+                            }
+                            0x22 => {
+                                // EFX assign
+                                let efx = message_value == 1;
+                                self.midi_channels[channel].insertion_enabled = efx;
+                                if efx {
+                                    self.insertion_active = true;
+                                }
+                                spessa_synth_info(&format!(
+                                    "Insertion for {}: {}",
+                                    channel,
+                                    if efx { "ON" } else { "OFF" }
+                                ));
+                            }
+                            _ => {
+                                sys_ex_not_recognized(syx, "Roland GS Patch Part Parameter");
                             }
                         }
                     }

@@ -557,30 +557,28 @@ impl SpessaSynthProcessor {
     }
 
     /// Renders audio to stereo output buffers.
-    /// Equivalent to: renderAudio(outputs, reverb, chorus, startIndex, sampleCount)
+    /// Effects are now integrated — reverb/chorus/delay are processed internally.
     pub fn render_audio(
         &mut self,
         outputs: &mut [Vec<f32>],
-        reverb: &mut [Vec<f32>],
-        chorus: &mut [Vec<f32>],
         start_index: usize,
         sample_count: usize,
     ) {
         self.synth_core
-            .render_audio(outputs, reverb, chorus, start_index, sample_count);
+            .render_audio(outputs, start_index, sample_count);
     }
 
-    /// Renders per-channel audio. (Stub — not yet ported from renderAudioSplit)
-    pub fn render_audio_split(
+    /// Legacy render_audio with reverb/chorus parameters (ignored, kept for compatibility).
+    pub fn render_audio_legacy(
         &mut self,
-        reverb: &mut [Vec<f32>],
-        chorus: &mut [Vec<f32>],
-        separate: &mut Vec<Vec<Vec<f32>>>,
+        outputs: &mut [Vec<f32>],
+        _reverb: &mut [Vec<f32>],
+        _chorus: &mut [Vec<f32>],
         start_index: usize,
         sample_count: usize,
     ) {
         self.synth_core
-            .render_audio_split(reverb, chorus, separate, start_index, sample_count);
+            .render_audio(outputs, start_index, sample_count);
     }
 }
 
@@ -1040,34 +1038,12 @@ mod tests {
         let samples = 44100; // 1 second at 44100 Hz
 
         // First render: advances time from 0.0 → 1.0
-        let mut out_l = vec![0.0f32; samples];
-        let mut out_r = vec![0.0f32; samples];
-        let mut rev_l = vec![0.0f32; samples];
-        let mut rev_r = vec![0.0f32; samples];
-        let mut chr_l = vec![0.0f32; samples];
-        let mut chr_r = vec![0.0f32; samples];
-        proc.render_audio(
-            &mut [out_l, out_r],
-            &mut [rev_l, rev_r],
-            &mut [chr_l, chr_r],
-            0,
-            samples,
-        );
+        let mut out = vec![vec![0.0f32; samples]; 2];
+        proc.render_audio(&mut out, 0, samples);
 
         // Second render: process_event_queue fires the event scheduled at 0.1 s
-        let mut out_l2 = vec![0.0f32; samples];
-        let mut out_r2 = vec![0.0f32; samples];
-        let mut rev_l2 = vec![0.0f32; samples];
-        let mut rev_r2 = vec![0.0f32; samples];
-        let mut chr_l2 = vec![0.0f32; samples];
-        let mut chr_r2 = vec![0.0f32; samples];
-        proc.render_audio(
-            &mut [out_l2, out_r2],
-            &mut [rev_l2, rev_r2],
-            &mut [chr_l2, chr_r2],
-            0,
-            samples,
-        );
+        let mut out2 = vec![vec![0.0f32; samples]; 2];
+        proc.render_audio(&mut out2, 0, samples);
 
         let evs = events.lock().unwrap();
         let has_cc = evs.iter().skip(before).any(|e| {

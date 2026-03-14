@@ -5,6 +5,7 @@ use crate::midi::enums::midi_controllers;
 use crate::synthesizer::audio_engine::engine_components::controller_tables::{
     CUSTOM_RESET_ARRAY, DEFAULT_MIDI_CONTROLLER_VALUES,
 };
+use crate::synthesizer::audio_engine::engine_components::drum_parameters::reset_drum_params;
 use crate::synthesizer::audio_engine::engine_components::synth_constants::DEFAULT_PERCUSSION;
 use crate::synthesizer::audio_engine::engine_components::voice::Voice;
 use crate::synthesizer::audio_engine::synthesizer_core::MidiChannel;
@@ -26,7 +27,7 @@ pub fn is_non_resettable(cc: u8) -> bool {
             | midi_controllers::REVERB_DEPTH
             | midi_controllers::TREMOLO_DEPTH
             | midi_controllers::CHORUS_DEPTH
-            | midi_controllers::DETUNE_DEPTH
+            | midi_controllers::VARIATION_DEPTH
             | midi_controllers::PHASER_DEPTH
             | midi_controllers::SOUND_VARIATION
             | midi_controllers::FILTER_RESONANCE
@@ -40,6 +41,12 @@ pub fn is_non_resettable(cc: u8) -> bool {
             | midi_controllers::SOUND_CONTROLLER10
             | midi_controllers::POLY_MODE_ON
             | midi_controllers::MONO_MODE_ON
+            | midi_controllers::OMNI_MODE_ON
+            | midi_controllers::OMNI_MODE_OFF
+            | midi_controllers::REGISTERED_PARAMETER_LSB
+            | midi_controllers::REGISTERED_PARAMETER_MSB
+            | midi_controllers::NON_REGISTERED_PARAMETER_LSB
+            | midi_controllers::NON_REGISTERED_PARAMETER_MSB
     )
 }
 
@@ -154,8 +161,11 @@ impl MidiChannel {
         let transpose =
             self.custom_controllers[custom_controllers::CHANNEL_TRANSPOSE_FINE as usize];
         self.custom_controllers.copy_from_slice(&CUSTOM_RESET_ARRAY);
-        self.set_custom_controller(custom_controllers::CHANNEL_TRANSPOSE_FINE, transpose);
+        self.set_custom_controller(custom_controllers::CHANNEL_TRANSPOSE_FINE, transpose as f64);
         self.reset_parameters();
+
+        // Reset drum parameters (SC-88 standard reverb values, etc.)
+        reset_drum_params(&mut self.drum_params);
 
         events
     }
@@ -233,10 +243,6 @@ impl MidiChannel {
                 events.append(&mut sub);
             }
         }
-
-        // Reset portamento
-        let mut sub = self.reset_portamento(true, voices, current_time, current_system);
-        events.append(&mut sub);
 
         self.reset_generator_overrides();
         self.reset_generator_offsets();

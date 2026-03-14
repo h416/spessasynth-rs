@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 
 use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
-use crate::synthesizer::audio_engine::engine_components::dsp_chain::lfo::get_lfo_value;
+use crate::synthesizer::audio_engine::engine_components::dsp_chain::lfo::{get_lfo_value, get_lfo_value_sine};
 use crate::synthesizer::audio_engine::engine_components::unit_converter::{
     abs_cents_to_hz, cb_attenuation_to_gain, timecents_to_seconds,
 };
@@ -13,12 +13,6 @@ use crate::synthesizer::audio_engine::engine_components::voice::Voice;
 use crate::synthesizer::audio_engine::synthesizer_core::MidiChannel;
 use crate::synthesizer::enums::custom_controllers;
 use crate::utils::loggin::spessa_synth_warn;
-
-/// Used to scale the reverb send level (from the TS constant REVERB_DIVIDER = 3070).
-pub const REVERB_DIVIDER: f32 = 3070.0;
-
-/// Used to scale the chorus send level (from the TS constant CHORUS_DIVIDER = 2000).
-pub const CHORUS_DIVIDER: f32 = 2000.0;
 
 const HALF_PI: f64 = std::f64::consts::PI / 2.0;
 const MIN_PAN: i32 = -500;
@@ -57,7 +51,7 @@ fn get_pan_table_right() -> &'static [f32; 1001] {
 }
 
 impl MidiChannel {
-    /// Renders a single voice to the stereo output (and optionally reverb/chorus) buffers.
+    /// Renders a single voice to the stereo output and mono effect send buffers.
     ///
     /// Handles tuning (MTS, scale tuning, portamento, LFOs, envelopes),
     /// wavetable synthesis, lowpass filter, volume envelope, panning, and effect sends.
@@ -65,19 +59,17 @@ impl MidiChannel {
     /// # Parameters
     /// - `voice`: The voice to render (mutated in place).
     /// - `time_now`: Current playback time in seconds.
-    /// - `output_l/r`: Main stereo output buffers.
-    /// - `reverb_l/r`, `chorus_l/r`: Effect send buffers.
+    /// - `output_l/r`: Main stereo output buffers (start_index-based).
+    /// - `reverb_input`, `chorus_input`, `delay_input`: Mono effect send buffers (zero-indexed).
     /// - `start_index`: Starting sample index in the output buffers.
     /// - `sample_count`: Number of samples to render.
-    /// - `master_gain`, `reverb_gain`, `chorus_gain`: Global gain values.
+    /// - `master_gain`, `reverb_gain`, `chorus_gain`, `delay_gain`: Global gain values.
     /// - `midi_volume`: Global MIDI volume scale.
     /// - `pan_left`, `pan_right`: Global pan (master pan) multipliers.
-    /// - `reverb_send`, `chorus_send`: Global effect send amounts.
-    /// - `enable_effects`: Whether to write to reverb/chorus buffers.
+    /// - `enable_effects`: Whether to write to effect buffers.
+    /// - `delay_active`: Whether delay effect is active.
     /// - `pan_smoothing_factor`: Smoothing coefficient for pan changes.
     /// - `tunings`: MIDI Tuning Standard table (128×128 floats, -1 if unused).
-    ///
-    /// Equivalent to: renderVoice(voice, timeNow, outputL, outputR, ...)
     #[allow(clippy::too_many_arguments)]
     pub fn render_voice(
         &self,
@@ -85,23 +77,25 @@ impl MidiChannel {
         time_now: f64,
         output_l: &mut [f32],
         output_r: &mut [f32],
-        reverb_l: &mut [f32],
-        reverb_r: &mut [f32],
-        chorus_l: &mut [f32],
-        chorus_r: &mut [f32],
+        reverb_input: &mut [f32],
+        chorus_input: &mut [f32],
+        delay_input: &mut [f32],
         start_index: usize,
         sample_count: usize,
         master_gain: f64,
         reverb_gain: f64,
         chorus_gain: f64,
+        delay_gain: f64,
         midi_volume: f64,
         pan_left: f64,
         pan_right: f64,
-        reverb_send_global: f64,
-        chorus_send_global: f64,
         enable_effects: bool,
+        delay_active: bool,
         pan_smoothing_factor: f64,
         tunings: &[f32],
+        insertion_input_l: &mut [f32],
+        insertion_input_r: &mut [f32],
+        insertion_active: bool,
     ) {
         // Check if the voice has entered release
         if !voice.is_in_release && time_now >= voice.release_start_time {
@@ -131,10 +125,11 @@ impl MidiChannel {
         // --- TUNING ---
         let mut target_key = voice.target_key;
 
-        // Fine tune (soundfont) + MTS octave tuning + channel tuning
+        // Fine tune (soundfont) + MTS octave tuning + channel tuning + pitch offset (drum params)
         let mut cents = voice.modulated_generators[gt::FINE_TUNE as usize] as f64
             + self.channel_octave_tuning[voice.midi_note as usize] as f64
-            + self.channel_tuning_cents as f64;
+            + self.channel_tuning_cents as f64
+            + voice.pitch_offset;
         let mut semitones = voice.modulated_generators[gt::COARSE_TUNE as usize] as f64;
 
         // MIDI Tuning Standard
@@ -211,7 +206,7 @@ impl MidiChannel {
         if self.midi_controllers[midi_controllers::MODULATION_WHEEL as usize] == 0
             && self.channel_vibrato.depth > 0.0
         {
-            cents += get_lfo_value(
+            cents += get_lfo_value_sine(
                 voice.start_time + self.channel_vibrato.delay,
                 self.channel_vibrato.rate,
                 time_now,
@@ -233,7 +228,7 @@ impl MidiChannel {
         // Compute final playback rate
         let cents_total = (cents + semitones * 100.0) as i32;
         if cents_total != voice.tuning_cents as i32 {
-            voice.tuning_cents = cents_total as f32;
+            voice.tuning_cents = cents_total as f64;
             voice.tuning_ratio = f64::powf(2.0, cents_total as f64 / 1200.0);
         }
 
@@ -277,7 +272,7 @@ impl MidiChannel {
             sample_count,
             &voice.modulated_generators,
             &mut voice.buffer,
-            lowpass_excursion as f32,
+            lowpass_excursion,
         );
 
         // Volume envelope
@@ -313,6 +308,15 @@ impl MidiChannel {
 
         let buffer = &voice.buffer;
 
+        // If insertion is enabled for this channel, route to insertion buffers instead
+        if self.insertion_enabled && insertion_active {
+            for (i, &s) in buffer.iter().enumerate().take(sample_count) {
+                insertion_input_l[i] = (insertion_input_l[i] as f64 + gain_left * s as f64) as f32;
+                insertion_input_r[i] = (insertion_input_r[i] as f64 + gain_right * s as f64) as f32;
+            }
+            return;
+        }
+
         // Emulate JS Float32Array += semantics:
         // outputL[idx] = f32(f64(outputL[idx]) + gainLeft * f64(buffer[i]))
         for (i, &s) in buffer.iter().enumerate().take(sample_count) {
@@ -325,34 +329,35 @@ impl MidiChannel {
             return;
         }
 
-        // --- REVERB SEND ---
-        let reverb_send = voice.modulated_generators[gt::REVERB_EFFECTS_SEND as usize];
-        if reverb_send > 0 {
-            // Keep as f64 to match JS Float32Array behavior
-            let reverb_gain_total = reverb_gain
-                * reverb_send_global
-                * gain
-                * (reverb_send as f64 / REVERB_DIVIDER as f64);
+        // --- REVERB SEND (mono) ---
+        let reverb_send_gen = voice.modulated_generators[gt::REVERB_EFFECTS_SEND as usize] as f64
+            * voice.reverb_send;
+        if reverb_send_gen > 0.0 {
+            let reverb_gain_total = reverb_gain * gain * (reverb_send_gen / 1000.0);
             for (i, &samp) in buffer.iter().enumerate().take(sample_count) {
-                let idx = i + start_index;
-                let s = reverb_gain_total * samp as f64;
-                reverb_l[idx] = (reverb_l[idx] as f64 + s) as f32;
-                reverb_r[idx] = (reverb_r[idx] as f64 + s) as f32;
+                reverb_input[i] = (reverb_input[i] as f64 + reverb_gain_total * samp as f64) as f32;
             }
         }
 
-        // --- CHORUS SEND ---
-        let chorus_send = voice.modulated_generators[gt::CHORUS_EFFECTS_SEND as usize];
-        if chorus_send > 0 {
-            // Keep as f64 to match JS Float32Array behavior
-            let chorus_gain_total = chorus_gain * chorus_send_global * chorus_send as f64
-                / CHORUS_DIVIDER as f64;
-            let chorus_left_gain = gain_left * chorus_gain_total;
-            let chorus_right_gain = gain_right * chorus_gain_total;
-            for (i, &s) in buffer.iter().enumerate().take(sample_count) {
-                let idx = i + start_index;
-                chorus_l[idx] = (chorus_l[idx] as f64 + chorus_left_gain * s as f64) as f32;
-                chorus_r[idx] = (chorus_r[idx] as f64 + chorus_right_gain * s as f64) as f32;
+        // --- CHORUS SEND (mono) ---
+        let chorus_send_gen = voice.modulated_generators[gt::CHORUS_EFFECTS_SEND as usize] as f64
+            * voice.chorus_send;
+        if chorus_send_gen > 0.0 {
+            let chorus_gain_total = chorus_gain * gain * (chorus_send_gen / 1000.0);
+            for (i, &samp) in buffer.iter().enumerate().take(sample_count) {
+                chorus_input[i] = (chorus_input[i] as f64 + chorus_gain_total * samp as f64) as f32;
+            }
+        }
+
+        // --- DELAY SEND (mono) ---
+        if delay_active {
+            let delay_send_cc = self.midi_controllers[midi_controllers::VARIATION_DEPTH as usize] as f64
+                * voice.delay_send;
+            if delay_send_cc > 0.0 {
+                let delay_gain_total = gain * delay_gain * ((delay_send_cc as i32 >> 7) as f64 / 127.0);
+                for (i, &samp) in buffer.iter().enumerate().take(sample_count) {
+                    delay_input[i] = (delay_input[i] as f64 + delay_gain_total * samp as f64) as f32;
+                }
             }
         }
     }

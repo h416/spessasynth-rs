@@ -30,14 +30,6 @@ fn is_cc_non_skippable(cc: u8) -> bool {
     )
 }
 
-/// Saved program state during seek.
-#[derive(Clone, Copy)]
-struct SavedProgram {
-    program: i16,
-    bank: u8,
-    actual_bank: u8,
-}
-
 impl SpessaSynthSequencer {
     /// Seeks to a specific time or tick position.
     /// Returns true if the MIDI file is not finished.
@@ -62,15 +54,6 @@ impl SpessaSynthSequencer {
         let channels_to_save = self.synth.synth_core.midi_channels.len();
 
         let mut pitch_wheels: Vec<i16> = vec![8192; channels_to_save];
-
-        let mut programs: Vec<SavedProgram> = vec![
-            SavedProgram {
-                program: -1,
-                bank: 0,
-                actual_bank: 0,
-            };
-            channels_to_save
-        ];
 
         // An array with preset default values (first 128 entries)
         let default_controller_array: Vec<i16> =
@@ -160,20 +143,6 @@ impl SpessaSynthSequencer {
                     }
                 }
 
-                midi_message_types::PROGRAM_CHANGE => {
-                    // Empty tracks cannot program change
-                    if self.songs[song_idx].is_multi_port
-                        && self.songs[song_idx].tracks[track_index]
-                            .channels
-                            .is_empty()
-                    {
-                        // skip
-                    } else if channel < programs.len() {
-                        programs[channel].program = event.data[0] as i16;
-                        programs[channel].actual_bank = programs[channel].bank;
-                    }
-                }
-
                 midi_message_types::CONTROLLER_CHANGE => {
                     // Empty tracks cannot controller change
                     if self.songs[song_idx].is_multi_port
@@ -186,28 +155,21 @@ impl SpessaSynthSequencer {
                         let controller_number = event.data[0];
                         if is_cc_non_skippable(controller_number) {
                             let cc_v = event.data[1];
-                            if controller_number == midi_controllers::BANK_SELECT {
-                                // Add the bank to be saved
-                                if channel < programs.len() {
-                                    programs[channel].bank = cc_v;
-                                }
-                            } else {
-                                if controller_number
-                                    == midi_controllers::RESET_ALL_CONTROLLERS
-                                {
-                                    reset_all_controllers(
-                                        channel,
-                                        &mut pitch_wheels,
-                                        &mut saved_controllers,
-                                        &default_controller_array,
-                                    );
-                                }
-                                self.synth.controller_change(
+                            if controller_number
+                                == midi_controllers::RESET_ALL_CONTROLLERS
+                            {
+                                reset_all_controllers(
                                     channel,
-                                    controller_number,
-                                    cc_v,
+                                    &mut pitch_wheels,
+                                    &mut saved_controllers,
+                                    &default_controller_array,
                                 );
                             }
+                            self.synth.controller_change(
+                                channel,
+                                controller_number,
+                                cc_v,
+                            );
                         } else if channel < saved_controllers.len() {
                             saved_controllers[channel][controller_number as usize] =
                                 event.data[1] as i16;
@@ -263,28 +225,6 @@ impl SpessaSynthSequencer {
                         self.synth
                             .controller_change(channel, index as u8, value as u8);
                     }
-                }
-            }
-            // Restore programs
-            if channel < programs.len() && programs[channel].actual_bank > 0
-                || (channel < programs.len() && programs[channel].program >= 0)
-            {
-                let p = programs[channel];
-                if p.program == -1 {
-                    // No program change, apply the current bank select
-                    self.synth.controller_change(
-                        channel,
-                        midi_controllers::BANK_SELECT,
-                        p.bank,
-                    );
-                } else {
-                    // A program change has occurred
-                    self.synth.controller_change(
-                        channel,
-                        midi_controllers::BANK_SELECT,
-                        p.actual_bank,
-                    );
-                    self.synth.program_change(channel, p.program as u8);
                 }
             }
         }

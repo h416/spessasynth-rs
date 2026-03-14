@@ -10,8 +10,8 @@ use crate::utils::string::read_binary_string;
 /// Calculates the frequency for MIDI Tuning Standard.
 /// Returns -1.0 if all three bytes are 0x7F (no change).
 /// Equivalent to: getTuning(byte1, byte2, byte3)
-fn get_tuning(byte1: u8, byte2: u8, byte3: u8) -> f32 {
-    let midi_note = byte1 as f32;
+fn get_tuning(byte1: u8, byte2: u8, byte3: u8) -> f64 {
+    let midi_note = byte1 as f64;
     // Combine byte2 and byte3 into a 14-bit number
     let fraction = ((byte2 as u32) << 7) | (byte3 as u32);
 
@@ -21,7 +21,7 @@ fn get_tuning(byte1: u8, byte2: u8, byte3: u8) -> f32 {
     }
 
     // Calculate cent tuning (divide cents by 100 so it works in semitones)
-    midi_note + fraction as f32 * 0.000_061
+    midi_note + fraction as f64 * 0.000_061
 }
 
 impl SynthesizerCore {
@@ -115,7 +115,7 @@ impl SynthesizerCore {
                             current_message_index += 1;
                             let b3 = syx[current_message_index];
                             current_message_index += 1;
-                            self.tunings[program * 128 + midi_note] = get_tuning(b1, b2, b3);
+                            self.tunings[program * 128 + midi_note] = get_tuning(b1, b2, b3) as f32;
                         }
                         spessa_synth_info(&format!(
                             "Bulk Tuning Dump {} Program: {}",
@@ -144,7 +144,7 @@ impl SynthesizerCore {
                             current_message_index += 1;
                             let b3 = syx[current_message_index];
                             current_message_index += 1;
-                            self.tunings[tuning_program * 128 + midi_note] = get_tuning(b1, b2, b3);
+                            self.tunings[tuning_program * 128 + midi_note] = get_tuning(b1, b2, b3) as f32;
                         }
                         spessa_synth_info(&format!(
                             "Single Note Tuning. Program: {} Keys affected: {}",

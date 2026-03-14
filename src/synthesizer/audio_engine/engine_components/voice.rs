@@ -149,7 +149,7 @@ pub struct Voice {
 
     /// Current tuning offset in cents.
     /// Equivalent to: tuningCents
-    pub tuning_cents: f32,
+    pub tuning_cents: f64,
 
     /// Current tuning as a frequency ratio.
     /// Equivalent to: tuningRatio
@@ -182,6 +182,18 @@ pub struct Voice {
     /// Volume envelope release override in timecents (0 = use modulatedGenerators).
     /// Equivalent to: overrideReleaseVolEnv
     pub override_release_vol_env: i32,
+
+    /// Reverb send multiplier (default 1.0, used by drum parameters).
+    pub reverb_send: f64,
+
+    /// Chorus send multiplier (default 1.0, used by drum parameters).
+    pub chorus_send: f64,
+
+    /// Delay send multiplier (default 1.0, used by drum parameters).
+    pub delay_send: f64,
+
+    /// Pitch offset in cents (used by drum parameters).
+    pub pitch_offset: f64,
 }
 
 impl Voice {
@@ -232,6 +244,10 @@ impl Voice {
             override_pan: 0.0,
             exclusive_class: 0,
             override_release_vol_env: 0,
+            reverb_send: 1.0,
+            chorus_send: 1.0,
+            delay_send: 1.0,
+            pitch_offset: 0.0,
         }
     }
 
