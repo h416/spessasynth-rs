@@ -1,8 +1,8 @@
 [package]
 name = "spessasynth-rs"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-description = "Rust port of spessasynth_core v4.1.0 - Offline WAV rendering from SoundFont2 and MIDI files"
+description = "Rust port of spessasynth_core v4.2.0 - Offline WAV rendering from SoundFont2 and MIDI files"
 license = "Apache-2.0"
 authors = ["spessasus <spesekspesek@gmail.com>", "h416 <4962743+h416@users.noreply.github.com>"]
 
