@@ -15,7 +15,7 @@ use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::{MasterParameterChangeCallback, SynthSystem};
 use crate::utils::loggin::spessa_synth_info;
-use crate::utils::string::read_binary_string;
+use crate::utils::byte_functions::string::read_binary_string;
 
 impl SynthesizerCore {
     /// Handles a GS system exclusive message.

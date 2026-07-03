@@ -7,7 +7,7 @@
 /// TypeScript's `throw new Error(...)` maps to `Err(String)` in Rust.
 use crate::utils::loggin::spessa_synth_group_end;
 use crate::utils::riff_chunk::{RIFFChunk, read_riff_chunk};
-use crate::utils::string::read_binary_string_indexed;
+use crate::utils::byte_functions::string::read_binary_string_indexed;
 
 /// Assembles a DLS parse error message and closes the group log.
 /// The caller should return the error as `Err(parsing_error(...))`.

@@ -17,12 +17,12 @@ use crate::soundbank::soundfont::write::sdta::get_sdta;
 use crate::soundbank::soundfont::write::shdr::get_shdr;
 use crate::soundbank::soundfont::write::write_sf2_elements::write_sf2_elements;
 use crate::utils::indexed_array::IndexedByteArray;
-use crate::utils::little_endian::write_word;
+use crate::utils::byte_functions::little_endian::write_word;
 use crate::utils::loggin::{
     spessa_synth_group, spessa_synth_group_collapsed, spessa_synth_group_end, spessa_synth_info,
 };
 use crate::utils::riff_chunk::{write_riff_chunk_parts, write_riff_chunk_raw};
-use crate::utils::string::get_string_bytes;
+use crate::utils::byte_functions::string::get_string_bytes;
 
 // ---------------------------------------------------------------------------
 // SoundFont2WriteOptions
@@ -346,7 +346,7 @@ mod tests {
     use crate::soundbank::basic_soundbank::modulator::{Modulator, SPESSASYNTH_DEFAULT_MODULATORS};
     use crate::soundbank::enums::sample_types;
     use crate::utils::indexed_array::IndexedByteArray;
-    use crate::utils::little_endian::read_little_endian;
+    use crate::utils::byte_functions::little_endian::read_little_endian;
     use crate::utils::riff_chunk::read_riff_chunk;
 
     // -----------------------------------------------------------------------

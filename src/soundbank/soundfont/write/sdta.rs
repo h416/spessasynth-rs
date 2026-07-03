@@ -12,9 +12,9 @@
 ///   before writing (mirrors `s.setAudioData(s.getAudioData(), s.sampleRate)`).
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::utils::indexed_array::IndexedByteArray;
-use crate::utils::little_endian::write_little_endian_indexed;
+use crate::utils::byte_functions::little_endian::write_little_endian_indexed;
 use crate::utils::loggin::spessa_synth_info;
-use crate::utils::string::write_binary_string_indexed;
+use crate::utils::byte_functions::string::write_binary_string_indexed;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -162,8 +162,8 @@ mod tests {
     use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
     use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
     use crate::soundbank::enums::sample_types;
-    use crate::utils::little_endian::read_little_endian;
-    use crate::utils::string::read_binary_string;
+    use crate::utils::byte_functions::little_endian::read_little_endian;
+    use crate::utils::byte_functions::string::read_binary_string;
 
     // -----------------------------------------------------------------------
     // Helpers

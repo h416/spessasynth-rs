@@ -5,7 +5,7 @@
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::soundbank::downloadable_sounds::downloadable_sounds::DownloadableSounds;
 use crate::soundbank::soundfont::read::soundfont::parse_sound_font2;
-use crate::utils::string::read_binary_string;
+use crate::utils::byte_functions::string::read_binary_string;
 
 // ---------------------------------------------------------------------------
 // load_sound_bank

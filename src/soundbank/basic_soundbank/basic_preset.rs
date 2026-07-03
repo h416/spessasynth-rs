@@ -31,9 +31,9 @@ use crate::soundbank::basic_soundbank::midi_patch::{
 use crate::soundbank::basic_soundbank::modulator::Modulator;
 use crate::soundbank::soundfont::write::types::ExtendedSF2Chunks;
 use crate::soundbank::types::{GenericRange, VoiceParameters};
-use crate::utils::little_endian::{write_dword, write_word};
+use crate::utils::byte_functions::little_endian::{write_dword, write_word};
 use crate::utils::midi_hacks::BankSelectHacks;
-use crate::utils::string::write_binary_string_indexed;
+use crate::utils::byte_functions::string::write_binary_string_indexed;
 
 // ---------------------------------------------------------------------------
 // Constants

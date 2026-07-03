@@ -10,7 +10,7 @@ use crate::soundbank::enums::{DLSLoopType, dls_loop_types};
 use crate::soundbank::types::DLSLoop;
 use crate::synthesizer::types::SampleLoopingMode;
 use crate::utils::indexed_array::IndexedByteArray;
-use crate::utils::little_endian::{
+use crate::utils::byte_functions::little_endian::{
     read_little_endian_indexed, signed_int16, write_dword, write_word,
 };
 use crate::utils::loggin::spessa_synth_warn;

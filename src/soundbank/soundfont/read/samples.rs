@@ -3,10 +3,10 @@
 /// Ported from: src/soundbank/soundfont/read/samples.ts
 use crate::soundbank::enums::{SampleType, sample_types};
 use crate::utils::indexed_array::IndexedByteArray;
-use crate::utils::little_endian::{read_little_endian_indexed, signed_int8};
+use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, signed_int8};
 use crate::utils::loggin::{spessa_synth_info, spessa_synth_warn};
 use crate::utils::riff_chunk::RIFFChunk;
-use crate::utils::string::read_binary_string_indexed;
+use crate::utils::byte_functions::string::read_binary_string_indexed;
 
 /// SF3 compression bit flag in sampleType field.
 /// Equivalent to: SF3_BIT_FLIT = 0x10

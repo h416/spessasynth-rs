@@ -20,12 +20,12 @@ use crate::soundbank::downloadable_sounds::dls_sample::{DlsSample, w_format_tag}
 use crate::soundbank::downloadable_sounds::dls_verifier::verify_and_read_list;
 use crate::soundbank::downloadable_sounds::wave_sample::WaveSample;
 use crate::utils::indexed_array::IndexedByteArray;
-use crate::utils::little_endian::{read_little_endian_indexed, write_dword, write_word};
+use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, write_dword, write_word};
 use crate::utils::loggin::spessa_synth_info;
 use crate::utils::riff_chunk::{
     RIFFChunk, read_riff_chunk, write_riff_chunk_parts, write_riff_chunk_raw,
 };
-use crate::utils::string::{get_string_bytes, read_binary_string, read_binary_string_indexed};
+use crate::utils::byte_functions::string::{get_string_bytes, read_binary_string, read_binary_string_indexed};
 
 // ---------------------------------------------------------------------------
 // DownloadableSoundsSample

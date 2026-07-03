@@ -1,7 +1,7 @@
 /// zones.rs
 /// purpose: reads pbag/ibag zone index tables from a SoundFont RIFF chunk.
 /// Ported from: src/soundbank/soundfont/read/zones.ts
-use crate::utils::little_endian::read_little_endian_indexed;
+use crate::utils::byte_functions::little_endian::read_little_endian_indexed;
 use crate::utils::riff_chunk::RIFFChunk;
 
 /// Holds the generator and modulator start indexes read from a pbag/ibag chunk.

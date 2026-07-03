@@ -21,8 +21,8 @@ use crate::soundbank::basic_soundbank::generator_types::{
 };
 use crate::soundbank::basic_soundbank::modulator::Modulator;
 use crate::soundbank::soundfont::write::types::ExtendedSF2Chunks;
-use crate::utils::little_endian::write_word;
-use crate::utils::string::write_binary_string_indexed;
+use crate::utils::byte_functions::little_endian::write_word;
+use crate::utils::byte_functions::string::write_binary_string_indexed;
 
 // ---------------------------------------------------------------------------
 // Constants

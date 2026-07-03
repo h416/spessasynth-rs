@@ -9,11 +9,11 @@ use crate::midi::midi_message::MidiMessage;
 use crate::midi::midi_track::MidiTrack;
 use crate::midi::types::{MidiFormat, MidiLoop, MidiLoopType, TempoChange};
 use crate::soundbank::types::GenericRange;
-use crate::utils::big_endian::read_big_endian;
+use crate::utils::byte_functions::big_endian::read_big_endian;
 use crate::utils::loggin::{
     spessa_synth_group, spessa_synth_group_end, spessa_synth_info, spessa_synth_warn,
 };
-use crate::utils::string::read_binary_string;
+use crate::utils::byte_functions::string::read_binary_string;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper: tick-to-seconds conversion (standalone, usable from parse_internal)

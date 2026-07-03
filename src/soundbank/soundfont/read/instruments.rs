@@ -5,9 +5,9 @@ use crate::soundbank::basic_soundbank::basic_instrument::BasicInstrument;
 use crate::soundbank::basic_soundbank::basic_instrument_zone::BasicInstrumentZone;
 use crate::soundbank::basic_soundbank::basic_zone::BasicZone;
 use crate::soundbank::soundfont::read::instrument_zones::SoundFontInstrumentZoneSink;
-use crate::utils::little_endian::read_little_endian_indexed;
+use crate::utils::byte_functions::little_endian::read_little_endian_indexed;
 use crate::utils::riff_chunk::RIFFChunk;
-use crate::utils::string::read_binary_string_indexed;
+use crate::utils::byte_functions::string::read_binary_string_indexed;
 
 // ---------------------------------------------------------------------------
 // SoundFontInstrument

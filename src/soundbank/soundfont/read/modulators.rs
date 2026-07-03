@@ -2,7 +2,7 @@
 /// purpose: reads SF2 modulator records from a pmod/imod RIFF chunk.
 /// Ported from: src/soundbank/soundfont/read/modulators.ts
 use crate::soundbank::basic_soundbank::modulator::DecodedModulator;
-use crate::utils::little_endian::{read_little_endian_indexed, signed_int16};
+use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, signed_int16};
 use crate::utils::riff_chunk::RIFFChunk;
 
 /// Reads SF2 modulator records from a pmod or imod RIFF chunk.

@@ -6,9 +6,9 @@ use crate::utils::WaveWriteOptions;
 /// Note: `fillWithDefaults` from TypeScript is replaced by `Option::unwrap_or_default()`.
 /// `WaveWriteOptions` / `WaveMetadata` are defined in `utils/mod.rs` (exports.ts mapping).
 use crate::utils::indexed_array::IndexedByteArray;
-use crate::utils::little_endian::write_little_endian_indexed;
+use crate::utils::byte_functions::little_endian::write_little_endian_indexed;
 use crate::utils::riff_chunk::{write_riff_chunk_parts, write_riff_chunk_raw};
-use crate::utils::string::write_binary_string_indexed;
+use crate::utils::byte_functions::string::write_binary_string_indexed;
 use std::ops::Deref;
 
 /// Writes audio data into a valid WAV file and returns the raw bytes.

@@ -5,7 +5,7 @@ use crate::midi::enums::midi_message_types;
 use crate::midi::midi_message::{get_event, MidiMessage};
 use crate::sequencer::sequencer::SpessaSynthSequencer;
 use crate::sequencer::types::{MetaEventEventData, SequencerEvent};
-use crate::utils::big_endian::read_big_endian;
+use crate::utils::byte_functions::big_endian::read_big_endian;
 use crate::utils::loggin::spessa_synth_info;
 
 use super::sequencer::PlayingNote;

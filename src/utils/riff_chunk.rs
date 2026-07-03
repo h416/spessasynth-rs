@@ -7,8 +7,8 @@
 /// Per CLAUDE.md, these type aliases are defined here (not in soundbank/types.rs) to avoid
 /// the circular dependency that exists in the TypeScript version.
 use crate::utils::indexed_array::IndexedByteArray;
-use crate::utils::little_endian::{read_little_endian_indexed, write_dword};
-use crate::utils::string::{
+use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, write_dword};
+use crate::utils::byte_functions::string::{
     read_binary_string, read_binary_string_indexed, write_binary_string_indexed,
 };
 

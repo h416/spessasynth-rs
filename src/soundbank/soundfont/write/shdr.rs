@@ -5,9 +5,9 @@ use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::soundbank::soundfont::read::samples::SF3_BIT_FLIT;
 use crate::soundbank::soundfont::write::types::ExtendedSF2Chunks;
 use crate::utils::indexed_array::IndexedByteArray;
-use crate::utils::little_endian::{write_dword, write_word};
+use crate::utils::byte_functions::little_endian::{write_dword, write_word};
 use crate::utils::riff_chunk::write_riff_chunk_raw;
-use crate::utils::string::write_binary_string_indexed;
+use crate::utils::byte_functions::string::write_binary_string_indexed;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -184,9 +184,9 @@ mod tests {
     use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
     use crate::soundbank::enums::sample_types;
     use crate::soundbank::soundfont::read::samples::SF3_BIT_FLIT;
-    use crate::utils::little_endian::read_little_endian;
+    use crate::utils::byte_functions::little_endian::read_little_endian;
     use crate::utils::riff_chunk::read_riff_chunk;
-    use crate::utils::string::read_binary_string;
+    use crate::utils::byte_functions::string::read_binary_string;
 
     // -----------------------------------------------------------------------
     // Helpers

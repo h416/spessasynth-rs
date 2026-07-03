@@ -5,7 +5,7 @@ use std::fmt;
 
 use crate::soundbank::basic_soundbank::generator_types::{GENERATOR_LIMITS, GeneratorType};
 use crate::utils::indexed_array::IndexedByteArray;
-use crate::utils::little_endian::write_word;
+use crate::utils::byte_functions::little_endian::write_word;
 
 /// Byte size of one generator record in SF2 (type WORD + value WORD).
 /// Equivalent to: GEN_BYTE_SIZE = 4

@@ -14,10 +14,10 @@ use crate::soundbank::soundfont::read::samples::{SmplData, SoundFontSample, read
 use crate::soundbank::soundfont::read::zones::read_zone_indexes;
 use crate::soundbank::types::SF2VersionTag;
 use crate::utils::indexed_array::IndexedByteArray;
-use crate::utils::little_endian::read_little_endian_indexed;
+use crate::utils::byte_functions::little_endian::read_little_endian_indexed;
 use crate::utils::loggin::{spessa_synth_group, spessa_synth_group_end, spessa_synth_info};
 use crate::utils::riff_chunk::{RIFFChunk, read_riff_chunk};
-use crate::utils::string::{read_binary_string, read_binary_string_indexed};
+use crate::utils::byte_functions::string::{read_binary_string, read_binary_string_indexed};
 
 // ---------------------------------------------------------------------------
 // XChunks: extended SF2 (xdta) hydra sub-chunks

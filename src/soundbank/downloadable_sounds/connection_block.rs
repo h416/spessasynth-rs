@@ -16,9 +16,9 @@ use crate::soundbank::downloadable_sounds::default_dls_modulators::{
 use crate::soundbank::enums::{
     DLSDestination, DLSSource, DLSTransform, dls_destinations, dls_sources, modulator_curve_types,
 };
-use crate::utils::bit_mask::bit_mask_to_bool;
+use crate::utils::byte_functions::bit_mask::bit_mask_to_bool;
 use crate::utils::indexed_array::IndexedByteArray;
-use crate::utils::little_endian::{read_little_endian_indexed, write_dword, write_word};
+use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, write_dword, write_word};
 use crate::utils::loggin::{spessa_synth_info, spessa_synth_warn};
 
 // ---------------------------------------------------------------------------

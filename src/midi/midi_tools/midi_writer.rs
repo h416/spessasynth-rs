@@ -3,8 +3,8 @@
 /// Ported from: src/midi/midi_tools/midi_writer.ts
 use crate::midi::basic_midi::BasicMidi;
 use crate::midi::enums::midi_message_types;
-use crate::utils::big_endian::write_big_endian;
-use crate::utils::variable_length_quantity::write_variable_length_quantity;
+use crate::utils::byte_functions::big_endian::write_big_endian;
+use crate::utils::byte_functions::variable_length_quantity::write_variable_length_quantity;
 
 /// Serializes `midi` as a standard MIDI file and returns the bytes.
 /// Equivalent to: writeMIDIInternal(midi)

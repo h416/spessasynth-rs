@@ -6,18 +6,14 @@
 /// Types/constants are defined here; re-exports expose sub-module items.
 ///
 /// Note: `SpessaSynthCoreUtils` (a JS-only utility aggregate object) is not ported.
-pub mod big_endian;
-pub mod bit_mask;
+pub mod byte_functions;
+pub mod date;
 pub mod indexed_array;
-pub mod little_endian;
-pub mod load_date;
 pub mod loggin;
 pub mod midi_hacks;
 pub mod other;
 pub mod riff_chunk;
-pub mod string;
 pub mod sysex_detector;
-pub mod variable_length_quantity;
 pub mod write_wav;
 
 // --- Re-exports (equivalent to the `export { ... } from "..."` lines in exports.ts) ---

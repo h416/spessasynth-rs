@@ -12,7 +12,7 @@ use crate::soundbank::downloadable_sounds::wave_link::WaveLink;
 use crate::soundbank::downloadable_sounds::wave_sample::WaveSample;
 use crate::soundbank::types::GenericRange;
 use crate::utils::indexed_array::IndexedByteArray;
-use crate::utils::little_endian::{read_little_endian_indexed, write_word};
+use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, write_word};
 use crate::utils::loggin::spessa_synth_warn;
 use crate::utils::riff_chunk::{RIFFChunk, write_riff_chunk_parts, write_riff_chunk_raw};
 

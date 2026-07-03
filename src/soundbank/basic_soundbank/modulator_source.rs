@@ -11,7 +11,7 @@ use crate::synthesizer::audio_engine::engine_components::modulator_curves::{
     MOD_CURVE_TYPES_AMOUNT, MOD_SOURCE_TRANSFORM_POSSIBILITIES, MODULATOR_RESOLUTION,
     get_modulator_curve_value,
 };
-use crate::utils::bit_mask::{bit_mask_to_bool, to_numeric_bool};
+use crate::utils::byte_functions::bit_mask::{bit_mask_to_bool, to_numeric_bool};
 
 // ---------------------------------------------------------------------------
 // VoiceModInputs

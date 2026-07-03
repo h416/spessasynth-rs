@@ -10,9 +10,9 @@ use crate::soundbank::basic_soundbank::modulator::{MOD_BYTE_SIZE, Modulator};
 use crate::soundbank::basic_soundbank::modulator_source::ModulatorSource;
 use crate::soundbank::soundfont::write::types::ExtendedSF2Chunks;
 use crate::utils::indexed_array::IndexedByteArray;
-use crate::utils::little_endian::write_word;
+use crate::utils::byte_functions::little_endian::write_word;
 use crate::utils::riff_chunk::write_riff_chunk_raw;
-use crate::utils::string::write_binary_string_indexed;
+use crate::utils::byte_functions::string::write_binary_string_indexed;
 
 // ---------------------------------------------------------------------------
 // Public output type

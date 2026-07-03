@@ -7,7 +7,7 @@ use crate::sequencer::sequencer::SpessaSynthSequencer;
 use crate::sequencer::types::{MetaEventEventData, SequencerEvent};
 use crate::synthesizer::audio_engine::engine_components::controller_tables::DEFAULT_MIDI_CONTROLLER_VALUES;
 use crate::synthesizer::audio_engine::engine_methods::controller_control::reset_controllers::is_non_resettable;
-use crate::utils::big_endian::read_big_endian;
+use crate::utils::byte_functions::big_endian::read_big_endian;
 
 /// CCs that must not be skipped during seek.
 /// Equivalent to: nonSkippableCCs

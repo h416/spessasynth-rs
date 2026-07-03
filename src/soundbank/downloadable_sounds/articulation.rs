@@ -11,7 +11,7 @@ use crate::soundbank::downloadable_sounds::default_dls_modulators::{
 use crate::soundbank::downloadable_sounds::dls_verifier::verify_header;
 use crate::soundbank::enums::{dls_destinations, dls_sources};
 use crate::utils::indexed_array::IndexedByteArray;
-use crate::utils::little_endian::{read_little_endian_indexed, write_dword};
+use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, write_dword};
 use crate::utils::loggin::spessa_synth_warn;
 use crate::utils::riff_chunk::{
     RIFFChunk, find_riff_list_type, read_riff_chunk, write_riff_chunk_parts, write_riff_chunk_raw,
@@ -354,9 +354,9 @@ mod tests {
     use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
     use crate::soundbank::downloadable_sounds::connection_source::ConnectionSource;
     use crate::soundbank::enums::{dls_destinations as dd, dls_sources as ds};
-    use crate::utils::little_endian::write_word;
+    use crate::utils::byte_functions::little_endian::write_word;
     use crate::utils::riff_chunk::write_riff_chunk_raw;
-    use crate::utils::string::write_binary_string_indexed;
+    use crate::utils::byte_functions::string::write_binary_string_indexed;
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 

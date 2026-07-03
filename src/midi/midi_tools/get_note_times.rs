@@ -5,7 +5,7 @@
 use crate::midi::basic_midi::BasicMidi;
 use crate::midi::types::NoteTime;
 use crate::synthesizer::audio_engine::engine_components::synth_constants::DEFAULT_PERCUSSION;
-use crate::utils::big_endian::read_big_endian;
+use crate::utils::byte_functions::big_endian::read_big_endian;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers

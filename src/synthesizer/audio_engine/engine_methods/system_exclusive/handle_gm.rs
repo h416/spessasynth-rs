@@ -5,7 +5,7 @@ use crate::synthesizer::audio_engine::engine_methods::system_exclusive::helpers:
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::types::{MasterParameterChangeCallback, SynthSystem};
 use crate::utils::loggin::{spessa_synth_info, spessa_synth_warn};
-use crate::utils::string::read_binary_string;
+use crate::utils::byte_functions::string::read_binary_string;
 
 /// Calculates the frequency for MIDI Tuning Standard.
 /// Returns -1.0 if all three bytes are 0x7F (no change).

@@ -23,7 +23,7 @@ use crate::soundbank::downloadable_sounds::region::DownloadableSoundsRegion;
 use crate::soundbank::downloadable_sounds::sample::DownloadableSoundsSample;
 use crate::soundbank::types::{SF2VersionTag, SoundBankInfoData};
 use crate::utils::indexed_array::IndexedByteArray;
-use crate::utils::little_endian::{read_little_endian_indexed, write_dword};
+use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, write_dword};
 use crate::utils::loggin::{
     spessa_synth_group, spessa_synth_group_collapsed, spessa_synth_group_end, spessa_synth_info,
     spessa_synth_warn,
@@ -32,7 +32,7 @@ use crate::utils::midi_hacks::BankSelectHacks;
 use crate::utils::riff_chunk::{
     RIFFChunk, find_riff_list_type, read_riff_chunk, write_riff_chunk_parts, write_riff_chunk_raw,
 };
-use crate::utils::string::{get_string_bytes, read_binary_string, read_binary_string_indexed};
+use crate::utils::byte_functions::string::{get_string_bytes, read_binary_string, read_binary_string_indexed};
 
 // ---------------------------------------------------------------------------
 // DownloadableSounds

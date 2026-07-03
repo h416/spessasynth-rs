@@ -5,7 +5,7 @@ use crate::soundbank::basic_soundbank::basic_instrument_zone::BasicInstrumentZon
 use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
 use crate::soundbank::enums::sample_types;
 use crate::utils::indexed_array::IndexedByteArray;
-use crate::utils::little_endian::{read_little_endian_indexed, write_dword, write_word};
+use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, write_dword, write_word};
 use crate::utils::riff_chunk::{RIFFChunk, write_riff_chunk_raw};
 
 /// DLS WaveLink parameters parsed from or written to a `wlnk` chunk.

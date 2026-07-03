@@ -6,15 +6,15 @@ use crate::midi::basic_midi::BasicMidi;
 use crate::midi::midi_message::{data_bytes_amount, get_channel, MidiMessage};
 use crate::midi::midi_track::MidiTrack;
 use crate::midi::types::MidiFormat;
-use crate::utils::big_endian::read_big_endian_indexed;
+use crate::utils::byte_functions::big_endian::read_big_endian_indexed;
 use crate::utils::indexed_array::IndexedByteArray;
-use crate::utils::little_endian::read_little_endian;
+use crate::utils::byte_functions::little_endian::read_little_endian;
 use crate::utils::loggin::{
     spessa_synth_group_collapsed, spessa_synth_group_end, spessa_synth_info, spessa_synth_warn,
 };
 use crate::utils::riff_chunk::read_riff_chunk;
-use crate::utils::string::{read_binary_string, read_binary_string_indexed};
-use crate::utils::variable_length_quantity::read_variable_length_quantity;
+use crate::utils::byte_functions::string::{read_binary_string, read_binary_string_indexed};
+use crate::utils::byte_functions::variable_length_quantity::read_variable_length_quantity;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
@@ -394,8 +394,8 @@ pub fn load_midi_from_array_buffer_internal(
 mod tests {
     use super::*;
     use crate::midi::enums::midi_message_types;
-    use crate::utils::big_endian::write_big_endian;
-    use crate::utils::variable_length_quantity::write_variable_length_quantity;
+    use crate::utils::byte_functions::big_endian::write_big_endian;
+    use crate::utils::byte_functions::variable_length_quantity::write_variable_length_quantity;
 
     // ── Helpers to build minimal SMF binary ──────────────────────────
 
