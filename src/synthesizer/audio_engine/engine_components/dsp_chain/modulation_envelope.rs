@@ -16,8 +16,8 @@
 use std::sync::LazyLock;
 
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
+use crate::soundbank::basic_soundbank::modulator_curves::get_modulator_curve_value;
 use crate::soundbank::enums::modulator_curve_types;
-use crate::synthesizer::audio_engine::engine_components::modulator_curves::get_modulator_curve_value;
 use crate::synthesizer::audio_engine::engine_components::unit_converter::timecents_to_seconds;
 
 // ---------------------------------------------------------------------------

@@ -19,10 +19,9 @@ use crate::soundbank::basic_soundbank::basic_instrument_zone::BasicInstrumentZon
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::basic_preset_zone::BasicPresetZone;
 use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
-use crate::soundbank::basic_soundbank::midi_patch::{MidiPatch, sorter};
+use crate::soundbank::basic_soundbank::midi_patch::{MidiPatch, select_preset, sorter};
 use crate::soundbank::basic_soundbank::modulator::{Modulator, SPESSASYNTH_DEFAULT_MODULATORS};
 use crate::soundbank::basic_soundbank::preset_resolver::PresetResolver;
-use crate::soundbank::basic_soundbank::preset_selector::select_preset;
 use crate::soundbank::types::{SF2VersionTag, SoundBankInfoData};
 use crate::synthesizer::types::SynthSystem;
 use crate::utils::loggin::spessa_synth_info;

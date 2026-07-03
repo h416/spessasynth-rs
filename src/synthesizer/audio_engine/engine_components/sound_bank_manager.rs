@@ -19,8 +19,9 @@ use std::collections::HashSet;
 
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
-use crate::soundbank::basic_soundbank::midi_patch::{MidiPatch, MidiPatchNamed, sorter};
-use crate::soundbank::basic_soundbank::preset_selector::select_preset;
+use crate::soundbank::basic_soundbank::midi_patch::{
+    MidiPatch, MidiPatchNamed, select_preset, sorter,
+};
 use crate::synthesizer::types::{PresetListEntry, SynthSystem};
 use crate::utils::loggin::spessa_synth_warn;
 use crate::utils::midi_hacks::BankSelectHacks;
