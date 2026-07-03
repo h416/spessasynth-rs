@@ -621,7 +621,7 @@ mod tests {
 
     #[test]
     fn test_round_trip_produces_valid_smf_header() {
-        use crate::midi::midi_tools::midi_writer::write_midi_internal;
+        use crate::midi::write::midi::write_midi_internal;
 
         let mut b = MidiBuilder::new(MidiBuilderOptions {
             format: MidiFormat::MultiTrack,

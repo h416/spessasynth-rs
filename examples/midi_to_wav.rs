@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 
 use spessasynth_rs::midi::midi_tools::midi_builder::{MidiBuilder, MidiBuilderOptions};
-use spessasynth_rs::midi::midi_tools::midi_writer::write_midi_internal;
+use spessasynth_rs::midi::write::midi::write_midi_internal;
 use spessasynth_rs::{render_midi_file_to_wav, RenderOptions};
 
 /// Generate a simple test MIDI file: single note C4 (note 60), 1 second, Piano.

@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use crate::midi::basic_midi::BasicMidi;
 use crate::midi::enums::{midi_controllers, midi_message_types};
 use crate::midi::midi_message::MidiMessage;
-use crate::midi::midi_tools::get_gs_on::get_gs_on;
+use crate::midi::midi_tools::midi_utils::get_gs_on;
 use crate::midi::types::{DesiredChannelTranspose, DesiredControllerChange, DesiredProgramChange};
 use crate::soundbank::basic_soundbank::midi_patch;
 use crate::synthesizer::audio_engine::engine_components::synth_constants::DEFAULT_PERCUSSION;

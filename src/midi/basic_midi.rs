@@ -4,9 +4,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::midi::enums::midi_message_types;
-use crate::midi::midi_loader::load_midi_from_array_buffer_internal;
 use crate::midi::midi_message::MidiMessage;
 use crate::midi::midi_track::MidiTrack;
+use crate::midi::read::midi::load_midi_from_array_buffer_internal;
 use crate::midi::types::{MidiFormat, MidiLoop, MidiLoopType, TempoChange};
 use crate::soundbank::types::GenericRange;
 use crate::utils::byte_functions::big_endian::read_big_endian;

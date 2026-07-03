@@ -4,8 +4,8 @@
 use crate::midi::basic_midi::BasicMidi;
 use crate::midi::enums::{midi_controllers, midi_message_types};
 use crate::midi::midi_message::MidiMessage;
-use crate::midi::midi_tools::get_gs_on::get_gs_on;
-use crate::midi::midi_tools::midi_writer::write_midi_internal;
+use crate::midi::midi_tools::midi_utils::get_gs_on;
+use crate::midi::write::midi::write_midi_internal;
 use crate::midi::types::{RMIDInfoDataPartial, RMIDIWriteOptions};
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::soundbank::basic_soundbank::preset_resolver::PresetResolver;
