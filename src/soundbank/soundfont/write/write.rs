@@ -122,16 +122,19 @@ pub fn write_sf2_internal(bank: &mut BasicSoundBank, options: &SoundFont2WriteOp
 
     // Merge comment + subject.
     // Equivalent to: const commentText = info?.subject ? (info?.comment ? info.comment + "\n" : "") + info.subject : info?.comment
+    // Note: the "\n" separator is only inserted when the comment is non-empty; a bank with
+    // subject only (no comment) yields just the subject with no leading newline (TS 4.3.0).
     let comment_text = {
-        let base = bank
-            .sound_bank_info
-            .comment
-            .as_deref()
-            .unwrap_or("")
-            .to_string();
+        let comment = bank.sound_bank_info.comment.as_deref().unwrap_or("");
         match bank.sound_bank_info.subject.as_deref() {
-            Some(subj) if !subj.is_empty() => format!("{}\n{}", base, subj),
-            _ => base,
+            Some(subj) if !subj.is_empty() => {
+                if comment.is_empty() {
+                    subj.to_string()
+                } else {
+                    format!("{}\n{}", comment, subj)
+                }
+            }
+            _ => comment.to_string(),
         }
     };
 
@@ -618,6 +621,43 @@ mod tests {
             text.contains("MySubject"),
             "merged text must contain subject"
         );
+    }
+
+    #[test]
+    fn test_icmt_merged_text_is_comment_newline_subject() {
+        // Exact merged form when both are present: "comment\nsubject" (TS 4.3.0 formula).
+        let mut bank = BasicSoundBank::default();
+        bank.sound_bank_info.comment = Some("MyComment".to_string());
+        bank.sound_bank_info.subject = Some("MySubject".to_string());
+        let out = write_sf2_internal(&mut bank, &default_opts());
+        let pos = out.windows(4).position(|w| w == b"ICMT").unwrap();
+        let size = read_little_endian(&out, 4, pos + 4) as usize;
+        let text_bytes = &out[pos + 8..pos + 8 + size];
+        let text = std::str::from_utf8(text_bytes)
+            .unwrap_or("")
+            .trim_matches('\0');
+        assert_eq!(text, "MyComment\nMySubject");
+    }
+
+    #[test]
+    fn test_icmt_subject_only_has_no_leading_newline() {
+        // TS 4.3.0 formula: info?.subject ? (info?.comment ? info.comment + "\n" : "") + info.subject : info?.comment
+        // With subject only (no comment), the "\n" separator must NOT be inserted:
+        // the ICMT text is exactly "MySubject", not "\nMySubject".
+        let mut bank = BasicSoundBank::default();
+        bank.sound_bank_info.comment = None;
+        bank.sound_bank_info.subject = Some("MySubject".to_string());
+        let out = write_sf2_internal(&mut bank, &default_opts());
+        let pos = out
+            .windows(4)
+            .position(|w| w == b"ICMT")
+            .expect("ICMT should be written when subject is set");
+        let size = read_little_endian(&out, 4, pos + 4) as usize;
+        let text_bytes = &out[pos + 8..pos + 8 + size];
+        let text = std::str::from_utf8(text_bytes)
+            .unwrap_or("")
+            .trim_matches('\0');
+        assert_eq!(text, "MySubject");
     }
 
     // -----------------------------------------------------------------------
