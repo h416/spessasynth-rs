@@ -1,6 +1,13 @@
 /// instruments.rs
 /// purpose: SoundFont instrument struct and reader.
-/// Ported from: src/soundbank/soundfont/read/instruments.ts
+/// Ported from: src/soundbank/soundfont/read/instruments.ts (spessasynth_core 4.3.0)
+///
+/// Note: TS 4.3.0 inlined the (now-removed) `SoundFontInstrumentZone` class's constructor logic
+/// directly into `createSoundFontZone` here, and renamed the generator fields it reads from
+/// `generatorType`/`generatorValue` to `type`/`value` (naming-only). This is a structural
+/// refactor with no behavior change; the Rust port already isolates the equivalent logic in
+/// `SoundFontInstrumentZone::new` (see `instrument_zones.rs`), so no code changes were needed
+/// here beyond this doc-comment update.
 use crate::soundbank::basic_soundbank::basic_instrument::BasicInstrument;
 use crate::soundbank::basic_soundbank::basic_instrument_zone::BasicInstrumentZone;
 use crate::soundbank::basic_soundbank::basic_zone::BasicZone;

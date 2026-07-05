@@ -1,6 +1,6 @@
 /// soundfont.rs
 /// purpose: parses a SoundFont2 (.sf2 / .sf3 / .sf2pack) file into a BasicSoundBank.
-/// Ported from: src/soundbank/soundfont/read/soundfont.ts
+/// Ported from: src/soundbank/soundfont/read/soundfont.ts (spessasynth_core 4.3.0)
 use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::soundbank::basic_soundbank::modulator::{DecodedModulator, Modulator};
@@ -15,8 +15,8 @@ use crate::soundbank::soundfont::read::zones::read_zone_indexes;
 use crate::soundbank::types::SF2VersionTag;
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::read_little_endian_indexed;
-use crate::utils::loggin::{spessa_synth_group, spessa_synth_group_end, spessa_synth_info};
-use crate::utils::riff_chunk::{RIFFChunk, read_riff_chunk};
+use crate::utils::loggin::SpessaLog;
+use crate::utils::riff_chunk::RIFFChunk;
 use crate::utils::byte_functions::string::{read_binary_string, read_binary_string_indexed};
 
 // ---------------------------------------------------------------------------
@@ -147,16 +147,16 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
     let mut main_file_array = IndexedByteArray::from_vec(data);
     let mut bank = BasicSoundBank::new();
 
-    spessa_synth_group("Parsing a SoundFont2 file...");
+    SpessaLog::group("Parsing a SoundFont2 file...");
 
     // ── Main RIFF chunk ──────────────────────────────────────────────────────
     // Equivalent to: const firstChunk = readRIFFChunk(mainFileArray, false)
-    let first_chunk = read_riff_chunk(&mut main_file_array, false, false);
+    let first_chunk = RIFFChunk::read(&mut main_file_array, false, false);
     verify_header(&first_chunk, "riff");
 
     let type_str = read_binary_string_indexed(&mut main_file_array, 4).to_lowercase();
     if type_str != "sfbk" && type_str != "sfpk" {
-        spessa_synth_group_end();
+        SpessaLog::group_end();
         panic!(
             "Invalid soundFont! Expected \"sfbk\" or \"sfpk\" got \"{}\"",
             type_str
@@ -166,11 +166,11 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
 
     // ── INFO chunk ───────────────────────────────────────────────────────────
     // Equivalent to: const infoChunk = readRIFFChunk(mainFileArray)
-    let mut info_chunk = read_riff_chunk(&mut main_file_array, true, false);
+    let mut info_chunk = RIFFChunk::read(&mut main_file_array, true, false);
     verify_header(&info_chunk, "list");
     let info_string = read_binary_string_indexed(&mut info_chunk.data, 4);
     if info_string != "INFO" {
-        spessa_synth_group_end();
+        SpessaLog::group_end();
         panic!(
             "Invalid soundFont! Expected \"INFO\" got \"{}\"",
             info_string
@@ -181,7 +181,7 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
     let mut xdta_chunk: Option<RIFFChunk> = None;
 
     while info_chunk.data.len() > info_chunk.data.current_index {
-        let mut chunk = read_riff_chunk(&mut info_chunk.data, true, false);
+        let mut chunk = RIFFChunk::read(&mut info_chunk.data, true, false);
         // Read full text without advancing the chunk cursor (used for most string fields)
         let text = read_binary_string(&chunk.data, chunk.data.len(), 0);
 
@@ -207,7 +207,7 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
             "LIST" => {
                 let list_type = read_binary_string_indexed(&mut chunk.data, 4);
                 if list_type == "xdta" {
-                    spessa_synth_info("Extended SF2 found!");
+                    SpessaLog::info("Extended SF2 found!");
                     xdta_chunk = Some(chunk);
                 }
             }
@@ -250,15 +250,15 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
     // Equivalent to: if (xdtaChunk !== undefined) { xChunks.phdr = readRIFFChunk(...); … }
     let mut x_chunks: Option<XChunks> = if let Some(ref mut xdta) = xdta_chunk {
         Some(XChunks {
-            phdr: read_riff_chunk(&mut xdta.data, true, false),
-            pbag: read_riff_chunk(&mut xdta.data, true, false),
-            pmod: read_riff_chunk(&mut xdta.data, true, false),
-            pgen: read_riff_chunk(&mut xdta.data, true, false),
-            inst: read_riff_chunk(&mut xdta.data, true, false),
-            ibag: read_riff_chunk(&mut xdta.data, true, false),
-            imod: read_riff_chunk(&mut xdta.data, true, false),
-            igen: read_riff_chunk(&mut xdta.data, true, false),
-            shdr: read_riff_chunk(&mut xdta.data, true, false),
+            phdr: RIFFChunk::read(&mut xdta.data, true, false),
+            pbag: RIFFChunk::read(&mut xdta.data, true, false),
+            pmod: RIFFChunk::read(&mut xdta.data, true, false),
+            pgen: RIFFChunk::read(&mut xdta.data, true, false),
+            inst: RIFFChunk::read(&mut xdta.data, true, false),
+            ibag: RIFFChunk::read(&mut xdta.data, true, false),
+            imod: RIFFChunk::read(&mut xdta.data, true, false),
+            igen: RIFFChunk::read(&mut xdta.data, true, false),
+            shdr: RIFFChunk::read(&mut xdta.data, true, false),
         })
     } else {
         None
@@ -266,24 +266,24 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
 
     // ── SDTA chunk (sample data) ─────────────────────────────────────────────
     // Equivalent to: const sdtaChunk = readRIFFChunk(mainFileArray, false)
-    let sdta_chunk = read_riff_chunk(&mut main_file_array, false, false);
+    let sdta_chunk = RIFFChunk::read(&mut main_file_array, false, false);
     verify_header(&sdta_chunk, "list");
     let sdta_text = read_binary_string_indexed(&mut main_file_array, 4);
     verify_text(&sdta_text, "sdta");
 
-    spessa_synth_info("Verifying smpl chunk...");
-    let sample_data_chunk = read_riff_chunk(&mut main_file_array, false, false);
+    SpessaLog::info("Verifying smpl chunk...");
+    let sample_data_chunk = RIFFChunk::read(&mut main_file_array, false, false);
     verify_header(&sample_data_chunk, "smpl");
 
     if is_sf2_pack {
-        spessa_synth_group_end();
+        SpessaLog::group_end();
         panic!("SF2Pack not yet supported: vorbis decoding is not yet implemented.");
     }
 
     // Save the start of smpl audio data (cursor points here after reading smpl header)
     // Equivalent to: this.sampleDataStartIndex = mainFileArray.currentIndex
     let sample_data_start_index = main_file_array.current_index;
-    spessa_synth_info(&format!(
+    SpessaLog::info(&format!(
         "Skipping sample chunk, length: {}",
         (sdta_chunk.size as usize).saturating_sub(12)
     ));
@@ -293,34 +293,34 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
     main_file_array.current_index += (sdta_chunk.size as usize).saturating_sub(12);
 
     // ── PDTA chunk (hydra) ───────────────────────────────────────────────────
-    spessa_synth_info("Loading preset data chunk...");
+    SpessaLog::info("Loading preset data chunk...");
     // Equivalent to: const presetChunk = readRIFFChunk(mainFileArray)
-    let mut preset_chunk = read_riff_chunk(&mut main_file_array, true, false);
+    let mut preset_chunk = RIFFChunk::read(&mut main_file_array, true, false);
     verify_header(&preset_chunk, "list");
     // Consume the "pdta" FourCC from the list content
     let _pdta_type = read_binary_string_indexed(&mut preset_chunk.data, 4);
 
-    let mut phdr_chunk = read_riff_chunk(&mut preset_chunk.data, true, false);
+    let mut phdr_chunk = RIFFChunk::read(&mut preset_chunk.data, true, false);
     verify_header(&phdr_chunk, "phdr");
-    let mut pbag_chunk = read_riff_chunk(&mut preset_chunk.data, true, false);
+    let mut pbag_chunk = RIFFChunk::read(&mut preset_chunk.data, true, false);
     verify_header(&pbag_chunk, "pbag");
-    let mut pmod_chunk = read_riff_chunk(&mut preset_chunk.data, true, false);
+    let mut pmod_chunk = RIFFChunk::read(&mut preset_chunk.data, true, false);
     verify_header(&pmod_chunk, "pmod");
-    let mut pgen_chunk = read_riff_chunk(&mut preset_chunk.data, true, false);
+    let mut pgen_chunk = RIFFChunk::read(&mut preset_chunk.data, true, false);
     verify_header(&pgen_chunk, "pgen");
-    let mut inst_chunk = read_riff_chunk(&mut preset_chunk.data, true, false);
+    let mut inst_chunk = RIFFChunk::read(&mut preset_chunk.data, true, false);
     verify_header(&inst_chunk, "inst");
-    let mut ibag_chunk = read_riff_chunk(&mut preset_chunk.data, true, false);
+    let mut ibag_chunk = RIFFChunk::read(&mut preset_chunk.data, true, false);
     verify_header(&ibag_chunk, "ibag");
-    let mut imod_chunk = read_riff_chunk(&mut preset_chunk.data, true, false);
+    let mut imod_chunk = RIFFChunk::read(&mut preset_chunk.data, true, false);
     verify_header(&imod_chunk, "imod");
-    let mut igen_chunk = read_riff_chunk(&mut preset_chunk.data, true, false);
+    let mut igen_chunk = RIFFChunk::read(&mut preset_chunk.data, true, false);
     verify_header(&igen_chunk, "igen");
-    let mut shdr_chunk = read_riff_chunk(&mut preset_chunk.data, true, false);
+    let mut shdr_chunk = RIFFChunk::read(&mut preset_chunk.data, true, false);
     verify_header(&shdr_chunk, "shdr");
 
     // ── Read samples ─────────────────────────────────────────────────────────
-    spessa_synth_info("Parsing samples...");
+    SpessaLog::info("Parsing samples...");
     // Reset cursor to start of smpl audio data
     // Equivalent to: mainFileArray.currentIndex = this.sampleDataStartIndex
     main_file_array.current_index = sample_data_start_index;
@@ -368,7 +368,9 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
                 inst.instrument
                     .name
                     .push_str(&x_instruments[i].instrument.name);
-                inst.zone_start_index |= x_instruments[i].zone_start_index;
+                // TS 4.3.0 fix: shift the extended zone_start_index into the upper 16
+                // bits before OR-ing (previously merged in the low bits, which is wrong).
+                inst.zone_start_index |= x_instruments[i].zone_start_index << 16;
             }
             // Recalculate zones_count after extending zone_start_index values
             for i in 0..instruments.len() {
@@ -424,7 +426,9 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
         if x_presets.len() == presets.len() {
             for (i, pres) in presets.iter_mut().enumerate() {
                 pres.preset.name.push_str(&x_presets[i].preset.name);
-                pres.zone_start_index |= x_presets[i].zone_start_index;
+                // TS 4.3.0 fix: shift the extended zone_start_index into the upper 16
+                // bits before OR-ing (previously merged in the low bits, which is wrong).
+                pres.zone_start_index |= x_presets[i].zone_start_index << 16;
             }
             // Recalculate zones_count after extending zone_start_index values
             for i in 0..presets.len() {
@@ -472,14 +476,14 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
     // Sort presets and run parse_internal (XG bank detection)
     bank.flush();
 
-    spessa_synth_info(&format!(
+    SpessaLog::info(&format!(
         "Parsing finished! \"{}\" has {} presets, {} instruments and {} samples.",
         bank.sound_bank_info.name,
         bank.presets.len(),
         bank.instruments.len(),
         bank.samples.len()
     ));
-    spessa_synth_group_end();
+    SpessaLog::group_end();
 
     bank
 }

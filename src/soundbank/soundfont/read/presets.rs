@@ -1,14 +1,17 @@
 /// presets.rs
 /// purpose: SoundFont preset struct and reader.
-/// Ported from: src/soundbank/soundfont/read/presets.ts
+/// Ported from: src/soundbank/soundfont/read/presets.ts (spessasynth_core 4.3.0)
 ///
 /// # TypeScript vs Rust design differences
 ///
 /// - `SoundFontPreset` contains a `BasicPreset` by value (composition) instead of inheriting
 /// - The `sf2: BasicSoundBank` constructor parameter is dropped (no `parentSoundBank` in Rust)
-/// - `\d{3}:\d{3}` name-patch stripping is implemented without a regex crate
 /// - Implements `SoundFontPresetZoneSink` (from `preset_zones.rs`) so that `apply_preset_zones`
 ///   can populate zones without depending on `BasicSoundBank`
+///
+/// Note: TS 4.3.0 removed the `\d{3}:\d{3}` ("000:001"-style patch number) stripping that
+/// previously ran on the raw PHDR name; the name is now stored verbatim. This Rust port
+/// follows suit (the `strip_patch_number` helper that used to run here has been removed).
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::basic_preset_zone::BasicPresetZone;
 use crate::soundbank::basic_soundbank::basic_zone::BasicZone;
@@ -16,34 +19,6 @@ use crate::soundbank::soundfont::read::preset_zones::SoundFontPresetZoneSink;
 use crate::utils::byte_functions::little_endian::read_little_endian_indexed;
 use crate::utils::riff_chunk::RIFFChunk;
 use crate::utils::byte_functions::string::read_binary_string_indexed;
-
-// ---------------------------------------------------------------------------
-// strip_patch_number (module-private helper)
-// ---------------------------------------------------------------------------
-
-/// Removes the first occurrence of the `DDD:DDD` patch-number pattern from a name.
-///
-/// Some SF2 files embed e.g. `"000:001"` inside the preset name field.
-///
-/// Equivalent to: `name.replace(/\d{3}:\d{3}/, "")`  (first occurrence only)
-fn strip_patch_number(name: &str) -> String {
-    let bytes = name.as_bytes();
-    for i in 0..bytes.len().saturating_sub(6) {
-        if bytes[i].is_ascii_digit()
-            && bytes[i + 1].is_ascii_digit()
-            && bytes[i + 2].is_ascii_digit()
-            && bytes[i + 3] == b':'
-            && bytes[i + 4].is_ascii_digit()
-            && bytes[i + 5].is_ascii_digit()
-            && bytes[i + 6].is_ascii_digit()
-        {
-            let mut result = name.to_string();
-            result.drain(i..i + 7);
-            return result;
-        }
-    }
-    name.to_string()
-}
 
 // ---------------------------------------------------------------------------
 // SoundFontPreset
@@ -81,8 +56,8 @@ impl SoundFontPreset {
     ///
     /// Equivalent to: `constructor(presetChunk: RIFFChunk, sf2: BasicSoundBank)`
     pub fn new(chunk: &mut RIFFChunk) -> Self {
-        let raw_name = read_binary_string_indexed(&mut chunk.data, 20);
-        let name = strip_patch_number(&raw_name);
+        // TS 4.3.0: the name is stored verbatim (no "000:001" patch-number stripping).
+        let name = read_binary_string_indexed(&mut chunk.data, 20);
 
         let program = read_little_endian_indexed(&mut chunk.data, 2) as u8;
         let w_bank = read_little_endian_indexed(&mut chunk.data, 2) as u16;
@@ -226,56 +201,6 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // strip_patch_number
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_strip_no_pattern_unchanged() {
-        assert_eq!(strip_patch_number("Grand Piano"), "Grand Piano");
-    }
-
-    #[test]
-    fn test_strip_prefix_000_001() {
-        assert_eq!(strip_patch_number("000:001Grand Piano"), "Grand Piano");
-    }
-
-    #[test]
-    fn test_strip_embedded_pattern() {
-        assert_eq!(strip_patch_number("Grand000:001Piano"), "GrandPiano");
-    }
-
-    #[test]
-    fn test_strip_trailing_pattern() {
-        assert_eq!(strip_patch_number("Grand Piano000:001"), "Grand Piano");
-    }
-
-    #[test]
-    fn test_strip_first_occurrence_only() {
-        // JavaScript replace without /g replaces only the first match
-        assert_eq!(strip_patch_number("000:001abc000:002"), "abc000:002");
-    }
-
-    #[test]
-    fn test_strip_non_digit_before_colon_unchanged() {
-        assert_eq!(strip_patch_number("abc:def"), "abc:def");
-    }
-
-    #[test]
-    fn test_strip_empty_string() {
-        assert_eq!(strip_patch_number(""), "");
-    }
-
-    #[test]
-    fn test_strip_exactly_seven_chars() {
-        assert_eq!(strip_patch_number("000:001"), "");
-    }
-
-    #[test]
-    fn test_strip_partial_pattern_unchanged() {
-        assert_eq!(strip_patch_number("00:001"), "00:001"); // only 2 leading digits
-    }
-
-    // -----------------------------------------------------------------------
     // SoundFontPreset::new
     // -----------------------------------------------------------------------
 
@@ -287,10 +212,12 @@ mod tests {
     }
 
     #[test]
-    fn test_new_strips_patch_number_from_name() {
+    fn test_new_does_not_strip_patch_number_from_name() {
+        // TS 4.3.0 removed "000:001"-style patch-number stripping: the name is now
+        // stored verbatim, including any embedded "DDD:DDD" pattern.
         let mut chunk = make_chunk(make_phdr_simple("000:001Grand Piano", 0, 0, 0));
         let p = SoundFontPreset::new(&mut chunk);
-        assert_eq!(p.preset.name, "Grand Piano");
+        assert_eq!(p.preset.name, "000:001Grand Piano");
     }
 
     #[test]

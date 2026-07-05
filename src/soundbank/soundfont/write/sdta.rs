@@ -1,19 +1,29 @@
 /// sdta.rs
 /// purpose: Build the SF2 sdta LIST chunk from a sound bank's samples.
-/// Ported from: src/soundbank/soundfont/write/sdta.ts
+/// Ported from: src/soundbank/soundfont/write/sdta.ts (spessasynth_core 4.3.0)
 ///
 /// # Differences from TypeScript
 ///
-/// - Async behaviour is removed: the function is synchronous.
-/// - `compress` + `vorbisFunc` parameters are omitted (vorbis encoding is out of
-///   MIDI→WAV scope and requires an unimplemented TODO crate).
-/// - `progressFunc` parameter is omitted (no async progress callbacks in Rust).
-/// - `decompress` parameter is kept: when `true` the sample is decoded to PCM
-///   before writing (mirrors `s.setAudioData(s.getAudioData(), s.sampleRate)`).
+/// - Async behaviour is removed: the function is synchronous (TS 4.3.0 made the same change
+///   upstream, since Vorbis compression -- the only source of `await` here -- was removed from
+///   this function; see below).
+/// - `compress` / `vorbisFunc` / `progressFunction` parameters are omitted: TS 4.3.0 itself
+///   dropped compression support from `getSDTA` entirely (Vorbis encoding moved to a separate
+///   opt-in step on `BasicSoundBank`, out of MIDI→WAV scope and not ported -- see
+///   `basic_soundbank.rs`'s doc comment on `setSampleFormat`).
+/// - `decompress` is also removed: TS 4.3.0 dropped it from `getSDTA` too, so forcing
+///   Vorbis-compressed samples to decode to PCM during writing is no longer part of this
+///   function.
+/// - TS 4.3.0 changed `getSDTA` to return `RIFFChunk.getParts(...)` -- an array of borrowed
+///   byte-slice parts assembled lazily -- instead of one fully-copied `Uint8Array`, to reduce
+///   peak memory usage during writing. This port keeps building one flat `Vec<u8>` up front
+///   (matching the pre-4.3.0 shape): the written bytes are identical either way, since this is
+///   purely an internal memory/performance optimization with no observable effect on the file
+///   produced.
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::write_little_endian_indexed;
-use crate::utils::loggin::spessa_synth_info;
+use crate::utils::loggin::SpessaLog;
 use crate::utils::byte_functions::string::write_binary_string_indexed;
 
 // ---------------------------------------------------------------------------
@@ -49,19 +59,16 @@ const SDTA_TO_DATA_OFFSET: usize = 4 + 4 + 4 + 4 + 4; // 20
 ///
 /// Returns the complete raw bytes of the sdta LIST chunk.
 ///
-/// Equivalent to: `export async function getSDTA(...): Promise<Uint8Array>`
+/// Equivalent to: `export function getSDTA(...)`
 ///
 /// # Parameters
 /// - `bank` -- sound bank whose samples are encoded.
 /// - `smpl_start_offsets` -- output: receives the inclusive start offset of every sample.
 /// - `smpl_end_offsets` -- output: receives the exclusive end offset of every sample.
-/// - `decompress` -- when `true`, forces Vorbis-compressed samples to be decoded
-///   to PCM before writing.
 pub fn get_sdta(
     bank: &mut BasicSoundBank,
     smpl_start_offsets: &mut Vec<u64>,
     smpl_end_offsets: &mut Vec<u64>,
-    decompress: bool,
 ) -> Vec<u8> {
     let n = bank.samples.len();
 
@@ -72,24 +79,14 @@ pub fn get_sdta(
     let mut sample_infos: Vec<(Vec<u8>, bool)> = Vec::with_capacity(n);
 
     for (i, sample) in bank.samples.iter_mut().enumerate() {
-        // Force PCM decompression when requested.
-        if decompress {
-            let audio = sample.get_audio_data().to_vec();
-            let rate = sample.sample_rate;
-            sample.set_audio_data(audio, rate);
-        }
-
+        // `get_raw_data` takes `&mut self` because it lazily decodes/caches Vorbis
+        // audio internally; TS 4.3.0 no longer performs any explicit compress/decompress
+        // mutation here (that moved to a separate opt-in step, out of scope -- see above).
         let raw = sample.get_raw_data(true);
         let is_compressed = sample.is_compressed();
         let name = sample.name.clone();
 
-        spessa_synth_info(&format!(
-            "Encoded sample {}. {} of {}. Compressed: {}.",
-            i + 1,
-            name,
-            n,
-            is_compressed,
-        ));
+        SpessaLog::info(&format!("Wrote sample {}. {} of {}.", i + 1, name, n));
 
         // SF2.1 §6.1: each uncompressed sample must be followed by 46 zero-valued
         // sample data points (= 92 bytes).  SF3 compressed samples need no padding.
@@ -209,7 +206,7 @@ mod tests {
         let mut bank = BasicSoundBank::default();
         let mut starts = vec![];
         let mut ends = vec![];
-        let out = get_sdta(&mut bank, &mut starts, &mut ends, false);
+        let out = get_sdta(&mut bank, &mut starts, &mut ends);
         assert_eq!(&out[0..4], b"LIST");
     }
 
@@ -218,7 +215,7 @@ mod tests {
         let mut bank = BasicSoundBank::default();
         let mut starts = vec![];
         let mut ends = vec![];
-        let out = get_sdta(&mut bank, &mut starts, &mut ends, false);
+        let out = get_sdta(&mut bank, &mut starts, &mut ends);
         assert_eq!(&out[8..12], b"sdta");
     }
 
@@ -227,7 +224,7 @@ mod tests {
         let mut bank = BasicSoundBank::default();
         let mut starts = vec![];
         let mut ends = vec![];
-        let out = get_sdta(&mut bank, &mut starts, &mut ends, false);
+        let out = get_sdta(&mut bank, &mut starts, &mut ends);
         assert_eq!(&out[12..16], b"smpl");
     }
 
@@ -236,7 +233,7 @@ mod tests {
         let mut bank = BasicSoundBank::default();
         let mut starts = vec![];
         let mut ends = vec![];
-        let out = get_sdta(&mut bank, &mut starts, &mut ends, false);
+        let out = get_sdta(&mut bank, &mut starts, &mut ends);
         // No samples → smpl_chunk_size = 0 → total = SDTA_TO_DATA_OFFSET
         assert_eq!(out.len(), SDTA_TO_DATA_OFFSET);
     }
@@ -246,7 +243,7 @@ mod tests {
         let mut bank = BasicSoundBank::default();
         let mut starts = vec![];
         let mut ends = vec![];
-        let out = get_sdta(&mut bank, &mut starts, &mut ends, false);
+        let out = get_sdta(&mut bank, &mut starts, &mut ends);
         let smpl_size = read_little_endian(&out, 4, 16);
         assert_eq!(smpl_size, 0);
     }
@@ -257,7 +254,7 @@ mod tests {
         bank.samples.push(make_pcm_sample("A", 10)); // 10 * 2 = 20 bytes + 92 padding = 112
         let mut starts = vec![];
         let mut ends = vec![];
-        let out = get_sdta(&mut bank, &mut starts, &mut ends, false);
+        let out = get_sdta(&mut bank, &mut starts, &mut ends);
         let list_size = read_little_endian(&out, 4, 4);
         assert_eq!(list_size as usize, out.len() - 8);
     }
@@ -269,7 +266,7 @@ mod tests {
         bank.samples.push(make_pcm_sample("A", 4));
         let mut starts = vec![];
         let mut ends = vec![];
-        let out = get_sdta(&mut bank, &mut starts, &mut ends, false);
+        let out = get_sdta(&mut bank, &mut starts, &mut ends);
         let smpl_size = read_little_endian(&out, 4, 16) as usize;
         assert_eq!(smpl_size, 4 * 2 + 92); // 8 + 92 = 100
     }
@@ -298,7 +295,7 @@ mod tests {
 
         let mut starts = vec![];
         let mut ends = vec![];
-        let out = get_sdta(&mut bank, &mut starts, &mut ends, false);
+        let out = get_sdta(&mut bank, &mut starts, &mut ends);
 
         // The first 2 bytes at SDTA_TO_DATA_OFFSET should be 0x00, 0x40 (0.5 → 16384 LE)
         assert_eq!(out[SDTA_TO_DATA_OFFSET], 0x00);
@@ -323,7 +320,7 @@ mod tests {
 
         let mut starts = vec![];
         let mut ends = vec![];
-        let out = get_sdta(&mut bank, &mut starts, &mut ends, false);
+        let out = get_sdta(&mut bank, &mut starts, &mut ends);
 
         // raw data = 4 bytes (2 samples × 2), then 92 zero-padding bytes
         let data_end = SDTA_TO_DATA_OFFSET + num * 2;
@@ -342,7 +339,7 @@ mod tests {
 
         let mut starts = vec![];
         let mut ends = vec![];
-        let out = get_sdta(&mut bank, &mut starts, &mut ends, false);
+        let out = get_sdta(&mut bank, &mut starts, &mut ends);
 
         let smpl_size = read_little_endian(&out, 4, 16) as usize;
         // No padding: smpl size should equal payload length (even → 4 due to alignment)
@@ -366,7 +363,7 @@ mod tests {
         bank.samples.push(make_pcm_sample("A", 10));
         let mut starts = vec![];
         let mut ends = vec![];
-        get_sdta(&mut bank, &mut starts, &mut ends, false);
+        get_sdta(&mut bank, &mut starts, &mut ends);
         assert_eq!(starts[0], 0);
     }
 
@@ -377,7 +374,7 @@ mod tests {
         bank.samples.push(make_pcm_sample("A", 10));
         let mut starts = vec![];
         let mut ends = vec![];
-        get_sdta(&mut bank, &mut starts, &mut ends, false);
+        get_sdta(&mut bank, &mut starts, &mut ends);
         assert_eq!(ends[0], 10);
     }
 
@@ -390,7 +387,7 @@ mod tests {
         bank.samples.push(make_pcm_sample("B", 6));
         let mut starts = vec![];
         let mut ends = vec![];
-        get_sdta(&mut bank, &mut starts, &mut ends, false);
+        get_sdta(&mut bank, &mut starts, &mut ends);
         assert_eq!(starts[1], 50); // (8 + 92) / 2 = 50
     }
 
@@ -402,7 +399,7 @@ mod tests {
         bank.samples.push(make_pcm_sample("B", 6));
         let mut starts = vec![];
         let mut ends = vec![];
-        get_sdta(&mut bank, &mut starts, &mut ends, false);
+        get_sdta(&mut bank, &mut starts, &mut ends);
         assert_eq!(ends[1], 56); // 50 + 6
     }
 
@@ -414,7 +411,7 @@ mod tests {
         }
         let mut starts = vec![];
         let mut ends = vec![];
-        get_sdta(&mut bank, &mut starts, &mut ends, false);
+        get_sdta(&mut bank, &mut starts, &mut ends);
         assert_eq!(starts.len(), 5);
         assert_eq!(ends.len(), 5);
     }
@@ -430,7 +427,7 @@ mod tests {
             .push(make_compressed_sample("V", vec![1, 2, 3, 4]));
         let mut starts = vec![];
         let mut ends = vec![];
-        get_sdta(&mut bank, &mut starts, &mut ends, false);
+        get_sdta(&mut bank, &mut starts, &mut ends);
         assert_eq!(starts[0], 0);
     }
 
@@ -441,7 +438,7 @@ mod tests {
             .push(make_compressed_sample("V", vec![1, 2, 3, 4]));
         let mut starts = vec![];
         let mut ends = vec![];
-        get_sdta(&mut bank, &mut starts, &mut ends, false);
+        get_sdta(&mut bank, &mut starts, &mut ends);
         assert_eq!(ends[0], 4);
     }
 
@@ -454,7 +451,7 @@ mod tests {
         bank.samples.push(make_compressed_sample("V2", vec![5, 6]));
         let mut starts = vec![];
         let mut ends = vec![];
-        get_sdta(&mut bank, &mut starts, &mut ends, false);
+        get_sdta(&mut bank, &mut starts, &mut ends);
         assert_eq!(starts[1], 4);
         assert_eq!(ends[1], 6);
     }
@@ -471,7 +468,7 @@ mod tests {
             .push(make_compressed_sample("V", vec![1, 2, 3]));
         let mut starts = vec![];
         let mut ends = vec![];
-        let out = get_sdta(&mut bank, &mut starts, &mut ends, false);
+        let out = get_sdta(&mut bank, &mut starts, &mut ends);
         let smpl_size = read_little_endian(&out, 4, 16) as usize;
         assert_eq!(smpl_size % 2, 0);
         assert_eq!(smpl_size, 4); // 3 → 4
@@ -485,33 +482,9 @@ mod tests {
             .push(make_compressed_sample("V", vec![1, 2, 3, 4]));
         let mut starts = vec![];
         let mut ends = vec![];
-        let out = get_sdta(&mut bank, &mut starts, &mut ends, false);
+        let out = get_sdta(&mut bank, &mut starts, &mut ends);
         let smpl_size = read_little_endian(&out, 4, 16) as usize;
         assert_eq!(smpl_size, 4);
-    }
-
-    // -----------------------------------------------------------------------
-    // decompress flag
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_decompress_flag_converts_compressed_to_pcm() {
-        // A compressed sample with audio_data set (via decode stub) should be
-        // re-written as s16le when decompress=true.
-        let mut bank = BasicSoundBank::default();
-        let mut s = make_compressed_sample("V", vec![0xFF, 0xFF]);
-        // Manually set audio_data so get_audio_data() returns something sensible.
-        s.audio_data = Some(vec![0.0f32; 2]);
-        bank.samples.push(s);
-
-        let mut starts = vec![];
-        let mut ends = vec![];
-        let out = get_sdta(&mut bank, &mut starts, &mut ends, true);
-
-        // After decompression the sample is treated as PCM.
-        // 2 float32 → 4 bytes raw + 92 padding = 96 smpl bytes (even).
-        let smpl_size = read_little_endian(&out, 4, 16) as usize;
-        assert_eq!(smpl_size, 4 + 92); // 96
     }
 
     // -----------------------------------------------------------------------
@@ -534,7 +507,7 @@ mod tests {
         bank.samples.push(make_pcm_sample("A", num));
         let mut starts = vec![];
         let mut ends = vec![];
-        let out = get_sdta(&mut bank, &mut starts, &mut ends, false);
+        let out = get_sdta(&mut bank, &mut starts, &mut ends);
         let expected = SDTA_TO_DATA_OFFSET + num * 2 + 92;
         assert_eq!(out.len(), expected);
     }
@@ -548,7 +521,7 @@ mod tests {
         bank.samples.push(make_pcm_sample("B", 4));
         let mut starts = vec![];
         let mut ends = vec![];
-        let out = get_sdta(&mut bank, &mut starts, &mut ends, false);
+        let out = get_sdta(&mut bank, &mut starts, &mut ends);
         assert_eq!(out.len(), SDTA_TO_DATA_OFFSET + 200);
     }
 
@@ -563,7 +536,7 @@ mod tests {
 
         let mut starts = vec![999u64]; // pre-existing entry
         let mut ends = vec![888u64];
-        get_sdta(&mut bank, &mut starts, &mut ends, false);
+        get_sdta(&mut bank, &mut starts, &mut ends);
 
         // Original entries must be preserved
         assert_eq!(starts[0], 999);
@@ -583,7 +556,7 @@ mod tests {
         bank.samples.push(make_pcm_sample("Z", 2));
         let mut starts = vec![];
         let mut ends = vec![];
-        let out = get_sdta(&mut bank, &mut starts, &mut ends, false);
+        let out = get_sdta(&mut bank, &mut starts, &mut ends);
 
         assert_eq!(read_binary_string(&out, 4, 0), "LIST");
         assert_eq!(read_binary_string(&out, 4, 8), "sdta");

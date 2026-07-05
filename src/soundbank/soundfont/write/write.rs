@@ -1,14 +1,24 @@
 /// write.rs
 /// purpose: Write a BasicSoundBank as an SF2 binary file.
-/// Ported from: src/soundbank/soundfont/write/write.ts
+/// Ported from: src/soundbank/soundfont/write/write.ts (spessasynth_core 4.3.0)
 ///
 /// # Differences from TypeScript
-/// - Async is removed: the function is synchronous.
-/// - `compress` / `compressionFunction` / `progressFunction` are omitted
-///   (Vorbis encoding is outside the MIDI→WAV scope of this port).
+/// - Async is removed: the function is synchronous (TS 4.3.0 made the same change upstream,
+///   since Vorbis compression -- the only source of `await` here -- was removed; see below).
+/// - `compress` / `compressionFunction` are omitted (Vorbis encoding is outside the MIDI→WAV
+///   scope of this port; TS 4.3.0 itself dropped these from `writeSF2Internal`/`SoundFont2WriteOptions`
+///   entirely, moving compression to a separate opt-in step on `BasicSoundBank` that is not ported).
+/// - `progressFunction` is omitted (no async progress callbacks in Rust).
+/// - TS 4.3.0 removed the `decompress`-driven version bump (`major=3`/`minor=0` for compressed
+///   samples, `major=2`/`minor=4` for `decompress`) from this function entirely: `bank.soundBankInfo`
+///   is no longer mutated here at all, and its `version` is written as-is. This port follows suit:
+///   the `decompress` option and the version-mutation logic have both been removed.
+/// - TS 4.3.0 added a `software` write option (`SoundBankWriteOptions.software`, default
+///   `"SpessaSynth"`) used for the `ISFT` chunk; `bank.soundBankInfo.software` is no longer read or
+///   mutated by this function. This port adds the equivalent `SoundFont2WriteOptions::software` field.
 /// - TypeScript's `for (const [t, d] of Object.entries(bank.soundBankInfo))` loop
 ///   is replaced with explicit per-field handling (Rust structs are not iterable).
-/// - `creationDate` is stored as a `String` (not a `Date`); no `.toISOString()` call.
+/// - `creationDate` is stored as a `String` (not a `Date`); no `toISODateString()` call.
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::soundbank::basic_soundbank::modulator::{
     MOD_BYTE_SIZE, Modulator, SPESSASYNTH_DEFAULT_MODULATORS,
@@ -18,10 +28,8 @@ use crate::soundbank::soundfont::write::shdr::get_shdr;
 use crate::soundbank::soundfont::write::write_sf2_elements::write_sf2_elements;
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::write_word;
-use crate::utils::loggin::{
-    spessa_synth_group, spessa_synth_group_collapsed, spessa_synth_group_end, spessa_synth_info,
-};
-use crate::utils::riff_chunk::{write_riff_chunk_parts, write_riff_chunk_raw};
+use crate::utils::loggin::SpessaLog;
+use crate::utils::riff_chunk::RIFFChunk;
 use crate::utils::byte_functions::string::get_string_bytes;
 
 // ---------------------------------------------------------------------------
@@ -32,13 +40,15 @@ use crate::utils::byte_functions::string::get_string_bytes;
 ///
 /// Compression-related options (`compress`, `compressionFunction`, `progressFunction`)
 /// are omitted because Vorbis encoding is outside the MIDI→WAV scope of this port.
+/// `decompress` is omitted too: TS 4.3.0 removed it from `SoundFont2WriteOptions` entirely.
 ///
 /// Equivalent to: `SoundFont2WriteOptions` (partial) in TypeScript.
 #[derive(Debug, Clone)]
 pub struct SoundFont2WriteOptions {
-    /// When `true`, Vorbis-compressed samples are re-encoded as PCM (SF2.4) before writing.
-    /// Equivalent to: `decompress`
-    pub decompress: bool,
+    /// The `ISFT` field to write. Indicates the last software that edited this sound bank.
+    /// If empty, `ISFT` is not written. Defaults to `"SpessaSynth"`.
+    /// Equivalent to: `SoundBankWriteOptions.software` (new in TS 4.3.0)
+    pub software: String,
     /// When `true`, write the `DMOD` chunk if the bank has custom default modulators.
     /// Equivalent to: `writeDefaultModulators`
     pub write_default_modulators: bool,
@@ -52,7 +62,7 @@ impl Default for SoundFont2WriteOptions {
     /// Equivalent to: `DEFAULT_SF2_WRITE_OPTIONS`
     fn default() -> Self {
         Self {
-            decompress: false,
+            software: "SpessaSynth".to_string(), // ( ͡° ͜ʖ ͡°)
             write_default_modulators: true,
             write_extended_limits: true,
         }
@@ -64,10 +74,14 @@ impl Default for SoundFont2WriteOptions {
 // ---------------------------------------------------------------------------
 
 /// Wraps a string in a RIFF INFO sub-chunk (null-terminated, even-padded).
-/// Equivalent to: `const writeSF2Info = (type, data) => writeRIFFChunkRaw(type, getStringBytes(data, true, true))`
-fn make_info_chunk(fourcc: &str, data: &str) -> IndexedByteArray {
+/// Skips (returns `None`) when `data` is empty, mirroring `writeSF2Info`'s `if (!data) return;`.
+/// Equivalent to: `const writeSF2Info = (type, data) => { if (!data) return; ...RIFFChunk.write(type, getStringBytes(data, true, true)) }`
+fn make_info_chunk(fourcc: &str, data: &str) -> Option<IndexedByteArray> {
+    if data.is_empty() {
+        return None;
+    }
     let bytes = get_string_bytes(data, true, true); // null-terminate + ensure even length
-    write_riff_chunk_raw(fourcc, &bytes, false, false)
+    Some(RIFFChunk::write(fourcc, &bytes, false, false))
 }
 
 // ---------------------------------------------------------------------------
@@ -76,60 +90,38 @@ fn make_info_chunk(fourcc: &str, data: &str) -> IndexedByteArray {
 
 /// Writes the sound bank as an SF2 binary file and returns the raw bytes.
 ///
-/// The bank's `sound_bank_info` is mutated in place (software tag and version are updated
-/// to reflect the format written) before serialisation.
+/// TS 4.3.0 no longer mutates `bank.soundBankInfo` at all (previously it forced the
+/// software tag and bumped the version for compressed/decompressed banks); the bank's
+/// `version` is written exactly as stored, and the `ISFT` tag comes from `options.software`
+/// instead. This port takes `bank` as `&mut` only because [`get_sdta`] needs mutable sample
+/// access to lazily decode/cache Vorbis audio -- `write_sf2_internal` itself no longer mutates
+/// any field of `bank.sound_bank_info`.
 ///
-/// Equivalent to: `export async function writeSF2Internal(bank, writeOptions)`
+/// Equivalent to: `export function writeSF2Internal(bank, writeOptions)`
 ///
 /// # Parameters
 /// - `bank`    – sound bank to serialise.
 /// - `options` – write options; use [`SoundFont2WriteOptions::default()`] for standard defaults.
 pub fn write_sf2_internal(bank: &mut BasicSoundBank, options: &SoundFont2WriteOptions) -> Vec<u8> {
-    spessa_synth_group_collapsed("Saving soundbank...");
-
-    // -----------------------------------------------------------------------
-    // Mutate bank.soundBankInfo to reflect the format that will be written.
-    // Equivalent to: bank.soundBankInfo.software = "SpessaSynth"; ...
-    // -----------------------------------------------------------------------
-    bank.sound_bank_info.software = Some("SpessaSynth".to_string()); // ( ͡° ͜ʖ ͡°)
-
-    let any_compressed = bank.samples.iter().any(|s| s.is_compressed());
-    if any_compressed {
-        // Upgrade version tag to SF3
-        bank.sound_bank_info.version.major = 3;
-        bank.sound_bank_info.version.minor = 0;
-    }
-    if options.decompress {
-        // Restore to SF2.4 (decompress takes precedence over SF3 detection)
-        bank.sound_bank_info.version.major = 2;
-        bank.sound_bank_info.version.minor = 4;
-    }
+    SpessaLog::group_collapsed("Saving soundbank...");
 
     // -----------------------------------------------------------------------
     // Build INFO sub-chunks.
-    // Equivalent to: const infoArrays: IndexedByteArray[] = []; ... for-of loop
+    // Equivalent to: const infoArrays: Uint8Array[] = []; ... per-field writeSF2Info calls
     // -----------------------------------------------------------------------
-    spessa_synth_group("Writing INFO...");
+    SpessaLog::group("Writing INFO...");
     let mut info_arrays: Vec<IndexedByteArray> = Vec::new();
 
-    // ifil – SF2 version tag (major.minor)
+    // ifil – SF2 version tag (major.minor), written as-is (no version mutation here anymore)
     {
         let mut ifil_data = IndexedByteArray::new(4);
         write_word(&mut ifil_data, bank.sound_bank_info.version.major as u32);
         write_word(&mut ifil_data, bank.sound_bank_info.version.minor as u32);
-        info_arrays.push(write_riff_chunk_raw("ifil", &ifil_data, false, false));
-    }
-
-    // iver – ROM version tag (optional)
-    if let Some(rom_ver) = bank.sound_bank_info.rom_version.clone() {
-        let mut iver_data = IndexedByteArray::new(4);
-        write_word(&mut iver_data, rom_ver.major as u32);
-        write_word(&mut iver_data, rom_ver.minor as u32);
-        info_arrays.push(write_riff_chunk_raw("iver", &iver_data, false, false));
+        info_arrays.push(RIFFChunk::write("ifil", &ifil_data, false, false));
     }
 
     // Merge comment + subject.
-    // Equivalent to: const commentText = (comment ?? "") + (subject ? `\n${subject}` : "")
+    // Equivalent to: const commentText = info?.subject ? (info?.comment ? info.comment + "\n" : "") + info.subject : info?.comment
     let comment_text = {
         let base = bank
             .sound_bank_info
@@ -143,57 +135,53 @@ pub fn write_sf2_internal(bank: &mut BasicSoundBank, options: &SoundFont2WriteOp
         }
     };
 
-    // Per-field INFO chunk writes, following TypeScript property-declaration order.
-    // Equivalent to: switch (type) cases inside for-of Object.entries loop.
+    // Per-field INFO chunk writes, following the SF2 spec order used by TS 4.3.0's
+    // `writeSF2Internal` (isng, INAM, irom, iver, ICRD, IENG, IPRD, ICOP, ICMT, ISFT).
+    // `make_info_chunk` itself skips (returns `None`) when the value is empty, mirroring
+    // `writeSF2Info`'s `if (!data) return;`.
+    info_arrays.extend(make_info_chunk(
+        "isng",
+        &bank.sound_bank_info.sound_engine.clone(),
+    ));
+    info_arrays.extend(make_info_chunk("INAM", &bank.sound_bank_info.name.clone()));
+    if let Some(rom_info) = bank.sound_bank_info.rom_info.clone() {
+        info_arrays.extend(make_info_chunk("irom", &rom_info));
+    }
 
-    // INAM – bank name (always written)
-    info_arrays.push(make_info_chunk("INAM", &bank.sound_bank_info.name.clone()));
-
-    // isng – sound engine
-    if !bank.sound_bank_info.sound_engine.is_empty() {
-        info_arrays.push(make_info_chunk(
-            "isng",
-            &bank.sound_bank_info.sound_engine.clone(),
-        ));
+    // iver – ROM version tag (optional)
+    if let Some(rom_ver) = bank.sound_bank_info.rom_version.clone() {
+        let mut iver_data = IndexedByteArray::new(4);
+        write_word(&mut iver_data, rom_ver.major as u32);
+        write_word(&mut iver_data, rom_ver.minor as u32);
+        info_arrays.push(RIFFChunk::write("iver", &iver_data, false, false));
     }
 
     // ICRD – creation date
-    if !bank.sound_bank_info.creation_date.is_empty() {
-        info_arrays.push(make_info_chunk(
-            "ICRD",
-            &bank.sound_bank_info.creation_date.clone(),
-        ));
-    }
+    info_arrays.extend(make_info_chunk(
+        "ICRD",
+        &bank.sound_bank_info.creation_date.clone(),
+    ));
 
     // IENG – engineer
     if let Some(engineer) = bank.sound_bank_info.engineer.clone() {
-        info_arrays.push(make_info_chunk("IENG", &engineer));
+        info_arrays.extend(make_info_chunk("IENG", &engineer));
     }
 
     // IPRD – product
     if let Some(product) = bank.sound_bank_info.product.clone() {
-        info_arrays.push(make_info_chunk("IPRD", &product));
+        info_arrays.extend(make_info_chunk("IPRD", &product));
     }
 
     // ICOP – copyright
     if let Some(copyright) = bank.sound_bank_info.copyright.clone() {
-        info_arrays.push(make_info_chunk("ICOP", &copyright));
+        info_arrays.extend(make_info_chunk("ICOP", &copyright));
     }
 
     // ICMT – comment (merged with subject; only written when non-empty)
-    if !comment_text.is_empty() {
-        info_arrays.push(make_info_chunk("ICMT", &comment_text));
-    }
+    info_arrays.extend(make_info_chunk("ICMT", &comment_text));
 
-    // irom – ROM info
-    if let Some(rom_info) = bank.sound_bank_info.rom_info.clone() {
-        info_arrays.push(make_info_chunk("irom", &rom_info));
-    }
-
-    // ISFT – software (set to "SpessaSynth" above)
-    if let Some(software) = bank.sound_bank_info.software.clone() {
-        info_arrays.push(make_info_chunk("ISFT", &software));
-    }
+    // ISFT – software: comes from the write option, not from bank.sound_bank_info anymore.
+    info_arrays.extend(make_info_chunk("ISFT", &options.software));
 
     // DMOD – write custom default modulators if any modulator in the bank is not in
     // SPESSASYNTH_DEFAULT_MODULATORS (comparison includes transform amount).
@@ -206,7 +194,7 @@ pub fn write_sf2_internal(bank: &mut BasicSoundBank, options: &SoundFont2WriteOp
 
     if has_custom_mods && options.write_default_modulators {
         let mods: Vec<Modulator> = bank.default_modulators.clone();
-        spessa_synth_info(&format!("Writing {} default modulators...", mods.len()));
+        SpessaLog::info(&format!("Writing {} default modulators...", mods.len()));
         // dmodSize = MOD_BYTE_SIZE + mods.length * MOD_BYTE_SIZE = (mods.length + 1) * MOD_BYTE_SIZE
         // The extra MOD_BYTE_SIZE is for the terminal (all-zero) record.
         let dmod_size = MOD_BYTE_SIZE + mods.len() * MOD_BYTE_SIZE;
@@ -219,39 +207,34 @@ pub fn write_sf2_internal(bank: &mut BasicSoundBank, options: &SoundFont2WriteOp
         // trailing MOD_BYTE_SIZE bytes are already 0.  We only need to advance
         // current_index so the cursor stays consistent.
         dmod_data.current_index += MOD_BYTE_SIZE;
-        info_arrays.push(write_riff_chunk_raw("DMOD", &dmod_data, false, false));
+        info_arrays.push(RIFFChunk::write("DMOD", &dmod_data, false, false));
     }
 
-    spessa_synth_group_end();
+    SpessaLog::group_end();
 
     // -----------------------------------------------------------------------
     // Write sdta (sample data) chunk.
     // -----------------------------------------------------------------------
-    spessa_synth_info("Writing SDTA...");
+    SpessaLog::info("Writing SDTA...");
     let mut smpl_start_offsets: Vec<u64> = Vec::new();
     let mut smpl_end_offsets: Vec<u64> = Vec::new();
-    let sdta_chunk: Vec<u8> = get_sdta(
-        bank,
-        &mut smpl_start_offsets,
-        &mut smpl_end_offsets,
-        options.decompress,
-    );
+    let sdta_chunk: Vec<u8> = get_sdta(bank, &mut smpl_start_offsets, &mut smpl_end_offsets);
 
     // -----------------------------------------------------------------------
     // Write pdta chunk (SHDR + instrument section + preset section).
     // -----------------------------------------------------------------------
-    spessa_synth_info("Writing PDTA...");
+    SpessaLog::info("Writing PDTA...");
 
-    spessa_synth_info("Writing SHDR...");
+    SpessaLog::info("Writing SHDR...");
     let shdr_chunk = get_shdr(bank, &smpl_start_offsets, &smpl_end_offsets);
 
-    spessa_synth_group("Writing instruments...");
+    SpessaLog::group("Writing instruments...");
     let inst_data = write_sf2_elements(bank, false);
-    spessa_synth_group_end();
+    SpessaLog::group_end();
 
-    spessa_synth_group("Writing presets...");
+    SpessaLog::group("Writing presets...");
     let pres_data = write_sf2_elements(bank, true);
-    spessa_synth_group_end();
+    SpessaLog::group_end();
 
     // Assemble pdta LIST chunk in SF2 spec order: phdr pbag pmod pgen inst ibag imod igen shdr
     let pdta_chunk = {
@@ -266,7 +249,7 @@ pub fn write_sf2_internal(bank: &mut BasicSoundBank, options: &SoundFont2WriteOp
             &inst_data.r#gen.pdta,
             &shdr_chunk.pdta,
         ];
-        write_riff_chunk_parts("pdta", &chunks, true)
+        RIFFChunk::write_parts("pdta", &chunks, true)
     };
 
     // -----------------------------------------------------------------------
@@ -281,7 +264,7 @@ pub fn write_sf2_internal(bank: &mut BasicSoundBank, options: &SoundFont2WriteOp
             || bank.samples.iter().any(|s| s.name.len() > 20));
 
     if write_xdta {
-        spessa_synth_info(
+        SpessaLog::info(
             "Writing the xdta chunk as writeExtendedLimits is enabled \
              and at least one condition was met.",
         );
@@ -298,7 +281,7 @@ pub fn write_sf2_internal(bank: &mut BasicSoundBank, options: &SoundFont2WriteOp
                 &inst_data.r#gen.xdta,
                 &shdr_chunk.xdta,
             ];
-            write_riff_chunk_parts("xdta", &chunks, true)
+            RIFFChunk::write_parts("xdta", &chunks, true)
         };
         // The xdta LIST chunk is embedded inside the INFO LIST chunk.
         info_arrays.push(xdta_chunk);
@@ -309,25 +292,25 @@ pub fn write_sf2_internal(bank: &mut BasicSoundBank, options: &SoundFont2WriteOp
     // -----------------------------------------------------------------------
     let info_chunk = {
         let refs: Vec<&[u8]> = info_arrays.iter().map(|a| a.as_ref()).collect();
-        write_riff_chunk_parts("INFO", &refs, true)
+        RIFFChunk::write_parts("INFO", &refs, true)
     };
 
     // -----------------------------------------------------------------------
     // Assemble the final RIFF/sfbk file.
     //   RIFF | <size> | "sfbk" | <INFO LIST> | <sdta LIST> | <pdta LIST>
     // -----------------------------------------------------------------------
-    spessa_synth_info("Writing the output file...");
+    SpessaLog::info("Writing the output file...");
     let sfbk_tag = get_string_bytes("sfbk", false, false);
     let main = {
         let final_chunks: [&[u8]; 4] = [&sfbk_tag, &info_chunk, &sdta_chunk, &pdta_chunk];
-        write_riff_chunk_parts("RIFF", &final_chunks, false)
+        RIFFChunk::write_parts("RIFF", &final_chunks, false)
     };
 
-    spessa_synth_info(&format!(
+    SpessaLog::info(&format!(
         "Saved successfully! Final file size: {}",
         main.len()
     ));
-    spessa_synth_group_end();
+    SpessaLog::group_end();
 
     main.to_vec()
 }
@@ -347,7 +330,6 @@ mod tests {
     use crate::soundbank::enums::sample_types;
     use crate::utils::indexed_array::IndexedByteArray;
     use crate::utils::byte_functions::little_endian::read_little_endian;
-    use crate::utils::riff_chunk::read_riff_chunk;
 
     // -----------------------------------------------------------------------
     // Helpers
@@ -398,8 +380,8 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_default_opts_decompress_false() {
-        assert!(!default_opts().decompress);
+    fn test_default_opts_software_is_spessasynth() {
+        assert_eq!(default_opts().software, "SpessaSynth");
     }
 
     #[test]
@@ -502,26 +484,15 @@ mod tests {
     }
 
     #[test]
-    fn test_version_sf3_for_compressed_bank() {
+    fn test_version_unchanged_for_compressed_bank() {
+        // TS 4.3.0 behavior change: writeSF2Internal no longer bumps bank.soundBankInfo.version
+        // to 3.0 for compressed samples (that logic moved to a separate opt-in step on
+        // BasicSoundBank that is out of MIDI→WAV scope and not ported). The version is now
+        // written exactly as stored on the bank -- it stays at the default 2.4 here even
+        // though the bank has a compressed sample.
         let mut bank = BasicSoundBank::default();
         bank.samples.push(make_compressed_sample("V"));
         let out = write_sf2_internal(&mut bank, &default_opts());
-        let info = find_info_chunk(&out);
-        let major = read_little_endian(&info, 2, 20) as u16;
-        let minor = read_little_endian(&info, 2, 22) as u16;
-        assert_eq!(major, 3);
-        assert_eq!(minor, 0);
-    }
-
-    #[test]
-    fn test_version_sf2_4_when_decompress_overrides_compressed() {
-        let mut bank = BasicSoundBank::default();
-        bank.samples.push(make_compressed_sample("V"));
-        let opts = SoundFont2WriteOptions {
-            decompress: true,
-            ..default_opts()
-        };
-        let out = write_sf2_internal(&mut bank, &opts);
         let info = find_info_chunk(&out);
         let major = read_little_endian(&info, 2, 20) as u16;
         let minor = read_little_endian(&info, 2, 22) as u16;
@@ -554,6 +525,43 @@ mod tests {
             .unwrap_or("")
             .trim_matches('\0');
         assert_eq!(text, "SpessaSynth");
+    }
+
+    #[test]
+    fn test_isft_follows_options_software_not_bank_field() {
+        // TS 4.3.0 behavior change: ISFT comes from `options.software`, not from
+        // `bank.sound_bank_info.software` (which is no longer read by this function at all).
+        let mut bank = BasicSoundBank::default();
+        bank.sound_bank_info.software = Some("NotUsed".to_string());
+        let opts = SoundFont2WriteOptions {
+            software: "MyEditor".to_string(),
+            ..default_opts()
+        };
+        let out = write_sf2_internal(&mut bank, &opts);
+        let pos = out.windows(4).position(|w| w == b"ISFT").unwrap();
+        let size = read_little_endian(&out, 4, pos + 4) as usize;
+        let text_bytes = &out[pos + 8..pos + 8 + size];
+        let text = std::str::from_utf8(text_bytes)
+            .unwrap_or("")
+            .trim_matches('\0');
+        assert_eq!(text, "MyEditor");
+        assert!(
+            !out.windows(7).any(|w| w == b"NotUsed"),
+            "the ignored bank.sound_bank_info.software value must not appear in the output"
+        );
+    }
+
+    #[test]
+    fn test_isft_omitted_when_software_option_empty() {
+        // writeSF2Info skips falsy/empty values; an empty `options.software` must omit ISFT.
+        let opts = SoundFont2WriteOptions {
+            software: String::new(),
+            ..default_opts()
+        };
+        let mut bank = BasicSoundBank::default();
+        let out = write_sf2_internal(&mut bank, &opts);
+        let found = out.windows(4).any(|w| w == b"ISFT");
+        assert!(!found, "ISFT should not be written when software is empty");
     }
 
     // -----------------------------------------------------------------------
@@ -793,14 +801,14 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Round-trip read with read_riff_chunk
+    // Round-trip read with RIFFChunk::read
     // -----------------------------------------------------------------------
 
     #[test]
     fn test_main_riff_chunk_readable() {
         let out = write_empty();
         let mut arr = IndexedByteArray::from_vec(out.clone());
-        let chunk = read_riff_chunk(&mut arr, false, false);
+        let chunk = RIFFChunk::read(&mut arr, false, false);
         assert_eq!(chunk.header, "RIFF");
         assert_eq!(chunk.size as usize, out.len() - 8);
     }
@@ -811,25 +819,31 @@ mod tests {
 
     #[test]
     fn test_make_info_chunk_has_correct_fourcc() {
-        let chunk = make_info_chunk("INAM", "Piano");
+        let chunk = make_info_chunk("INAM", "Piano").unwrap();
         assert_eq!(&(*chunk)[0..4], b"INAM");
     }
 
     #[test]
     fn test_make_info_chunk_size_is_even() {
         // "A" → 1 char + null = 2 bytes (even) → size = 2
-        let chunk = make_info_chunk("TEST", "A");
+        let chunk = make_info_chunk("TEST", "A").unwrap();
         let size = read_little_endian(&chunk, 4, 4) as usize;
         assert_eq!(size % 2, 0);
     }
 
     #[test]
     fn test_make_info_chunk_contains_null_terminator() {
-        let chunk = make_info_chunk("TEST", "Hi");
+        let chunk = make_info_chunk("TEST", "Hi").unwrap();
         let size = read_little_endian(&chunk, 4, 4) as usize;
         // At least one null byte within the data
         let has_null = (*chunk)[8..8 + size].iter().any(|&b| b == 0);
         assert!(has_null, "INFO chunk data must contain null terminator");
+    }
+
+    #[test]
+    fn test_make_info_chunk_returns_none_for_empty_data() {
+        // Mirrors writeSF2Info's `if (!data) return;` (skip on falsy/empty string).
+        assert!(make_info_chunk("TEST", "").is_none());
     }
 
     // -----------------------------------------------------------------------

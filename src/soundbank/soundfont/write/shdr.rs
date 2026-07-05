@@ -1,12 +1,12 @@
 /// shdr.rs
 /// purpose: Build the SF2 shdr RIFF chunk (sample header records) from a sound bank.
-/// Ported from: src/soundbank/soundfont/write/shdr.ts
+/// Ported from: src/soundbank/soundfont/write/shdr.ts (spessasynth_core 4.3.0)
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::soundbank::soundfont::read::samples::SF3_BIT_FLIT;
 use crate::soundbank::soundfont::write::types::ExtendedSF2Chunks;
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::{write_dword, write_word};
-use crate::utils::riff_chunk::write_riff_chunk_raw;
+use crate::utils::riff_chunk::RIFFChunk;
 use crate::utils::byte_functions::string::write_binary_string_indexed;
 
 // ---------------------------------------------------------------------------
@@ -144,8 +144,8 @@ pub fn get_shdr(
     write_binary_string_indexed(&mut xshdr_data, "EOS", SAMPLE_RECORD_SIZE);
 
     // --- Wrap in RIFF chunks --------------------------------------------------
-    let shdr = write_riff_chunk_raw("shdr", &shdr_data, false, false);
-    let xshdr = write_riff_chunk_raw("shdr", &xshdr_data, false, false);
+    let shdr = RIFFChunk::write("shdr", &shdr_data, false, false);
+    let xshdr = RIFFChunk::write("shdr", &xshdr_data, false, false);
 
     ExtendedSF2Chunks {
         pdta: shdr,
@@ -185,7 +185,7 @@ mod tests {
     use crate::soundbank::enums::sample_types;
     use crate::soundbank::soundfont::read::samples::SF3_BIT_FLIT;
     use crate::utils::byte_functions::little_endian::read_little_endian;
-    use crate::utils::riff_chunk::read_riff_chunk;
+    use crate::utils::riff_chunk::RIFFChunk;
     use crate::utils::byte_functions::string::read_binary_string;
 
     // -----------------------------------------------------------------------
@@ -683,7 +683,7 @@ mod tests {
         let chunks = get_shdr(&bank, &[0], &[10]);
         let raw = pdta_data_bytes(&chunks);
         let mut arr = IndexedByteArray::from_vec(raw);
-        let chunk = read_riff_chunk(&mut arr, true, false);
+        let chunk = RIFFChunk::read(&mut arr, true, false);
         assert_eq!(chunk.header, "shdr");
         assert_eq!(chunk.size as usize, 2 * SAMPLE_RECORD_SIZE);
     }

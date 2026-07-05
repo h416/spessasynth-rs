@@ -1,10 +1,10 @@
 /// samples.rs
 /// purpose: Parses SoundFont sample headers and audio data.
-/// Ported from: src/soundbank/soundfont/read/samples.ts
+/// Ported from: src/soundbank/soundfont/read/samples.ts (spessasynth_core 4.3.0)
 use crate::soundbank::enums::{SampleType, sample_types};
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, signed_int8};
-use crate::utils::loggin::{spessa_synth_info, spessa_synth_warn};
+use crate::utils::loggin::SpessaLog;
 use crate::utils::riff_chunk::RIFFChunk;
 use crate::utils::byte_functions::string::read_binary_string_indexed;
 
@@ -219,7 +219,7 @@ impl SoundFontSample {
         // Validate byte length.
         let byte_length = self.end_byte_offset.saturating_sub(self.start_byte_offset);
         if byte_length < 1 {
-            spessa_synth_warn(&format!(
+            SpessaLog::warn(&format!(
                 "Invalid sample {}! Invalid length: {}",
                 self.name, byte_length
             ));
@@ -279,7 +279,7 @@ pub fn link_soundfont_samples(samples: &mut [SoundFontSample]) {
         }
         let linked_idx = samples[i].linked_sample_index;
         if linked_idx >= count {
-            spessa_synth_info(&format!(
+            SpessaLog::info(&format!(
                 "Invalid linked sample for {}. Setting to mono.",
                 samples[i].name
             ));
@@ -288,7 +288,7 @@ pub fn link_soundfont_samples(samples: &mut [SoundFontSample]) {
         }
         // Check for corrupted files: the target is already linked to someone else.
         if samples[linked_idx].linked_sample_idx.is_some() {
-            spessa_synth_info(&format!(
+            SpessaLog::info(&format!(
                 "Invalid linked sample for {}: {} is already linked to another sample.",
                 samples[i].name, samples[linked_idx].name
             ));

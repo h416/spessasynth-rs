@@ -1,6 +1,6 @@
 /// write_sf2_elements.rs
 /// purpose: Build SF2 pgen/pmod/pbag/phdr (or igen/imod/ibag/inst) chunks from a BasicSoundBank.
-/// Ported from: src/soundbank/soundfont/write/write_sf2_elements.ts
+/// Ported from: src/soundbank/soundfont/write/write_sf2_elements.ts (spessasynth_core 4.3.0)
 use crate::soundbank::basic_soundbank::basic_instrument::INST_BYTE_SIZE;
 use crate::soundbank::basic_soundbank::basic_preset::PHDR_BYTE_SIZE;
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
@@ -11,7 +11,7 @@ use crate::soundbank::basic_soundbank::modulator_source::ModulatorSource;
 use crate::soundbank::soundfont::write::types::ExtendedSF2Chunks;
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::write_word;
-use crate::utils::riff_chunk::write_riff_chunk_raw;
+use crate::utils::riff_chunk::RIFFChunk;
 use crate::utils::byte_functions::string::write_binary_string_indexed;
 
 // ---------------------------------------------------------------------------
@@ -276,10 +276,10 @@ pub fn write_sf2_elements(bank: &BasicSoundBank, is_preset: bool) -> SF2Elements
     SF2ElementsOutput {
         write_xdta,
         r#gen: ExtendedSF2Chunks {
-            pdta: write_riff_chunk_raw(gen_header, &gen_data, false, false),
+            pdta: RIFFChunk::write(gen_header, &gen_data, false, false),
             // Same as the mod header: contains only the terminal generator record to allow
             // reuse of the pdta parser.
-            xdta: write_riff_chunk_raw(
+            xdta: RIFFChunk::write(
                 mod_header,
                 &IndexedByteArray::new(GEN_BYTE_SIZE),
                 false,
@@ -287,10 +287,10 @@ pub fn write_sf2_elements(bank: &BasicSoundBank, is_preset: bool) -> SF2Elements
             ),
         },
         r#mod: ExtendedSF2Chunks {
-            pdta: write_riff_chunk_raw(mod_header, &mod_data, false, false),
+            pdta: RIFFChunk::write(mod_header, &mod_data, false, false),
             // This chunk exists solely to preserve parser compatibility and contains only the
             // terminal modulator record.
-            xdta: write_riff_chunk_raw(
+            xdta: RIFFChunk::write(
                 mod_header,
                 &IndexedByteArray::new(MOD_BYTE_SIZE),
                 false,
@@ -298,12 +298,12 @@ pub fn write_sf2_elements(bank: &BasicSoundBank, is_preset: bool) -> SF2Elements
             ),
         },
         bag: ExtendedSF2Chunks {
-            pdta: write_riff_chunk_raw(bag_header, &bag_data.pdta, false, false),
-            xdta: write_riff_chunk_raw(bag_header, &bag_data.xdta, false, false),
+            pdta: RIFFChunk::write(bag_header, &bag_data.pdta, false, false),
+            xdta: RIFFChunk::write(bag_header, &bag_data.xdta, false, false),
         },
         hdr: ExtendedSF2Chunks {
-            pdta: write_riff_chunk_raw(hdr_header, &hdr_data.pdta, false, false),
-            xdta: write_riff_chunk_raw(hdr_header, &hdr_data.xdta, false, false),
+            pdta: RIFFChunk::write(hdr_header, &hdr_data.pdta, false, false),
+            xdta: RIFFChunk::write(hdr_header, &hdr_data.xdta, false, false),
         },
     }
 }

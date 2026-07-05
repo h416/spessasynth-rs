@@ -1,12 +1,18 @@
 /// preset_zones.rs
 /// purpose: reads preset zones from SoundFont and assigns instruments, generators, modulators.
-/// Ported from: src/soundbank/soundfont/read/preset_zones.ts
+/// Ported from: src/soundbank/soundfont/read/preset_zones.ts (spessasynth_core 4.3.0)
 ///
 /// # TypeScript vs Rust design differences
 ///
 /// ## SoundFontPresetZone
-/// TypeScript: `class SoundFontPresetZone extends BasicPresetZone`
-/// Rust: `SoundFontPresetZone(BasicPresetZone)` newtype.
+/// TS 4.2.0: a standalone `class SoundFontPresetZone extends BasicPresetZone` held the
+/// constructor logic (instrument-generator search + validation). TS 4.3.0 removed that class and
+/// inlined the same logic directly into `SoundFontPreset.createSoundFontZone`; the field names
+/// read on generators also changed from `generatorType`/`generatorValue` to `type`/`value`
+/// (naming-only; see `generator.rs`, which already uses `generator_type`/`generator_value` for
+/// both). Rust keeps the pre-existing `SoundFontPresetZone(BasicPresetZone)` newtype: it already
+/// isolates the same constructor logic in one place, so the TS-side class removal has no
+/// Rust-side structural consequence.
 /// Handles the constructor logic (instrument generator search and validation),
 /// and on success pushes the inner `BasicPresetZone` to the preset.
 ///
@@ -26,7 +32,7 @@ use crate::soundbank::basic_soundbank::generator::Generator;
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 use crate::soundbank::basic_soundbank::modulator::Modulator;
 use crate::soundbank::soundfont::read::zones::ZoneIndexes;
-use crate::utils::loggin::spessa_synth_warn as warn_fn;
+use crate::utils::loggin::SpessaLog;
 
 /// SoundFont preset zone.
 /// A newtype over `BasicPresetZone` providing a constructor for SF2 file reading.
@@ -161,7 +167,7 @@ pub fn apply_preset_zones<P: SoundFontPresetZoneSink>(
                 // Equivalent to: preset.createSoundFontZone(mods, gens, instruments)
                 match SoundFontPresetZone::new(preset_idx, mods, gens, instrument_count) {
                     Ok(zone) => preset.push_zone(zone.0),
-                    Err(e) => warn_fn(&e),
+                    Err(e) => SpessaLog::warn(&e),
                 }
             } else {
                 // Equivalent to: preset.globalZone.addGenerators(...gens)
