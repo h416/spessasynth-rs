@@ -119,7 +119,7 @@ impl SpessaSynthSequencer {
             midi_message_types::RESET => {
                 self.synth.stop_all_channels(false);
                 self.synth
-                    .reset_all_controllers(crate::synthesizer::audio_engine::engine_components::synth_constants::DEFAULT_SYNTH_MODE);
+                    .reset_all_controllers(crate::synthesizer::audio_engine::synth_constants::DEFAULT_SYNTH_MODE);
             }
 
             // Recognized but ignored

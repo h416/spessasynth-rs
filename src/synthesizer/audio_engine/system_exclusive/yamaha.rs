@@ -3,7 +3,7 @@
 /// Ported from: src/synthesizer/audio_engine/engine_methods/system_exclusive/handle_xg.ts
 /// Reference: http://www.studio4all.de/htmle/main91.html
 use crate::midi::enums::midi_controllers;
-use crate::synthesizer::audio_engine::engine_methods::system_exclusive::helpers::sys_ex_not_recognized;
+use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::sys_ex_not_recognized;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::{MasterParameterChangeCallback, SynthSystem};

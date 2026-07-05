@@ -8,7 +8,7 @@ use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::generator_types;
 use crate::soundbank::enums::modulator_sources;
 use crate::synthesizer::audio_engine::channel::parameters::midi::NON_CC_INDEX_OFFSET;
-use crate::synthesizer::audio_engine::engine_methods::system_exclusive::helpers::{
+use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::{
     sys_ex_logging, sys_ex_not_recognized,
 };
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;

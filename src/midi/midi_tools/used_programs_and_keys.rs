@@ -11,7 +11,7 @@ use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::soundbank::basic_soundbank::preset_resolver::PresetResolver;
 use crate::synthesizer::types::SynthSystem;
-use crate::synthesizer::audio_engine::engine_components::synth_constants::DEFAULT_PERCUSSION;
+use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
 use crate::utils::loggin::{spessa_synth_group, spessa_synth_group_end, spessa_synth_info};
 use crate::utils::sysex_detector::{is_gm2_on, is_gm_on, is_gs_drums_on, is_gs_on, is_xg_on};
 

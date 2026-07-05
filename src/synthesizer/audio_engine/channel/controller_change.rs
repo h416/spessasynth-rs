@@ -2,7 +2,7 @@
 /// purpose: MIDI controller change handler for MidiChannel.
 /// Ported from: src/synthesizer/audio_engine/engine_methods/controller_control/controller_change.ts
 use crate::midi::enums::midi_controllers;
-use crate::synthesizer::audio_engine::engine_components::synth_constants::{
+use crate::synthesizer::audio_engine::synth_constants::{
     DEFAULT_PERCUSSION, MIN_NOTE_LENGTH,
 };
 use crate::synthesizer::audio_engine::voice::voice::Voice;

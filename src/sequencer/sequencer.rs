@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use crate::midi::basic_midi::BasicMidi;
 use crate::midi::enums::midi_controllers;
 use crate::sequencer::types::SequencerEvent;
-use crate::synthesizer::audio_engine::engine_components::synth_constants::DEFAULT_SYNTH_MODE;
+use crate::synthesizer::audio_engine::synth_constants::DEFAULT_SYNTH_MODE;
 use crate::synthesizer::processor::SpessaSynthProcessor;
 use crate::utils::loggin::spessa_synth_warn;
 

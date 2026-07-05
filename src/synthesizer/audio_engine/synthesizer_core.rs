@@ -21,10 +21,10 @@ use crate::synthesizer::audio_engine::effects::insertion::{
 };
 use crate::synthesizer::audio_engine::effects::reverb::SpessaSynthReverb;
 use crate::synthesizer::audio_engine::voice::lowpass_filter::LowpassFilter;
-use crate::synthesizer::audio_engine::engine_components::key_modifier_manager::KeyModifierManager;
-use crate::synthesizer::audio_engine::engine_components::master_parameters::DEFAULT_MASTER_PARAMETERS;
-use crate::synthesizer::audio_engine::engine_components::sound_bank_manager::SoundBankManager;
-use crate::synthesizer::audio_engine::engine_components::synth_constants::DEFAULT_PERCUSSION;
+use crate::synthesizer::audio_engine::key_modifier_manager::KeyModifierManager;
+use crate::synthesizer::audio_engine::parameters::system::DEFAULT_MASTER_PARAMETERS;
+use crate::synthesizer::audio_engine::sound_bank_manager::SoundBankManager;
+use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::{

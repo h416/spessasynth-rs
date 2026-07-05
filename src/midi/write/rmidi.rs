@@ -9,7 +9,7 @@ use crate::midi::write::midi::write_midi_internal;
 use crate::midi::types::{RMIDInfoDataPartial, RMIDIWriteOptions};
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::soundbank::basic_soundbank::preset_resolver::PresetResolver;
-use crate::synthesizer::audio_engine::engine_components::synth_constants::DEFAULT_PERCUSSION;
+use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
 use crate::synthesizer::types::SynthSystem;
 use crate::utils::midi_hacks::BankSelectHacks;
 use crate::utils::riff_chunk::{write_riff_chunk_parts, write_riff_chunk_raw};

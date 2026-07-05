@@ -1,7 +1,11 @@
 pub mod channel;
 pub mod effects;
-pub mod engine_components;
-pub mod engine_methods;
-pub mod snapshot;
+pub mod key_modifier_manager;
+pub mod parameters;
+pub mod sound_bank_manager;
+pub mod synth_constants;
+pub mod synth_processor_options;
 pub mod synthesizer_core;
+pub mod synthesizer_snapshot;
+pub mod system_exclusive;
 pub mod voice;

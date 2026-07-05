@@ -4,7 +4,7 @@ use std::time::Instant;
 use crate::midi::basic_midi::BasicMidi;
 use crate::sequencer::sequencer::SpessaSynthSequencer;
 use crate::soundbank::sound_bank_loader::load_sound_bank;
-use crate::synthesizer::audio_engine::engine_components::synth_constants::DEFAULT_SYNTH_MODE;
+use crate::synthesizer::audio_engine::synth_constants::DEFAULT_SYNTH_MODE;
 use crate::synthesizer::processor::SpessaSynthProcessor;
 use crate::synthesizer::types::SynthProcessorOptions;
 use crate::utils::{audio_to_wav, WaveWriteOptions};

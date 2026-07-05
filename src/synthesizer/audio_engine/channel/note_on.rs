@@ -10,7 +10,7 @@ use crate::synthesizer::audio_engine::voice::compute_modulator::{
     compute_modulators, SourceFilter,
 };
 use crate::synthesizer::audio_engine::channel::portamento_time::portamento_time_to_seconds;
-use crate::synthesizer::audio_engine::engine_components::synth_constants::{
+use crate::synthesizer::audio_engine::synth_constants::{
     GENERATOR_OVERRIDE_NO_CHANGE_VALUE, MIN_EXCLUSIVE_LENGTH,
 };
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;

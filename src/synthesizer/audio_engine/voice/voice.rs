@@ -9,8 +9,8 @@ use crate::synthesizer::audio_engine::voice::lowpass_filter::LowpassFilter;
 use crate::synthesizer::audio_engine::voice::modulation_envelope::ModulationEnvelope;
 use crate::synthesizer::audio_engine::voice::volume_envelope::VolumeEnvelope;
 use crate::synthesizer::audio_engine::voice::wavetable_oscillator::WavetableOscillator;
-use crate::synthesizer::audio_engine::engine_components::master_parameters::DEFAULT_MASTER_PARAMETERS;
-use crate::synthesizer::audio_engine::engine_components::synth_constants::{
+use crate::synthesizer::audio_engine::parameters::system::DEFAULT_MASTER_PARAMETERS;
+use crate::synthesizer::audio_engine::synth_constants::{
     MIN_EXCLUSIVE_LENGTH, MIN_NOTE_LENGTH,
 };
 use crate::synthesizer::enums::interpolation_types;
@@ -449,7 +449,7 @@ mod tests {
         GENERATORS_AMOUNT, generator_types as gt,
     };
     use crate::soundbank::basic_soundbank::modulator::DecodedModulator;
-    use crate::synthesizer::audio_engine::engine_components::master_parameters::DEFAULT_MASTER_PARAMETERS;
+    use crate::synthesizer::audio_engine::parameters::system::DEFAULT_MASTER_PARAMETERS;
     use crate::synthesizer::enums::interpolation_types;
 
     const SAMPLE_RATE: f64 = 44_100.0;

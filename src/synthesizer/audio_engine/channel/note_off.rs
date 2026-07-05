@@ -2,7 +2,7 @@
 /// purpose: MIDI note-off handler for MidiChannel.
 /// Ported from: src/synthesizer/audio_engine/engine_methods/stopping_notes/note_off.ts
 use crate::midi::enums::midi_controllers;
-use crate::synthesizer::audio_engine::engine_components::synth_constants::MIN_NOTE_LENGTH;
+use crate::synthesizer::audio_engine::synth_constants::MIN_NOTE_LENGTH;
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
 use crate::synthesizer::enums::custom_controllers;

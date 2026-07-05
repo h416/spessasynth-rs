@@ -1,7 +1,7 @@
 /// handle_gm.rs
 /// purpose: Handles GM (General MIDI) system exclusive messages.
 /// Ported from: src/synthesizer/audio_engine/engine_methods/system_exclusive/handle_gm.ts
-use crate::synthesizer::audio_engine::engine_methods::system_exclusive::helpers::sys_ex_not_recognized;
+use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::sys_ex_not_recognized;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::types::{MasterParameterChangeCallback, SynthSystem};
 use crate::utils::loggin::{spessa_synth_info, spessa_synth_warn};

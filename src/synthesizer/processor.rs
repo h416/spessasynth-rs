@@ -18,10 +18,10 @@ use crate::midi::enums::midi_message_types;
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::soundbank::sound_bank_loader::load_sound_bank;
-use crate::synthesizer::audio_engine::engine_components::synth_constants::{
+use crate::synthesizer::audio_engine::synth_constants::{
     DEFAULT_SYNTH_MODE, MIDI_CHANNEL_COUNT, embedded_sound_bank_id,
 };
-use crate::synthesizer::audio_engine::snapshot::synthesizer_snapshot::SynthesizerSnapshot;
+use crate::synthesizer::audio_engine::synthesizer_snapshot::SynthesizerSnapshot;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::types::{
     CachedVoiceList, MasterParameterChangeCallback, MasterParameterType, SynthMethodOptions,
@@ -119,7 +119,7 @@ impl SynthesizerCore {
     /// Dispatches to the appropriate handler based on the manufacturer byte.
     /// Equivalent to: systemExclusiveInternal(syx, channelOffset)
     pub fn system_exclusive(&mut self, syx: &[u8], channel_offset: usize) {
-        use crate::synthesizer::audio_engine::engine_components::synth_constants::ALL_CHANNELS_OR_DIFFERENT_ACTION;
+        use crate::synthesizer::audio_engine::synth_constants::ALL_CHANNELS_OR_DIFFERENT_ACTION;
         use crate::utils::loggin::spessa_synth_info;
         use crate::utils::other::array_to_hex_string;
 
@@ -589,7 +589,7 @@ impl SpessaSynthProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::synthesizer::audio_engine::engine_components::synth_constants::MIDI_CHANNEL_COUNT;
+    use crate::synthesizer::audio_engine::synth_constants::MIDI_CHANNEL_COUNT;
     use crate::synthesizer::types::{SynthProcessorEvent, SynthProcessorOptions};
     use std::sync::{Arc, Mutex};
 

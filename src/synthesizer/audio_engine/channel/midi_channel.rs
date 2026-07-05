@@ -22,7 +22,7 @@ use crate::synthesizer::audio_engine::channel::parameters::midi::{
 use crate::synthesizer::audio_engine::voice::compute_modulator::{
     ChannelContext, SourceFilter, compute_modulators,
 };
-use crate::synthesizer::audio_engine::engine_components::synth_constants::{
+use crate::synthesizer::audio_engine::synth_constants::{
     GENERATOR_OVERRIDE_NO_CHANGE_VALUE, MIN_NOTE_LENGTH,
 };
 use crate::synthesizer::audio_engine::voice::voice::Voice;
@@ -781,7 +781,7 @@ impl MidiChannel {
     pub fn set_drums(
         &mut self,
         is_drum: bool,
-        sound_bank_manager: &crate::synthesizer::audio_engine::engine_components::sound_bank_manager::SoundBankManager,
+        sound_bank_manager: &crate::synthesizer::audio_engine::sound_bank_manager::SoundBankManager,
         current_system: SynthSystem,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {

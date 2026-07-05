@@ -7,7 +7,7 @@ use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
 use crate::synthesizer::audio_engine::channel::parameters::midi::{
     CUSTOM_RESET_ARRAY, DEFAULT_MIDI_CONTROLLER_VALUES,
 };
-use crate::synthesizer::audio_engine::engine_components::synth_constants::DEFAULT_PERCUSSION;
+use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::enums::{custom_controllers, data_entry_states};
 use crate::synthesizer::types::{SynthProcessorEvent, SynthSystem};
@@ -178,7 +178,7 @@ impl MidiChannel {
     /// Equivalent to: resetPreset()
     pub fn reset_preset(
         &mut self,
-        sound_bank_manager: &crate::synthesizer::audio_engine::engine_components::sound_bank_manager::SoundBankManager,
+        sound_bank_manager: &crate::synthesizer::audio_engine::sound_bank_manager::SoundBankManager,
         current_system: SynthSystem,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {

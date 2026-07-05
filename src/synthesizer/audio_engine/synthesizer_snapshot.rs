@@ -17,7 +17,7 @@ use crate::synthesizer::audio_engine::effects::chorus::ChorusSnapshot;
 use crate::synthesizer::audio_engine::effects::delay::DelaySnapshot;
 use crate::synthesizer::audio_engine::effects::reverb::ReverbSnapshot;
 use crate::synthesizer::audio_engine::channel::channel_snapshot::ChannelSnapshot;
-use crate::synthesizer::audio_engine::engine_components::key_modifier_manager::KeyModifier;
+use crate::synthesizer::audio_engine::key_modifier_manager::KeyModifier;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::types::{MasterParameterChangeCallback, MasterParameterType};
 
@@ -229,7 +229,7 @@ impl SynthesizerSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::synthesizer::audio_engine::engine_components::key_modifier_manager::KeyModifier;
+    use crate::synthesizer::audio_engine::key_modifier_manager::KeyModifier;
     use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
     use crate::synthesizer::types::{SynthProcessorEvent, SynthProcessorOptions};
     use std::sync::{Arc, Mutex};
