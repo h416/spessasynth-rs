@@ -1,6 +1,11 @@
 /// modulator.rs
 /// purpose: SF2 Modulator and DecodedModulator structs, default modulators list.
 /// Ported from: src/soundbank/basic_soundbank/modulator.ts
+///
+/// Note: TS 4.3.0 removed the `isEffectModulator` / `isDefaultResonantModulator` fields
+/// from `Modulator` (the detection logic moved into voice/compute_modulator.ts).
+/// Rust retains them until the voice/compute_modulator port (later task), as they are
+/// consumed by voice.rs, dynamic_modulator_system.rs and the DLS/SF2 read-write code.
 use std::fmt;
 use std::sync::LazyLock;
 
@@ -20,20 +25,12 @@ use crate::utils::byte_functions::little_endian::write_word;
 /// Equivalent to: MOD_BYTE_SIZE = 10
 pub const MOD_BYTE_SIZE: usize = 10;
 
-/// Default transform amount used for velocity/volume/expression → attenuation modulators.
-/// Equivalent to: DEFAULT_ATTENUATION_MOD_AMOUNT = 960
-pub const DEFAULT_ATTENUATION_MOD_AMOUNT: i32 = 960;
-
-/// Default curve type for attenuation modulators: concave (= 1).
-/// Equivalent to: DEFAULT_ATTENUATION_MOD_CURVE_TYPE = modulatorCurveTypes.concave
-pub const DEFAULT_ATTENUATION_MOD_CURVE_TYPE: u8 = modulator_curve_types::CONCAVE;
-
 /// Source enum for the default resonant modulator.
 /// ModulatorSource::new(filterResonance=71, LINEAR, isCC=true, isBipolar=true, isNegative=false)
 ///   .to_source_enum()
 /// = (0<<10) | (1<<9) | (0<<8) | (1<<7) | 71 = 512 + 128 + 71 = 711
-/// Equivalent to: defaultResonantModSource (module-private in modulator.ts)
-const DEFAULT_RESONANT_MOD_SOURCE: u16 = 711;
+/// Equivalent to: DEFAULT_RESONANT_MOD_SOURCE (exported in TS 4.3.0)
+pub const DEFAULT_RESONANT_MOD_SOURCE: u16 = 711;
 
 // ---------------------------------------------------------------------------
 // SoundFontWriteIndexes (minimal stub)
@@ -408,8 +405,12 @@ fn generator_type_name(gt: GeneratorType) -> String {
         generator_types::SCALE_TUNING => "scaleTuning".to_string(),
         generator_types::EXCLUSIVE_CLASS => "exclusiveClass".to_string(),
         generator_types::OVERRIDING_ROOT_KEY => "overridingRootKey".to_string(),
-        generator_types::VIB_LFO_TO_VOLUME => "vibLfoToVolume".to_string(),
+        generator_types::AMPLITUDE => "amplitude".to_string(),
+        generator_types::VIB_LFO_RATE => "vibLfoRate".to_string(),
+        generator_types::VIB_LFO_AMPLITUDE_DEPTH => "vibLfoAmplitudeDepth".to_string(),
         generator_types::VIB_LFO_TO_FILTER_FC => "vibLfoToFilterFc".to_string(),
+        generator_types::MOD_LFO_RATE => "modLfoRate".to_string(),
+        generator_types::MOD_LFO_AMPLITUDE_DEPTH => "modLfoAmplitudeDepth".to_string(),
         v => v.to_string(),
     }
 }
@@ -492,7 +493,7 @@ pub static SPESSASYNTH_DEFAULT_MODULATORS: LazyLock<Vec<Modulator>> = LazyLock::
             get_mod_source_enum(concave, false, true, false, NOTE_ON_VELOCITY),
             0x0,
             generator_types::INITIAL_ATTENUATION,
-            DEFAULT_ATTENUATION_MOD_AMOUNT,
+            960,
             0,
         ),
         // 2. Mod wheel → vibLFO pitch
@@ -504,7 +505,7 @@ pub static SPESSASYNTH_DEFAULT_MODULATORS: LazyLock<Vec<Modulator>> = LazyLock::
             get_mod_source_enum(concave, false, true, true, MAIN_VOLUME),
             0x0,
             generator_types::INITIAL_ATTENUATION,
-            DEFAULT_ATTENUATION_MOD_AMOUNT,
+            960,
             0,
         ),
         // 4. Channel pressure → vibLFO pitch
@@ -524,7 +525,7 @@ pub static SPESSASYNTH_DEFAULT_MODULATORS: LazyLock<Vec<Modulator>> = LazyLock::
             get_mod_source_enum(concave, false, true, true, EXPRESSION),
             0x0,
             generator_types::INITIAL_ATTENUATION,
-            DEFAULT_ATTENUATION_MOD_AMOUNT,
+            960,
             0,
         ),
         // 8. Reverb send (effect mod)
@@ -578,7 +579,7 @@ pub static SPESSASYNTH_DEFAULT_MODULATORS: LazyLock<Vec<Modulator>> = LazyLock::
             DEFAULT_RESONANT_MOD_SOURCE,
             0x0,
             generator_types::INITIAL_FILTER_Q,
-            200,
+            250,
             0,
         ),
         // 16. CC 67 (soft pedal) → initial attenuation (switch, unipolar, positive, CC)
@@ -927,14 +928,14 @@ mod tests {
 
     #[test]
     fn test_decoded_modulator_clamps_invalid_destination() {
-        let dm = DecodedModulator::new(0x0, 0x0, 100, 0, 0); // 100 > MAX_GENERATOR(62)
+        let dm = DecodedModulator::new(0x0, 0x0, 100, 0, 0); // 100 > MAX_GENERATOR(66)
         assert_eq!(dm.destination, generator_types::INVALID);
     }
 
     #[test]
     fn test_decoded_modulator_valid_destination_not_clamped() {
-        let dm = DecodedModulator::new(0x0, 0x0, 62, 0, 0); // 62 == MAX_GENERATOR
-        assert_eq!(dm.destination, 62);
+        let dm = DecodedModulator::new(0x0, 0x0, 66, 0, 0); // 66 == MAX_GENERATOR
+        assert_eq!(dm.destination, 66);
     }
 
     // ── DecodedModulator primary_source / secondary_source ───────────────────
@@ -974,21 +975,6 @@ mod tests {
             71,    // filterResonance
         );
         assert_eq!(computed, DEFAULT_RESONANT_MOD_SOURCE);
-    }
-
-    // ── DEFAULT_ATTENUATION_MOD_AMOUNT / CURVE_TYPE ──────────────────────────
-
-    #[test]
-    fn test_default_attenuation_mod_amount() {
-        assert_eq!(DEFAULT_ATTENUATION_MOD_AMOUNT, 960);
-    }
-
-    #[test]
-    fn test_default_attenuation_mod_curve_type() {
-        assert_eq!(
-            DEFAULT_ATTENUATION_MOD_CURVE_TYPE,
-            modulator_curve_types::CONCAVE
-        );
     }
 
     // ── SPESSASYNTH_DEFAULT_MODULATORS ───────────────────────────────────────
@@ -1063,7 +1049,8 @@ mod tests {
         let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
         let m = &mods[13];
         assert_eq!(m.destination, generator_types::INITIAL_FILTER_Q);
-        assert_eq!(m.transform_amount, 200.0);
+        // TS 4.3.0 changed the default resonant modulator amount from 200 to 250.
+        assert_eq!(m.transform_amount, 250.0);
         assert!(m.is_default_resonant_modulator);
         assert!(!m.is_effect_modulator);
     }

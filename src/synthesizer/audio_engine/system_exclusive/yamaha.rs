@@ -6,7 +6,8 @@ use crate::midi::enums::midi_controllers;
 use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::sys_ex_not_recognized;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::enums::custom_controllers;
-use crate::synthesizer::types::{MasterParameterChangeCallback, SynthSystem};
+use crate::synthesizer::types::MasterParameterChangeCallback;
+use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::spessa_synth_info;
 use crate::utils::midi_hacks::BankSelectHacks;
 
@@ -63,7 +64,7 @@ impl SynthesizerCore {
                 // XG on
                 0x7e => {
                     spessa_synth_info("XG system on");
-                    self.reset_all_controllers(SynthSystem::Xg);
+                    self.reset_all_controllers(MIDISystem::Xg);
                 }
 
                 _ => {}

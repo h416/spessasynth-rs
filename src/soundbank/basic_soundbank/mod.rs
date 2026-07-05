@@ -1,4 +1,3 @@
-pub mod basic_global_zone;
 pub mod basic_instrument;
 pub mod basic_instrument_zone;
 pub mod basic_preset;

@@ -10,7 +10,7 @@ use crate::midi::enums::{midi_controllers, midi_message_types};
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::soundbank::basic_soundbank::preset_resolver::PresetResolver;
-use crate::synthesizer::types::SynthSystem;
+use crate::soundbank::types::MIDISystem;
 use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
 use crate::utils::loggin::{spessa_synth_group, spessa_synth_group_end, spessa_synth_info};
 use crate::utils::sysex_detector::{is_gm2_on, is_gm_on, is_gs_drums_on, is_gs_on, is_xg_on};
@@ -77,7 +77,7 @@ pub fn get_used_programs_and_keys(
         .unwrap_or(0) as usize;
     let channels_amount = 16 + max_offset;
 
-    let mut system = SynthSystem::Gs;
+    let mut system = MIDISystem::Gs;
 
     // Initialise per-channel state.
     let mut channel_presets: Vec<InternalChannelType> = (0..channels_amount)
@@ -202,16 +202,16 @@ pub fn get_used_programs_and_keys(
                 if !is_gs_drums_on(event) {
                     // Update the active MIDI system mode.
                     if is_xg_on(event) {
-                        system = SynthSystem::Xg;
+                        system = MIDISystem::Xg;
                         spessa_synth_info("XG on detected!");
                     } else if is_gm2_on(event) {
-                        system = SynthSystem::Gm2;
+                        system = MIDISystem::Gm2;
                         spessa_synth_info("GM2 on detected!");
                     } else if is_gm_on(event) {
-                        system = SynthSystem::Gm;
+                        system = MIDISystem::Gm;
                         spessa_synth_info("GM on detected!");
                     } else if is_gs_on(event) {
-                        system = SynthSystem::Gs;
+                        system = MIDISystem::Gs;
                         spessa_synth_info("GS on detected!");
                     }
                     return;
@@ -260,7 +260,7 @@ mod tests {
     use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
     use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
     use crate::soundbank::basic_soundbank::preset_resolver::PresetResolver;
-    use crate::synthesizer::types::SynthSystem;
+    use crate::soundbank::types::MIDISystem;
 
     // ── Mock PresetResolver ───────────────────────────────────────────────────
 
@@ -270,7 +270,7 @@ mod tests {
     }
 
     impl PresetResolver for OnePresetBank {
-        fn get_preset(&self, _patch: MidiPatch, _system: SynthSystem) -> Option<&BasicPreset> {
+        fn get_preset(&self, _patch: MidiPatch, _system: MIDISystem) -> Option<&BasicPreset> {
             Some(&self.preset)
         }
     }
@@ -282,7 +282,7 @@ mod tests {
     }
 
     impl PresetResolver for TwoPresetBank {
-        fn get_preset(&self, patch: MidiPatch, _system: SynthSystem) -> Option<&BasicPreset> {
+        fn get_preset(&self, patch: MidiPatch, _system: MIDISystem) -> Option<&BasicPreset> {
             if patch.program < 40 {
                 Some(&self.piano)
             } else {
@@ -294,7 +294,7 @@ mod tests {
     /// Sound bank that always returns None.
     struct EmptyBank;
     impl PresetResolver for EmptyBank {
-        fn get_preset(&self, _patch: MidiPatch, _system: SynthSystem) -> Option<&BasicPreset> {
+        fn get_preset(&self, _patch: MidiPatch, _system: MIDISystem) -> Option<&BasicPreset> {
             None
         }
     }
@@ -421,7 +421,7 @@ mod tests {
             fn get_preset(
                 &self,
                 patch: MidiPatch,
-                _system: SynthSystem,
+                _system: MIDISystem,
             ) -> Option<&BasicPreset> {
                 self.captured_bank_msb.set(patch.bank_msb);
                 Some(&self.preset)
@@ -452,7 +452,7 @@ mod tests {
             fn get_preset(
                 &self,
                 patch: MidiPatch,
-                _system: SynthSystem,
+                _system: MIDISystem,
             ) -> Option<&BasicPreset> {
                 self.captured_bank_lsb.set(patch.bank_lsb);
                 Some(&self.preset)
@@ -514,7 +514,7 @@ mod tests {
             fn get_preset(
                 &self,
                 patch: MidiPatch,
-                _system: SynthSystem,
+                _system: MIDISystem,
             ) -> Option<&BasicPreset> {
                 if patch.is_gm_gs_drum {
                     self.got_drum.set(true);
@@ -562,13 +562,13 @@ mod tests {
     fn test_xg_on_sysex_detected() {
         struct SystemCapture {
             preset: BasicPreset,
-            system: std::cell::Cell<SynthSystem>,
+            system: std::cell::Cell<MIDISystem>,
         }
         impl PresetResolver for SystemCapture {
             fn get_preset(
                 &self,
                 _patch: MidiPatch,
-                system: SynthSystem,
+                system: MIDISystem,
             ) -> Option<&BasicPreset> {
                 self.system.set(system);
                 Some(&self.preset)
@@ -577,7 +577,7 @@ mod tests {
 
         let bank = SystemCapture {
             preset: BasicPreset::default(),
-            system: std::cell::Cell::new(SynthSystem::Gs),
+            system: std::cell::Cell::new(MIDISystem::Gs),
         };
 
         // XG ON sysex: [Yamaha, ?, XG, ?, ?, 0x7e, 0x00]
@@ -589,7 +589,7 @@ mod tests {
         ]);
 
         get_used_programs_and_keys(&midi, &bank);
-        assert_eq!(bank.system.get(), SynthSystem::Xg);
+        assert_eq!(bank.system.get(), MIDISystem::Xg);
     }
 
     // ── No notes → empty result ───────────────────────────────────────────────

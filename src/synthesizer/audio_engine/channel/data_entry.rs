@@ -10,7 +10,8 @@ use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
 use crate::synthesizer::audio_engine::channel::parameters::midi::NON_CC_INDEX_OFFSET;
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::enums::{custom_controllers, data_entry_states};
-use crate::synthesizer::types::{SynthProcessorEvent, SynthSystem};
+use crate::synthesizer::types::SynthProcessorEvent;
+use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::spessa_synth_info;
 
 // Merged from data_entry_fine.ts: `use super::data_entry_coarse::{non_registered_msb, registered_parameter_types as rpt};`
@@ -79,7 +80,7 @@ impl MidiChannel {
         data_value: u8,
         voices: &mut [Voice],
         current_time: f64,
-        current_system: SynthSystem,
+        current_system: MIDISystem,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
         // Store in cc table
@@ -120,7 +121,7 @@ impl MidiChannel {
 
                     non_registered_msb::DRUM_PITCH => {
                         if self.drum_channel && (nrpn_fine as usize) < 128 {
-                            let pitch = if self.channel_system(current_system) == SynthSystem::Xg {
+                            let pitch = if self.channel_system(current_system) == MIDISystem::Xg {
                                 (data_value as i32 - 64) * 100
                             } else {
                                 (data_value as i32 - 64) * 50
@@ -253,7 +254,7 @@ impl MidiChannel {
         data_value: u8,
         voices: &mut [Voice],
         current_time: f64,
-        current_system: SynthSystem,
+        current_system: MIDISystem,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
         use non_registered_lsb as nrl;
@@ -396,7 +397,7 @@ impl MidiChannel {
         data_value: u8,
         voices: &mut [Voice],
         current_time: f64,
-        current_system: SynthSystem,
+        current_system: MIDISystem,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
         use registered_parameter_types as rpt;

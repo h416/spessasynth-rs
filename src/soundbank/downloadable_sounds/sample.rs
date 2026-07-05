@@ -543,7 +543,7 @@ mod tests {
         dls.wave_sample.loops.push(DLSLoop {
             loop_start: 5,
             loop_length: 10,
-            loop_type: crate::soundbank::enums::dls_loop_types::FORWARD,
+            loop_type: crate::soundbank::downloadable_sounds::enums::dls_loop_types::FORWARD,
         });
         let mut bank = BasicSoundBank::default();
         dls.to_sf_sample(&mut bank);

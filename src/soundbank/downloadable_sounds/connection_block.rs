@@ -13,9 +13,10 @@ use crate::soundbank::downloadable_sounds::connection_source::ConnectionSource;
 use crate::soundbank::downloadable_sounds::default_dls_modulators::{
     DEFAULT_DLS_CHORUS, DEFAULT_DLS_REVERB,
 };
-use crate::soundbank::enums::{
-    DLSDestination, DLSSource, DLSTransform, dls_destinations, dls_sources, modulator_curve_types,
+use crate::soundbank::downloadable_sounds::enums::{
+    DLSDestination, DLSSource, DLSTransform, dls_destinations, dls_sources,
 };
+use crate::soundbank::enums::modulator_curve_types;
 use crate::utils::byte_functions::bit_mask::bit_mask_to_bool;
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, write_dword, write_word};
@@ -811,7 +812,7 @@ mod tests {
     use crate::soundbank::downloadable_sounds::articulation::{
         DlsMode, DownloadableSoundsArticulation,
     };
-    use crate::soundbank::enums::{dls_destinations as dd, dls_sources as ds};
+    use crate::soundbank::downloadable_sounds::enums::{dls_destinations as dd, dls_sources as ds};
     use crate::utils::indexed_array::IndexedByteArray;
 
     // Helper: build the 12-byte binary for a connection block

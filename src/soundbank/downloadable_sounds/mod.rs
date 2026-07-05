@@ -4,6 +4,7 @@ pub mod connection_source;
 pub mod default_dls_modulators;
 pub mod dls_sample;
 pub mod dls_verifier;
+pub mod enums;
 #[allow(clippy::module_inception)]
 pub mod downloadable_sounds;
 pub mod instrument;

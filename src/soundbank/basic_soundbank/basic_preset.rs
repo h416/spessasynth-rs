@@ -6,12 +6,12 @@
 /// # TypeScript vs Rust design differences
 ///
 /// In TypeScript, `parentSoundBank: BasicSoundBank` is held as a field and
-/// referenced inside `isXGDrums` / `isAnyDrums` / `getVoiceParameters`.
+/// referenced inside `isDrum` / `getVoiceParameters`.
 ///
 /// In Rust, to avoid circular ownership, `parentSoundBank` is not stored as a field.
 /// Instead, the necessary information is passed as method arguments:
 ///
-/// - `is_xg_drums(is_xg_bank: bool)` — receives `parentSoundBank.isXGBank` as a parameter
+/// - `is_drum(is_xg_bank: bool)` — receives `parentSoundBank.isXGBank` as a parameter
 /// - `get_voice_parameters(midi_note, velocity, instruments, default_modulators)`
 ///   — receives `parentSoundBank.defaultModulators` and `instruments` as parameters
 use std::fmt;
@@ -26,12 +26,13 @@ use crate::soundbank::basic_soundbank::generator_types::{
     generator_types as gt,
 };
 use crate::soundbank::basic_soundbank::midi_patch::{
-    MidiPatch, to_midi_string, to_named_midi_string,
+    MidiPatch, MidiPatchFull, to_full_midi_string, to_midi_string,
 };
 use crate::soundbank::basic_soundbank::modulator::Modulator;
 use crate::soundbank::soundfont::write::types::ExtendedSF2Chunks;
 use crate::soundbank::types::{GenericRange, VoiceParameters};
 use crate::utils::byte_functions::little_endian::{write_dword, write_word};
+use crate::utils::loggin::SpessaLog;
 use crate::utils::midi_hacks::BankSelectHacks;
 use crate::utils::byte_functions::string::write_binary_string_indexed;
 
@@ -83,7 +84,7 @@ fn subtract_ranges(r1: &GenericRange, r2: &GenericRange) -> GenericRange {
 // ---------------------------------------------------------------------------
 
 /// Represents a single SF2 preset (program + bank + zones).
-/// Equivalent to: class BasicPreset implements MIDIPatchNamed
+/// Equivalent to: class BasicPreset implements MIDIPatchFull
 #[derive(Clone, Debug)]
 pub struct BasicPreset {
     /// Preset name.
@@ -111,8 +112,7 @@ pub struct BasicPreset {
     pub zones: Vec<BasicPresetZone>,
 
     /// Global zone (generators/modulators applied to all zones).
-    /// `BasicGlobalZone` is a type alias for `BasicZone`.
-    /// Equivalent to: public readonly globalZone: BasicGlobalZone
+    /// Equivalent to: public readonly globalZone: BasicZone
     pub global_zone: BasicZone,
 
     /// Unused SF2 metadata.
@@ -163,15 +163,12 @@ impl BasicPreset {
     // Drum detection
     // -----------------------------------------------------------------------
 
-    /// Returns true if this is an XG drum preset.
-    /// Equivalent to: public get isXGDrums()
-    pub fn is_xg_drums(&self, is_xg_bank: bool) -> bool {
-        is_xg_bank && BankSelectHacks::is_xg_drum(self.bank_msb)
-    }
-
-    /// Returns true if this is any kind of drum preset (GM/GS or XG).
-    /// Equivalent to: public get isAnyDrums()
-    pub fn is_any_drums(&self, is_xg_bank: bool) -> bool {
+    // Note: a getter and not a constant value for editing purposes.
+    /// Checks if this preset is a drum preset (GM/GS or GM2/XG).
+    /// `is_xg_bank` corresponds to `parentSoundBank.isXGBank` in TypeScript.
+    /// Equivalent to: public get isDrum() (TS 4.2.0 name: isAnyDrums;
+    /// the separate isXGDrums getter was removed in 4.3.0)
+    pub fn is_drum(&self, is_xg_bank: bool) -> bool {
         self.is_gm_gs_drum || (is_xg_bank && BankSelectHacks::is_xg_drum(self.bank_msb))
     }
 
@@ -604,6 +601,8 @@ impl BasicPreset {
     /// `index` is the starting bag (zone) index for this preset.
     /// Equivalent to: public write(phdrData: ExtendedSF2Chunks, index: number)
     pub fn write(&self, phdr_data: &mut ExtendedSF2Chunks, index: usize) {
+        // Equivalent to: SpessaLog.info(`%cWriting ${this.name}...`, ConsoleColors.info)
+        SpessaLog::info(&format!("Writing {}...", self.name));
         // Name: first 20 chars to pdta, next 20 chars to xdta.
         let first_20: String = self.name.chars().take(20).collect();
         let rest: String = self.name.chars().skip(20).collect();
@@ -645,19 +644,21 @@ impl BasicPreset {
 // ---------------------------------------------------------------------------
 
 impl fmt::Display for BasicPreset {
-    /// Equivalent to: public toString()
+    /// Note: `isDrum` requires `parentSoundBank.isXGBank`, which Rust's BasicPreset
+    /// does not store; Display uses `is_drum(false)` (= isGMGSDrum) for the D/M marker.
+    /// Equivalent to: public toString() = MIDIPatchTools.toFullMIDIString(this)
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let patch = MidiPatch {
-            program: self.program,
-            bank_msb: self.bank_msb,
-            bank_lsb: self.bank_lsb,
-            is_gm_gs_drum: self.is_gm_gs_drum,
-        };
-        let named = crate::soundbank::basic_soundbank::midi_patch::MidiPatchNamed {
-            patch,
+        let full = MidiPatchFull {
+            patch: MidiPatch {
+                program: self.program,
+                bank_msb: self.bank_msb,
+                bank_lsb: self.bank_lsb,
+                is_gm_gs_drum: self.is_gm_gs_drum,
+            },
             name: self.name.clone(),
+            is_drum: self.is_drum(false),
         };
-        write!(f, "{}", to_named_midi_string(&named))
+        write!(f, "{}", to_full_midi_string(&full))
     }
 }
 
@@ -766,48 +767,34 @@ mod tests {
         assert_eq!(p.name, "Piano");
     }
 
-    // ── is_xg_drums / is_any_drums ───────────────────────────────────────────
+    // ── is_drum ──────────────────────────────────────────────────────────────
 
     #[test]
-    fn test_is_xg_drums_true_when_xg_bank_and_xg_drum_bank() {
-        let mut p = BasicPreset::new();
-        p.bank_msb = 120; // XG drum bank
-        assert!(p.is_xg_drums(true));
-    }
-
-    #[test]
-    fn test_is_xg_drums_false_when_not_xg_bank() {
-        let mut p = BasicPreset::new();
-        p.bank_msb = 120;
-        assert!(!p.is_xg_drums(false));
-    }
-
-    #[test]
-    fn test_is_xg_drums_false_when_not_xg_drum_bank() {
-        let mut p = BasicPreset::new();
-        p.bank_msb = 0;
-        assert!(!p.is_xg_drums(true));
-    }
-
-    #[test]
-    fn test_is_any_drums_true_for_gm_gs_drum() {
+    fn test_is_drum_true_for_gm_gs_drum() {
         let mut p = BasicPreset::new();
         p.is_gm_gs_drum = true;
-        assert!(p.is_any_drums(false));
+        assert!(p.is_drum(false));
     }
 
     #[test]
-    fn test_is_any_drums_true_for_xg_drum() {
+    fn test_is_drum_true_for_xg_drum() {
         let mut p = BasicPreset::new();
         p.bank_msb = 127; // XG drum bank
-        assert!(p.is_any_drums(true));
+        assert!(p.is_drum(true));
     }
 
     #[test]
-    fn test_is_any_drums_false_for_non_drum() {
+    fn test_is_drum_false_for_xg_drum_bank_without_xg_bank_flag() {
+        let mut p = BasicPreset::new();
+        p.bank_msb = 120;
+        assert!(!p.is_drum(false));
+    }
+
+    #[test]
+    fn test_is_drum_false_for_non_drum() {
         let p = BasicPreset::new();
-        assert!(!p.is_any_drums(false));
-        assert!(!p.is_any_drums(true));
+        assert!(!p.is_drum(false));
+        assert!(!p.is_drum(true));
     }
 
     // ── matches ──────────────────────────────────────────────────────────────

@@ -23,10 +23,8 @@ use crate::synthesizer::audio_engine::synth_constants::{
 };
 use crate::synthesizer::audio_engine::synthesizer_snapshot::SynthesizerSnapshot;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
-use crate::synthesizer::types::{
-    CachedVoiceList, MasterParameterChangeCallback, MasterParameterType, SynthMethodOptions,
-    SynthProcessorEvent, SynthProcessorOptions, SynthSystem,
-};
+use crate::synthesizer::types::{CachedVoiceList, MasterParameterChangeCallback, MasterParameterType, SynthMethodOptions, SynthProcessorEvent, SynthProcessorOptions};
+use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::spessa_synth_info;
 
 // ---------------------------------------------------------------------------
@@ -382,7 +380,7 @@ impl SpessaSynthProcessor {
 
     /// Resets all controllers on all channels.
     /// Equivalent to: resetAllControllers(system = DEFAULT_SYNTH_MODE)
-    pub fn reset_all_controllers(&mut self, system: SynthSystem) {
+    pub fn reset_all_controllers(&mut self, system: MIDISystem) {
         self.synth_core.reset_all_controllers(system);
     }
 
@@ -721,7 +719,7 @@ mod tests {
     fn test_reset_all_controllers_fires_event() {
         let (mut proc, events) = make_processor();
         let before = event_count(&events);
-        proc.reset_all_controllers(SynthSystem::Gs);
+        proc.reset_all_controllers(MIDISystem::Gs);
         // AllControllerReset event should be emitted
         let evs = events.lock().unwrap();
         assert!(

@@ -3,7 +3,8 @@
 /// Ported from: src/synthesizer/audio_engine/engine_components/synth_constants.ts
 use std::sync::OnceLock;
 
-use crate::synthesizer::types::{SynthMethodOptions, SynthSystem};
+use crate::synthesizer::types::SynthMethodOptions;
+use crate::soundbank::types::MIDISystem;
 
 /// Synthesizer's default voice cap.
 /// Equivalent to: VOICE_CAP
@@ -19,7 +20,7 @@ pub const MIDI_CHANNEL_COUNT: u8 = 16;
 
 /// Default bank select and SysEx mode.
 /// Equivalent to: DEFAULT_SYNTH_MODE
-pub const DEFAULT_SYNTH_MODE: SynthSystem = SynthSystem::Gs;
+pub const DEFAULT_SYNTH_MODE: MIDISystem = MIDISystem::Gs;
 
 /// Sentinel value meaning "all channels" or "a different action applies".
 /// Equivalent to: ALL_CHANNELS_OR_DIFFERENT_ACTION
@@ -93,7 +94,7 @@ mod tests {
 
     #[test]
     fn test_default_synth_mode_is_gs() {
-        assert_eq!(DEFAULT_SYNTH_MODE, SynthSystem::Gs);
+        assert_eq!(DEFAULT_SYNTH_MODE, MIDISystem::Gs);
     }
 
     // --- ALL_CHANNELS_OR_DIFFERENT_ACTION ---
@@ -169,8 +170,8 @@ mod tests {
 
     #[test]
     fn test_default_synth_mode_matches_synth_system_default() {
-        // DEFAULT_SYNTH_MODE must equal SynthSystem::default() (Gs)
-        assert_eq!(DEFAULT_SYNTH_MODE, SynthSystem::default());
+        // DEFAULT_SYNTH_MODE must equal MIDISystem::default() (Gs)
+        assert_eq!(DEFAULT_SYNTH_MODE, MIDISystem::default());
     }
 
     // verify SynthMethodOptions is usable as a const

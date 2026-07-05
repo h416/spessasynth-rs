@@ -20,9 +20,10 @@ use std::collections::HashSet;
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::soundbank::basic_soundbank::midi_patch::{
-    MidiPatch, MidiPatchNamed, select_preset, sorter,
+    MidiPatch, compare, select_patch,
 };
-use crate::synthesizer::types::{PresetListEntry, SynthSystem};
+use crate::synthesizer::types::PresetListEntry;
+use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::spessa_synth_warn;
 use crate::utils::midi_hacks::BankSelectHacks;
 
@@ -67,6 +68,11 @@ pub struct SoundBankManager {
     /// BasicSoundBank (needed for instrument lookups) after preset selection.
     selectable_bank_idxs: Vec<usize>,
 
+    /// For each entry in `selectable_preset_list`, the preset's `isDrum` flag computed
+    /// with the ORIGINAL bank's `is_xg_bank` (TS: SoundBankManagerPreset.isDrum via
+    /// parentSoundBank.isXGBank).
+    selectable_is_drum: Vec<bool>,
+
     /// The public preset list entries derived from `selectable_preset_list`.
     /// Equivalent to: private _presetList
     _preset_list: Vec<PresetListEntry>,
@@ -81,6 +87,7 @@ impl SoundBankManager {
             preset_list_change_callback: Box::new(preset_list_change_callback),
             selectable_preset_list: Vec::new(),
             selectable_bank_idxs: Vec::new(),
+            selectable_is_drum: Vec::new(),
             _preset_list: Vec::new(),
         }
     }
@@ -152,12 +159,17 @@ impl SoundBankManager {
     pub fn get_preset_and_bank(
         &self,
         patch: MidiPatch,
-        system: SynthSystem,
+        system: MIDISystem,
     ) -> Option<(&BasicPreset, &BasicSoundBank)> {
         if self.sound_bank_list.is_empty() || self.selectable_preset_list.is_empty() {
             return None;
         }
-        let preset = select_preset(&self.selectable_preset_list, patch, system);
+        let preset = select_patch(
+            &self.selectable_preset_list,
+            &self.selectable_is_drum,
+            patch,
+            system,
+        );
         // Identify the position of the returned reference via pointer equality.
         let idx = self
             .selectable_preset_list
@@ -175,12 +187,17 @@ impl SoundBankManager {
     pub fn get_preset_and_bank_idx(
         &self,
         patch: MidiPatch,
-        system: SynthSystem,
+        system: MIDISystem,
     ) -> Option<(&BasicPreset, usize)> {
         if self.sound_bank_list.is_empty() || self.selectable_preset_list.is_empty() {
             return None;
         }
-        let preset = select_preset(&self.selectable_preset_list, patch, system);
+        let preset = select_patch(
+            &self.selectable_preset_list,
+            &self.selectable_is_drum,
+            patch,
+            system,
+        );
         let idx = self
             .selectable_preset_list
             .iter()
@@ -215,12 +232,9 @@ impl SoundBankManager {
             let bank_offset = entry.bank_offset;
             for p in &bank.presets {
                 // Mirror SoundBankManagerPreset: clone and adjust bankMSB by the bank offset.
-                // XG drums are left unchanged by add_bank_offset.
-                let adjusted_msb = BankSelectHacks::add_bank_offset(
-                    p.bank_msb,
-                    bank_offset,
-                    p.is_xg_drums(bank.is_xg_bank()),
-                );
+                // XG drums (120/126/127) are left unchanged by add_bank_offset.
+                // Equivalent to: BankSelectHacks.addBankOffset(p.bankMSB, offset, true)
+                let adjusted_msb = BankSelectHacks::add_bank_offset(p.bank_msb, bank_offset, true);
                 let mut adjusted = p.clone();
                 adjusted.bank_msb = adjusted_msb;
 
@@ -233,8 +247,9 @@ impl SoundBankManager {
         }
 
         // Sort by MIDI patch order; drums are forced to the end.
+        // Equivalent to: presetList.sort(MIDIPatchTools.compare.bind(MIDIPatchTools))
         pairs.sort_by(|(a, _), (b, _)| {
-            sorter(
+            compare(
                 &MidiPatch {
                     program: a.program,
                     bank_msb: a.bank_msb,
@@ -253,30 +268,31 @@ impl SoundBankManager {
         let (selectable_list, bank_idxs): (Vec<BasicPreset>, Vec<usize>) =
             pairs.into_iter().unzip();
 
-        // Build the public PresetListEntry list.
-        // is_any_drums uses the ORIGINAL bank's is_xg_bank flag (matching TS SoundBankManagerPreset
+        // Build the parallel isDrum flags and the public preset list (MIDIPatchFull[]).
+        // isDrum uses the ORIGINAL bank's is_xg_bank flag (matching TS SoundBankManagerPreset
         // behaviour where parentSoundBank refers to the original bank before offset).
-        self._preset_list = selectable_list
+        let is_drum_flags: Vec<bool> = selectable_list
             .iter()
             .zip(bank_idxs.iter())
-            .map(|(p, &bi)| {
-                let is_xg = self.sound_bank_list[bi].sound_bank.is_xg_bank();
-                PresetListEntry {
-                    named: MidiPatchNamed {
-                        patch: MidiPatch {
-                            program: p.program,
-                            bank_msb: p.bank_msb,
-                            bank_lsb: p.bank_lsb,
-                            is_gm_gs_drum: p.is_gm_gs_drum,
-                        },
-                        name: p.name.clone(),
-                    },
-                    is_any_drums: p.is_any_drums(is_xg),
-                }
+            .map(|(p, &bi)| p.is_drum(self.sound_bank_list[bi].sound_bank.is_xg_bank()))
+            .collect();
+        self._preset_list = selectable_list
+            .iter()
+            .zip(is_drum_flags.iter())
+            .map(|(p, &is_drum)| PresetListEntry {
+                patch: MidiPatch {
+                    program: p.program,
+                    bank_msb: p.bank_msb,
+                    bank_lsb: p.bank_lsb,
+                    is_gm_gs_drum: p.is_gm_gs_drum,
+                },
+                name: p.name.clone(),
+                is_drum,
             })
             .collect();
 
         self.selectable_preset_list = selectable_list;
+        self.selectable_is_drum = is_drum_flags;
         self.selectable_bank_idxs = bank_idxs;
 
         (self.preset_list_change_callback)();
@@ -406,17 +422,28 @@ mod tests {
         mgr.add_sound_bank(bank, "sf1".to_string(), 5);
         let pl = mgr.preset_list();
         // bankMSB 10 + offset 5 = 15
-        assert_eq!(pl[0].named.patch.bank_msb, 15);
+        assert_eq!(pl[0].patch.bank_msb, 15);
     }
 
     #[test]
     fn test_bank_offset_clamped_to_127() {
         let (mut mgr, _) = make_manager();
+        let bank = make_bank(vec![melodic_preset(0, 115)]);
+        mgr.add_sound_bank(bank, "sf1".to_string(), 20);
+        let pl = mgr.preset_list();
+        // 115 + 20 = 135, clamped to 127
+        assert_eq!(pl[0].patch.bank_msb, 127);
+    }
+
+    #[test]
+    fn test_bank_offset_leaves_xg_drum_banks_unchanged() {
+        // TS 4.3.0 SoundBankManagerPreset: addBankOffset(p.bankMSB, offset, true)
+        // → XG drum bank MSBs (120/126/127) are never offset.
+        let (mut mgr, _) = make_manager();
         let bank = make_bank(vec![melodic_preset(0, 120)]);
         mgr.add_sound_bank(bank, "sf1".to_string(), 20);
         let pl = mgr.preset_list();
-        // 120 + 20 = 140, clamped to 127
-        assert_eq!(pl[0].named.patch.bank_msb, 127);
+        assert_eq!(pl[0].patch.bank_msb, 120);
     }
 
     // -----------------------------------------------------------------------
@@ -518,7 +545,7 @@ mod tests {
         mgr.add_sound_bank(make_bank(vec![p1]), "sf1".to_string(), 0);
         mgr.add_sound_bank(make_bank(vec![p2]), "sf2".to_string(), 0);
         // First bank wins: "Piano"
-        assert_eq!(mgr.preset_list()[0].named.name, "Piano");
+        assert_eq!(mgr.preset_list()[0].name, "Piano");
     }
 
     #[test]
@@ -543,30 +570,30 @@ mod tests {
         mgr.add_sound_bank(bank, "sf1".to_string(), 0);
         let pl = mgr.preset_list();
         assert_eq!(pl.len(), 2);
-        assert!(!pl[0].named.patch.is_gm_gs_drum);
-        assert!(pl[1].named.patch.is_gm_gs_drum);
+        assert!(!pl[0].patch.is_gm_gs_drum);
+        assert!(pl[1].patch.is_gm_gs_drum);
     }
 
     // -----------------------------------------------------------------------
-    // preset_list is_any_drums
+    // preset_list is_drum
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_preset_list_entry_is_any_drums_true_for_gm_drum() {
+    fn test_preset_list_entry_is_drum_true_for_gm_drum() {
         let (mut mgr, _) = make_manager();
         let bank = make_bank(vec![drum_preset(0)]);
         mgr.add_sound_bank(bank, "sf1".to_string(), 0);
         let pl = mgr.preset_list();
-        assert!(pl[0].is_any_drums);
+        assert!(pl[0].is_drum);
     }
 
     #[test]
-    fn test_preset_list_entry_is_any_drums_false_for_melodic() {
+    fn test_preset_list_entry_is_drum_false_for_melodic() {
         let (mut mgr, _) = make_manager();
         let bank = make_bank(vec![melodic_preset(0, 0)]);
         mgr.add_sound_bank(bank, "sf1".to_string(), 0);
         let pl = mgr.preset_list();
-        assert!(!pl[0].is_any_drums);
+        assert!(!pl[0].is_drum);
     }
 
     // -----------------------------------------------------------------------
@@ -582,7 +609,7 @@ mod tests {
             bank_lsb: 0,
             is_gm_gs_drum: false,
         };
-        assert!(mgr.get_preset_and_bank(patch, SynthSystem::Gs).is_none());
+        assert!(mgr.get_preset_and_bank(patch, MIDISystem::Gs).is_none());
     }
 
     #[test]
@@ -596,7 +623,7 @@ mod tests {
             bank_lsb: 0,
             is_gm_gs_drum: false,
         };
-        let result = mgr.get_preset_and_bank(patch, SynthSystem::Gs);
+        let result = mgr.get_preset_and_bank(patch, MIDISystem::Gs);
         assert!(result.is_some());
         let (preset, _bank) = result.unwrap();
         assert_eq!(preset.program, 10);
@@ -618,7 +645,7 @@ mod tests {
             bank_lsb: 0,
             is_gm_gs_drum: false,
         };
-        let (_, source_bank) = mgr.get_preset_and_bank(patch, SynthSystem::Gs).unwrap();
+        let (_, source_bank) = mgr.get_preset_and_bank(patch, MIDISystem::Gs).unwrap();
         // The source bank should have program 10, not program 0.
         assert!(source_bank.presets.iter().any(|p| p.program == 10));
     }
@@ -636,7 +663,7 @@ mod tests {
             bank_lsb: 0,
             is_gm_gs_drum: false,
         };
-        let result = mgr.get_preset_and_bank(patch, SynthSystem::Gs);
+        let result = mgr.get_preset_and_bank(patch, MIDISystem::Gs);
         assert!(result.is_some());
         let (preset, _) = result.unwrap();
         // The selectable preset has the adjusted bank_msb.
@@ -681,11 +708,11 @@ mod tests {
         mgr.add_sound_bank(make_bank(vec![p_b]), "B".to_string(), 0);
 
         // A is first → "From A" wins.
-        assert_eq!(mgr.preset_list()[0].named.name, "From A");
+        assert_eq!(mgr.preset_list()[0].name, "From A");
 
         // Reverse priority → B is now first → "From B" wins.
         mgr.set_priority_order(&["B".to_string(), "A".to_string()]);
-        assert_eq!(mgr.preset_list()[0].named.name, "From B");
+        assert_eq!(mgr.preset_list()[0].name, "From B");
     }
 
     // -----------------------------------------------------------------------

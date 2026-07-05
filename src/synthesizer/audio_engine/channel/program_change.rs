@@ -4,9 +4,8 @@
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::synthesizer::audio_engine::sound_bank_manager::SoundBankManager;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
-use crate::synthesizer::types::{
-    ChannelPropertyChangeCallback, ProgramChangeCallback, SynthProcessorEvent, SynthSystem,
-};
+use crate::synthesizer::types::{ChannelPropertyChangeCallback, ProgramChangeCallback, SynthProcessorEvent};
+use crate::soundbank::types::MIDISystem;
 
 impl MidiChannel {
     /// Changes the program (preset) of this channel.
@@ -22,7 +21,7 @@ impl MidiChannel {
         &mut self,
         program: u8,
         sound_bank_manager: &SoundBankManager,
-        current_system: SynthSystem,
+        current_system: MIDISystem,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
         if self.lock_preset {
@@ -38,7 +37,7 @@ impl MidiChannel {
         };
 
         let bank = &sound_bank_manager.sound_bank_list[bank_idx].sound_bank;
-        let is_any_drums = preset.is_any_drums(bank.is_xg_bank());
+        let is_drum = preset.is_drum(bank.is_xg_bank());
         let preset_clone = preset.clone();
         self.preset = Some(preset_clone);
         self.preset_bank_idx = Some(bank_idx);
@@ -46,8 +45,8 @@ impl MidiChannel {
         let mut events = Vec::new();
 
         // Update drum flag if it changed
-        if is_any_drums != self.drum_channel
-            && let Some(ev) = self.set_drum_flag(is_any_drums)
+        if is_drum != self.drum_channel
+            && let Some(ev) = self.set_drum_flag(is_drum)
         {
             events.push(ev);
         }

@@ -1,6 +1,11 @@
 /// modulator_source.rs
 /// purpose: ModulatorSource struct - parses SF2 modulator source enums and computes curve values.
 /// Ported from: src/soundbank/basic_soundbank/modulator_source.ts
+///
+/// Note: TS 4.3.0 changed `getValue()` to take an `SF2Channel` object (separate
+/// `midiParameters.pressure` / `pitchWheelRange` fields, fractional pitch-wheel-range
+/// support). Rust keeps the 4.2.0 flat `midi_controllers` table signature until the
+/// channel-engine rework is ported (later task).
 use std::fmt;
 use std::sync::LazyLock;
 
@@ -36,13 +41,14 @@ pub struct VoiceModInputs {
 
 // ---------------------------------------------------------------------------
 // Precomputed transform table
-// Equivalent to: const precomputedTransforms = new Float32Array(...)
+// Equivalent to: const MODULATOR_TRANSFORMS = new Float32Array(...)
+// (TS 4.2.0 name: precomputedTransforms)
 //
 // Layout:
 //   table[MODULATOR_RESOLUTION * (curve_type * MOD_CURVE_TYPES_AMOUNT + transform_type) + raw_value]
 // ---------------------------------------------------------------------------
 
-static PRECOMPUTED_TRANSFORMS: LazyLock<Vec<f32>> = LazyLock::new(|| {
+static MODULATOR_TRANSFORMS: LazyLock<Vec<f32>> = LazyLock::new(|| {
     let size = MODULATOR_RESOLUTION * MOD_SOURCE_TRANSFORM_POSSIBILITIES * MOD_CURVE_TYPES_AMOUNT;
     let mut table = vec![0.0f32; size];
     for curve_type in 0..MOD_CURVE_TYPES_AMOUNT {
@@ -190,7 +196,7 @@ impl ModulatorSource {
         let transform_type: usize =
             (if self.is_bipolar { 0b10 } else { 0 }) | (if self.is_negative { 1 } else { 0 });
 
-        PRECOMPUTED_TRANSFORMS[MODULATOR_RESOLUTION
+        MODULATOR_TRANSFORMS[MODULATOR_RESOLUTION
             * (self.curve_type as usize * MOD_CURVE_TYPES_AMOUNT + transform_type)
             + raw_value]
     }
@@ -669,14 +675,14 @@ mod tests {
         assert!(display.contains("bipolar"), "got: {}", display);
     }
 
-    // ── PRECOMPUTED_TRANSFORMS table sanity ───────────────────────────────────
+    // ── MODULATOR_TRANSFORMS table sanity ───────────────────────────────────
 
     #[test]
     fn test_precomputed_table_size() {
         // Force table initialization
         let _ = ModulatorSource::default().get_value(&make_controllers(), 0, &voice(60, 100, 0));
         assert_eq!(
-            PRECOMPUTED_TRANSFORMS.len(),
+            MODULATOR_TRANSFORMS.len(),
             MODULATOR_RESOLUTION * MOD_SOURCE_TRANSFORM_POSSIBILITIES * MOD_CURVE_TYPES_AMOUNT
         );
     }

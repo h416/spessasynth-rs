@@ -3,10 +3,9 @@
 /// Ported from: src/utils/midi_hacks.ts (spessasynth_core 4.3.0)
 ///
 /// Note: TS 4.3.0 renamed the `SynthSystem` type to `MIDISystem` and relocated it from
-/// `synthesizer/types.ts` to `soundbank/types.ts`. That rename/relocation touches ~22 files
-/// across the synthesizer/soundbank/midi modules and is deferred to Task 14 (which already
-/// owns `src/soundbank/types.rs`); `SynthSystem` is kept as-is here for now.
-use crate::synthesizer::types::SynthSystem;
+/// `synthesizer/types.ts` to `soundbank/types.ts`; the Rust definition now lives in
+/// `crate::soundbank::types::MIDISystem` accordingly.
+use crate::soundbank::types::MIDISystem;
 
 /// XG SFX Voice bank MSB.
 /// Equivalent to: XG_SFX_VOICE
@@ -25,8 +24,8 @@ impl BankSelectHacks {
     /// Returns the default bank MSB for the given MIDI system.
     /// GM2 uses bank 121; all other systems use 0.
     /// Equivalent to: BankSelectHacks.getDefaultBank
-    pub fn get_default_bank(sys: SynthSystem) -> u8 {
-        if sys == SynthSystem::Gm2 {
+    pub fn get_default_bank(sys: MIDISystem) -> u8 {
+        if sys == MIDISystem::Gm2 {
             GM2_DEFAULT_BANK
         } else {
             0
@@ -37,10 +36,10 @@ impl BankSelectHacks {
     /// Returns `Some(120)` for GM2, `Some(127)` for XG.
     /// Returns `None` for systems that have no dedicated drum bank (GM, GS).
     /// Equivalent to: BankSelectHacks.getDrumBank (throws for GM/GS)
-    pub fn get_drum_bank(sys: SynthSystem) -> Option<u8> {
+    pub fn get_drum_bank(sys: MIDISystem) -> Option<u8> {
         match sys {
-            SynthSystem::Gm2 => Some(120),
-            SynthSystem::Xg => Some(127),
+            MIDISystem::Gm2 => Some(120),
+            MIDISystem::Xg => Some(127),
             _ => None,
         }
     }
@@ -60,8 +59,8 @@ impl BankSelectHacks {
 
     /// Returns `true` if the system belongs to the XG family (GM2 or XG).
     /// Equivalent to: BankSelectHacks.isSystemXG
-    pub fn is_system_xg(system: SynthSystem) -> bool {
-        system == SynthSystem::Gm2 || system == SynthSystem::Xg
+    pub fn is_system_xg(system: MIDISystem) -> bool {
+        system == MIDISystem::Gm2 || system == MIDISystem::Xg
     }
 
     /// Adds `bank_offset` to `bank_msb`, clamped to 127.
@@ -102,44 +101,44 @@ mod tests {
 
     #[test]
     fn test_get_default_bank_gm2_returns_121() {
-        assert_eq!(BankSelectHacks::get_default_bank(SynthSystem::Gm2), 121);
+        assert_eq!(BankSelectHacks::get_default_bank(MIDISystem::Gm2), 121);
     }
 
     #[test]
     fn test_get_default_bank_gm_returns_0() {
-        assert_eq!(BankSelectHacks::get_default_bank(SynthSystem::Gm), 0);
+        assert_eq!(BankSelectHacks::get_default_bank(MIDISystem::Gm), 0);
     }
 
     #[test]
     fn test_get_default_bank_gs_returns_0() {
-        assert_eq!(BankSelectHacks::get_default_bank(SynthSystem::Gs), 0);
+        assert_eq!(BankSelectHacks::get_default_bank(MIDISystem::Gs), 0);
     }
 
     #[test]
     fn test_get_default_bank_xg_returns_0() {
-        assert_eq!(BankSelectHacks::get_default_bank(SynthSystem::Xg), 0);
+        assert_eq!(BankSelectHacks::get_default_bank(MIDISystem::Xg), 0);
     }
 
     // --- get_drum_bank ---
 
     #[test]
     fn test_get_drum_bank_gm2_returns_120() {
-        assert_eq!(BankSelectHacks::get_drum_bank(SynthSystem::Gm2), Some(120));
+        assert_eq!(BankSelectHacks::get_drum_bank(MIDISystem::Gm2), Some(120));
     }
 
     #[test]
     fn test_get_drum_bank_xg_returns_127() {
-        assert_eq!(BankSelectHacks::get_drum_bank(SynthSystem::Xg), Some(127));
+        assert_eq!(BankSelectHacks::get_drum_bank(MIDISystem::Xg), Some(127));
     }
 
     #[test]
     fn test_get_drum_bank_gm_returns_none() {
-        assert_eq!(BankSelectHacks::get_drum_bank(SynthSystem::Gm), None);
+        assert_eq!(BankSelectHacks::get_drum_bank(MIDISystem::Gm), None);
     }
 
     #[test]
     fn test_get_drum_bank_gs_returns_none() {
-        assert_eq!(BankSelectHacks::get_drum_bank(SynthSystem::Gs), None);
+        assert_eq!(BankSelectHacks::get_drum_bank(MIDISystem::Gs), None);
     }
 
     // --- is_xg_drum ---
@@ -206,22 +205,22 @@ mod tests {
 
     #[test]
     fn test_is_system_xg_gm2_true() {
-        assert!(BankSelectHacks::is_system_xg(SynthSystem::Gm2));
+        assert!(BankSelectHacks::is_system_xg(MIDISystem::Gm2));
     }
 
     #[test]
     fn test_is_system_xg_xg_true() {
-        assert!(BankSelectHacks::is_system_xg(SynthSystem::Xg));
+        assert!(BankSelectHacks::is_system_xg(MIDISystem::Xg));
     }
 
     #[test]
     fn test_is_system_xg_gm_false() {
-        assert!(!BankSelectHacks::is_system_xg(SynthSystem::Gm));
+        assert!(!BankSelectHacks::is_system_xg(MIDISystem::Gm));
     }
 
     #[test]
     fn test_is_system_xg_gs_false() {
-        assert!(!BankSelectHacks::is_system_xg(SynthSystem::Gs));
+        assert!(!BankSelectHacks::is_system_xg(MIDISystem::Gs));
     }
 
     // --- add_bank_offset ---

@@ -15,18 +15,18 @@
 /// - `SoundBankManager`  (implemented when `sound_bank_manager.rs` is ported)
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
-use crate::synthesizer::types::SynthSystem;
+use crate::soundbank::types::MIDISystem;
 
 /// Resolves a MIDI patch (program + bank + system) to the most appropriate
 /// `BasicPreset` in a sound bank.
 ///
 /// The resolution uses a fallback chain: exact match → relaxed bank match →
-/// program-only match → first preset. See `select_preset` in
-/// `preset_selector.rs` for the full algorithm.
+/// program-only match → first preset. See `select_patch` in
+/// `midi_patch.rs` for the full algorithm.
 ///
 /// Returns `None` only when the implementor has no presets at all.
 pub trait PresetResolver {
-    fn get_preset(&self, patch: MidiPatch, system: SynthSystem) -> Option<&BasicPreset>;
+    fn get_preset(&self, patch: MidiPatch, system: MIDISystem) -> Option<&BasicPreset>;
 }
 
 // ---------------------------------------------------------------------------
@@ -38,7 +38,7 @@ mod tests {
     use super::*;
     use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
     use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
-    use crate::synthesizer::types::SynthSystem;
+    use crate::soundbank::types::MIDISystem;
 
     // Minimal implementor for testing the trait object machinery.
     struct MockBank {
@@ -46,7 +46,7 @@ mod tests {
     }
 
     impl PresetResolver for MockBank {
-        fn get_preset(&self, _patch: MidiPatch, _system: SynthSystem) -> Option<&BasicPreset> {
+        fn get_preset(&self, _patch: MidiPatch, _system: MIDISystem) -> Option<&BasicPreset> {
             Some(&self.preset)
         }
     }
@@ -54,7 +54,7 @@ mod tests {
     struct EmptyBank;
 
     impl PresetResolver for EmptyBank {
-        fn get_preset(&self, _patch: MidiPatch, _system: SynthSystem) -> Option<&BasicPreset> {
+        fn get_preset(&self, _patch: MidiPatch, _system: MIDISystem) -> Option<&BasicPreset> {
             None
         }
     }
@@ -73,13 +73,13 @@ mod tests {
         let bank = MockBank {
             preset: BasicPreset::default(),
         };
-        assert!(bank.get_preset(any_patch(), SynthSystem::Gs).is_some());
+        assert!(bank.get_preset(any_patch(), MIDISystem::Gs).is_some());
     }
 
     #[test]
     fn test_empty_bank_returns_none() {
         let bank = EmptyBank;
-        assert!(bank.get_preset(any_patch(), SynthSystem::Gs).is_none());
+        assert!(bank.get_preset(any_patch(), MIDISystem::Gs).is_none());
     }
 
     #[test]
@@ -87,13 +87,13 @@ mod tests {
         let bank: Box<dyn PresetResolver> = Box::new(MockBank {
             preset: BasicPreset::default(),
         });
-        assert!(bank.get_preset(any_patch(), SynthSystem::Gs).is_some());
+        assert!(bank.get_preset(any_patch(), MIDISystem::Gs).is_some());
     }
 
     #[test]
     fn test_trait_object_empty_returns_none() {
         let bank: Box<dyn PresetResolver> = Box::new(EmptyBank);
-        assert!(bank.get_preset(any_patch(), SynthSystem::Gs).is_none());
+        assert!(bank.get_preset(any_patch(), MIDISystem::Gs).is_none());
     }
 
     #[test]
@@ -102,7 +102,7 @@ mod tests {
             preset: BasicPreset,
         }
         impl PresetResolver for DrumChecker {
-            fn get_preset(&self, patch: MidiPatch, _system: SynthSystem) -> Option<&BasicPreset> {
+            fn get_preset(&self, patch: MidiPatch, _system: MIDISystem) -> Option<&BasicPreset> {
                 if patch.is_gm_gs_drum {
                     Some(&self.preset)
                 } else {
@@ -122,8 +122,8 @@ mod tests {
             is_gm_gs_drum: false,
             ..any_patch()
         };
-        assert!(bank.get_preset(drum, SynthSystem::Gs).is_some());
-        assert!(bank.get_preset(melodic, SynthSystem::Gs).is_none());
+        assert!(bank.get_preset(drum, MIDISystem::Gs).is_some());
+        assert!(bank.get_preset(melodic, MIDISystem::Gs).is_none());
     }
 
     #[test]
@@ -132,8 +132,8 @@ mod tests {
             preset: BasicPreset,
         }
         impl PresetResolver for SystemChecker {
-            fn get_preset(&self, _patch: MidiPatch, system: SynthSystem) -> Option<&BasicPreset> {
-                if system == SynthSystem::Xg {
+            fn get_preset(&self, _patch: MidiPatch, system: MIDISystem) -> Option<&BasicPreset> {
+                if system == MIDISystem::Xg {
                     Some(&self.preset)
                 } else {
                     None
@@ -144,7 +144,7 @@ mod tests {
         let bank = SystemChecker {
             preset: BasicPreset::default(),
         };
-        assert!(bank.get_preset(any_patch(), SynthSystem::Xg).is_some());
-        assert!(bank.get_preset(any_patch(), SynthSystem::Gs).is_none());
+        assert!(bank.get_preset(any_patch(), MIDISystem::Xg).is_some());
+        assert!(bank.get_preset(any_patch(), MIDISystem::Gs).is_none());
     }
 }

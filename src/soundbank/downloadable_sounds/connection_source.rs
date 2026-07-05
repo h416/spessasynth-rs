@@ -5,9 +5,8 @@ use std::fmt;
 
 use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::modulator_source::ModulatorSource;
-use crate::soundbank::enums::{
-    DLSSource, DLSTransform, dls_sources, modulator_curve_types, modulator_sources,
-};
+use crate::soundbank::downloadable_sounds::enums::{DLSSource, DLSTransform, dls_sources};
+use crate::soundbank::enums::{modulator_curve_types, modulator_sources};
 use crate::soundbank::types::ModulatorSourceIndex;
 
 // ---------------------------------------------------------------------------
@@ -194,9 +193,8 @@ fn curve_type_name(transform: DLSTransform) -> &'static str {
 mod tests {
     use super::*;
     use crate::midi::enums::midi_controllers as cc;
-    use crate::soundbank::enums::{
-        dls_sources as ds, modulator_curve_types as mct, modulator_sources as ms,
-    };
+    use crate::soundbank::downloadable_sounds::enums::dls_sources as ds;
+    use crate::soundbank::enums::{modulator_curve_types as mct, modulator_sources as ms};
 
     // ── Default / new ─────────────────────────────────────────────────────────
 

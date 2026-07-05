@@ -6,11 +6,13 @@ use crate::soundbank::basic_soundbank::generator_types::GENERATORS_AMOUNT;
 /// Skipped (out of MIDI→WAV scope or unported dependencies):
 ///   - SoundBankManagerListEntry  (BasicSoundBank not yet ported)
 ///   - SampleEncodingFunction     (write-only async fn)
-///   - ProgressFunction           (write-only async fn)
-///   - SoundFont2WriteOptions     (write-only)
-///   - DLSWriteOptions            (write-only)
+///   - ProgressFunction           (write-only)
+///   - SoundFont2WriteOptions / DLSWriteOptions / SoundBankWriteOptions (write-only)
+///   - SetSampleFormatOptions     (SF3/Vorbis, out of scope)
+///   - SF2Channel                 (deferred until the channel-engine rework is ported)
+///   - PresetsWithKeyCombinations (used by BasicSoundBank.trim; deferred to midi_tools task)
 use crate::soundbank::basic_soundbank::modulator::Modulator;
-use crate::soundbank::enums::DLSLoopType;
+use crate::soundbank::downloadable_sounds::enums::DLSLoopType;
 
 // ---------------------------------------------------------------------------
 // FourCC type aliases
@@ -64,9 +66,10 @@ pub struct SoundBankInfoData {
     pub product: Option<String>,
     pub copyright: Option<String>,
     pub comment: Option<String>,
+    /// Software used to edit the file. (TS 4.3.0 moved this field before `subject`.)
+    pub software: Option<String>,
     pub subject: Option<String>,
     pub rom_info: Option<String>,
-    pub software: Option<String>,
     pub rom_version: Option<SF2VersionTag>,
 }
 
@@ -114,9 +117,22 @@ pub struct DLSLoop {
 }
 
 /// Index of a modulator source.
-/// In TypeScript this is `ModulatorSourceEnum | MIDIController` (both are integers 0–127).
+/// In TypeScript this is `ModulatorControllerSource | MIDIController` (both are integers 0–127).
 /// Equivalent to: ModulatorSourceIndex
 pub type ModulatorSourceIndex = u8;
+
+/// MIDI system mode.
+/// TS 4.3.0 moved this type here from synthesizer/types.ts and renamed it
+/// `SynthSystem` → `MIDISystem`.
+/// Equivalent to: MIDISystem = "gm" | "gm2" | "gs" | "xg"
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum MIDISystem {
+    Gm,
+    Gm2,
+    #[default]
+    Gs,
+    Xg,
+}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -125,7 +141,7 @@ pub type ModulatorSourceIndex = u8;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::soundbank::enums::dls_loop_types;
+    use crate::soundbank::downloadable_sounds::enums::dls_loop_types;
 
     // --- SF2VersionTag ---
 

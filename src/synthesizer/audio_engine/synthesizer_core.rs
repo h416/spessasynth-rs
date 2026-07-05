@@ -27,9 +27,8 @@ use crate::synthesizer::audio_engine::sound_bank_manager::SoundBankManager;
 use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::enums::custom_controllers;
-use crate::synthesizer::types::{
-    CachedVoiceList, MasterParameterType, SynthProcessorEvent, SynthProcessorOptions, SynthSystem,
-};
+use crate::synthesizer::types::{CachedVoiceList, MasterParameterType, SynthProcessorEvent, SynthProcessorOptions};
+use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::{spessa_synth_info, spessa_synth_warn};
 
 // ---------------------------------------------------------------------------
@@ -342,7 +341,7 @@ impl SynthesizerCore {
         };
         if let Some((preset, bank_idx)) = self
             .sound_bank_manager
-            .get_preset_and_bank_idx(patch, SynthSystem::Xg)
+            .get_preset_and_bank_idx(patch, MIDISystem::Xg)
         {
             (Some(preset.clone()), Some(bank_idx))
         } else {
@@ -352,7 +351,7 @@ impl SynthesizerCore {
 
     /// Resets all controllers on all channels.
     /// Equivalent to: resetAllControllers(system = DEFAULT_SYNTH_MODE)
-    pub fn reset_all_controllers(&mut self, system: SynthSystem) {
+    pub fn reset_all_controllers(&mut self, system: MIDISystem) {
         self.call_event(SynthProcessorEvent::AllControllerReset);
         self.master_parameters.midi_system = system;
         // Reset private fields
@@ -600,7 +599,7 @@ impl SynthesizerCore {
             );
 
             // Delay sends to reverb (only if active and not XG)
-            if delay_active && self.master_parameters.midi_system != SynthSystem::Xg {
+            if delay_active && self.master_parameters.midi_system != MIDISystem::Xg {
                 let delay_in = self.delay_input[..quantum_size].to_vec();
                 self.delay_processor.process(
                     &delay_in,

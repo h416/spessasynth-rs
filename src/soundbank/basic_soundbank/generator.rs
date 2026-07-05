@@ -1,9 +1,14 @@
 /// generator.rs
 /// purpose: SoundFont2 Generator struct (type + 16-bit value).
 /// Ported from: src/soundbank/basic_soundbank/generator.ts
+///
+/// Note: TS 4.3.0 renamed the fields `generatorType` → `type` and `generatorValue` → `value`.
+/// Rust keeps `generator_type` / `generator_value` (`type` is a Rust keyword; naming-only).
 use std::fmt;
 
-use crate::soundbank::basic_soundbank::generator_types::{GENERATOR_LIMITS, GeneratorType};
+use crate::soundbank::basic_soundbank::generator_types::{
+    GENERATOR_LIMITS, GeneratorType, INVALID_GENERATOR_LIMIT, generator_types,
+};
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::write_word;
 
@@ -43,9 +48,18 @@ impl Generator {
         let mut generator_value = value.round() as i32;
 
         if validate {
-            // GENERATOR_LIMITS is indexed 0..=62.
-            // For INVALID (-1) or any out-of-range type, .get() returns None → no clamping.
-            if let Some(Some(lim)) = GENERATOR_LIMITS.get(generator_type as usize) {
+            // GENERATOR_LIMITS is indexed 0..=66; the TS 4.3.0 record also contains an
+            // `invalid` (-1) entry ({0,0,0,0}), represented here by INVALID_GENERATOR_LIMIT.
+            // Indices absent from the record (unused/reserved slots) get no clamping.
+            let lim = if generator_type == generator_types::INVALID {
+                Some(INVALID_GENERATOR_LIMIT)
+            } else {
+                GENERATOR_LIMITS
+                    .get(generator_type as usize)
+                    .copied()
+                    .flatten()
+            };
+            if let Some(lim) = lim {
                 generator_value = generator_value.max(lim.min).min(lim.max);
             }
         }
@@ -125,16 +139,24 @@ mod tests {
     }
 
     #[test]
-    fn test_new_no_limit_instrument() {
-        // instrument (41): no limit defined (None) → no clamping
+    fn test_new_instrument_clamps_to_zero() {
+        // instrument (41): TS 4.3.0 defines it as a non-value generator with
+        // { min: 0, max: 0 } → validated construction clamps to 0.
         let g = Generator::new(gt::INSTRUMENT, 200.0);
-        assert_eq!(g.generator_value, 200);
+        assert_eq!(g.generator_value, 0);
     }
 
     #[test]
-    fn test_new_invalid_type_no_clamp() {
-        // INVALID (-1): out of GENERATOR_LIMITS range → no clamping
+    fn test_new_invalid_type_clamps_to_zero() {
+        // INVALID (-1): TS 4.3.0 defines { min: 0, max: 0 } for `invalid` → clamps to 0.
         let g = Generator::new(gt::INVALID, 5000.0);
+        assert_eq!(g.generator_value, 0);
+    }
+
+    #[test]
+    fn test_new_unused_slot_no_clamp() {
+        // Index 14 (unused1) is absent from the TS 4.3.0 GeneratorLimits record → no clamping.
+        let g = Generator::new(14, 5000.0);
         assert_eq!(g.generator_value, 5000);
     }
 

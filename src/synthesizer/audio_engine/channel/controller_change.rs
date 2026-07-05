@@ -8,7 +8,8 @@ use crate::synthesizer::audio_engine::synth_constants::{
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
 use crate::synthesizer::enums::{custom_controllers, data_entry_states};
-use crate::synthesizer::types::{ControllerChangeCallback, SynthProcessorEvent, SynthSystem};
+use crate::synthesizer::types::{ControllerChangeCallback, SynthProcessorEvent};
+use crate::soundbank::types::MIDISystem;
 use crate::utils::midi_hacks::BankSelectHacks;
 
 use super::data_entry::non_registered_msb;
@@ -31,7 +32,7 @@ impl MidiChannel {
         value: u8,
         voices: &mut [Voice],
         current_time: f64,
-        current_system: SynthSystem,
+        current_system: MIDISystem,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
         if controller > 127 {

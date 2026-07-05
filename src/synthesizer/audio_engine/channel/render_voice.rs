@@ -162,7 +162,10 @@ impl MidiChannel {
 
         // --- Vibrato LFO ---
         let vib_pitch_depth = voice.modulated_generators[gt::VIB_LFO_TO_PITCH as usize];
-        let vib_vol_depth = voice.modulated_generators[gt::VIB_LFO_TO_VOLUME as usize];
+        // Note: 4.2.0 `vibLfoToVolume` semantics retained in slot 61 (renamed `amplitude`
+        // in TS 4.3.0). The AWE32 controller-matrix rework of render_voice.ts is ported
+        // in a later channel-engine task.
+        let vib_vol_depth = voice.modulated_generators[gt::AMPLITUDE as usize];
         let vib_filter_depth = voice.modulated_generators[gt::VIB_LFO_TO_FILTER_FC as usize];
         if vib_pitch_depth != 0 || vib_vol_depth != 0 || vib_filter_depth != 0 {
             let vib_start = voice.start_time

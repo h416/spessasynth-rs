@@ -1,10 +1,19 @@
 /// generator_types.rs
 /// purpose: SoundFont2 Generator type constants and limit/default tables.
 /// Ported from: src/soundbank/basic_soundbank/generator_types.ts
+///
+/// Note: TS 4.3.0 renamed `generatorTypes` → `GeneratorTypes` and `generatorLimits` →
+/// `GeneratorLimits` (naming-only). Rust keeps the idiomatic `generator_types` module and
+/// `GENERATOR_LIMITS` constant names.
+///
+/// TS 4.3.0 also moved `defaultGeneratorValues` into `basic_preset.ts` (module-private).
+/// Rust keeps `DEFAULT_GENERATOR_VALUES` here because it is also used by several
+/// engine-side tests; the values are identical.
 /// All SoundFont2 Generator enumerations.
-/// Equivalent to: generatorTypes
+/// Equivalent to: GeneratorTypes
 #[allow(clippy::module_inception)]
 pub mod generator_types {
+    // Equivalent to: invalid (TS 4.3.0 renamed INVALID → invalid; Rust keeps INVALID)
     pub const INVALID: i16 = -1;
     pub const START_ADDRS_OFFSET: i16 = 0;
     pub const END_ADDR_OFFSET: i16 = 1;
@@ -20,13 +29,11 @@ pub mod generator_types {
     pub const MOD_ENV_TO_FILTER_FC: i16 = 11;
     pub const END_ADDRS_COARSE_OFFSET: i16 = 12;
     pub const MOD_LFO_TO_VOLUME: i16 = 13;
-    pub const UNUSED1: i16 = 14;
+    // Unused1 (14) removed in TS 4.3.0
     pub const CHORUS_EFFECTS_SEND: i16 = 15;
     pub const REVERB_EFFECTS_SEND: i16 = 16;
     pub const PAN: i16 = 17;
-    pub const UNUSED2: i16 = 18;
-    pub const UNUSED3: i16 = 19;
-    pub const UNUSED4: i16 = 20;
+    // Unused2 (18), Unused3 (19), Unused4 (20) removed in TS 4.3.0
     pub const DELAY_MOD_LFO: i16 = 21;
     pub const FREQ_MOD_LFO: i16 = 22;
     pub const DELAY_VIB_LFO: i16 = 23;
@@ -48,43 +55,56 @@ pub mod generator_types {
     pub const KEY_NUM_TO_VOL_ENV_HOLD: i16 = 39;
     pub const KEY_NUM_TO_VOL_ENV_DECAY: i16 = 40;
     pub const INSTRUMENT: i16 = 41;
-    pub const RESERVED1: i16 = 42;
+    // Reserved1 (42) removed in TS 4.3.0
     pub const KEY_RANGE: i16 = 43;
     pub const VEL_RANGE: i16 = 44;
     pub const STARTLOOP_ADDRS_COARSE_OFFSET: i16 = 45;
     pub const KEY_NUM: i16 = 46;
     pub const VELOCITY: i16 = 47;
     pub const INITIAL_ATTENUATION: i16 = 48;
-    pub const RESERVED2: i16 = 49;
+    // Reserved2 (49) removed in TS 4.3.0
     pub const ENDLOOP_ADDRS_COARSE_OFFSET: i16 = 50;
     pub const COARSE_TUNE: i16 = 51;
     pub const FINE_TUNE: i16 = 52;
     pub const SAMPLE_ID: i16 = 53;
     pub const SAMPLE_MODES: i16 = 54;
-    pub const RESERVED3: i16 = 55;
+    // Reserved3 (55) removed in TS 4.3.0
     pub const SCALE_TUNING: i16 = 56;
     pub const EXCLUSIVE_CLASS: i16 = 57;
     pub const OVERRIDING_ROOT_KEY: i16 = 58;
-    pub const UNUSED5: i16 = 59;
+    // Unused5 (59) removed in TS 4.3.0
     pub const END_OPER: i16 = 60;
-    // Additional generators used in system exclusives (not saved to SF2)
-    pub const VIB_LFO_TO_VOLUME: i16 = 61;
-    pub const VIB_LFO_TO_FILTER_FC: i16 = 62;
+
+    // Additional generators that are used in system exclusives and will not be saved
+    // (controller matrix)
+
+    // [-1000;1000] -> 1/10%
+    pub const AMPLITUDE: i16 = 61;
+    // [-1000;1000] -> Hz/100
+    pub const VIB_LFO_RATE: i16 = 62;
+    // [0;1000] -> 1/10%
+    pub const VIB_LFO_AMPLITUDE_DEPTH: i16 = 63;
+    // Like modLfoToFilterFc
+    pub const VIB_LFO_TO_FILTER_FC: i16 = 64;
+    // [-1000;1000] -> Hz/100
+    pub const MOD_LFO_RATE: i16 = 65;
+    // [0;1000] -> 1/10%
+    pub const MOD_LFO_AMPLITUDE_DEPTH: i16 = 66;
 }
 
 /// Equivalent to: GeneratorType
 pub type GeneratorType = i16;
 
-/// Total number of generator type keys (including INVALID = -1).
-/// Equivalent to: GENERATORS_AMOUNT = Object.keys(generatorTypes).length = 64
-pub const GENERATORS_AMOUNT: usize = 64;
-
 /// Maximum valid generator index.
-/// Equivalent to: MAX_GENERATOR = Math.max(...Object.values(generatorTypes)) = 62
-pub const MAX_GENERATOR: i16 = 62;
+/// Equivalent to: MAX_GENERATOR = Math.max(...Object.values(GeneratorTypes)) = 66
+pub const MAX_GENERATOR: i16 = 66;
+
+/// Total number of generator slots.
+/// Equivalent to: GENERATORS_AMOUNT = MAX_GENERATOR + 1 = 67
+pub const GENERATORS_AMOUNT: usize = MAX_GENERATOR as usize + 1;
 
 /// Min/max/default/nrpn-scale for a single generator.
-/// Equivalent to: { min, max, def, nrpn }
+/// Equivalent to: interface GeneratorLimit { min, max, def, nrpn }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GeneratorLimit {
     pub min: i32,
@@ -109,10 +129,16 @@ const fn lim(min: i32, max: i32, def: i32, nrpn: u8) -> Option<GeneratorLimit> {
     Some(GeneratorLimit::new(min, max, def, nrpn))
 }
 
-/// Generator limits indexed by generator index 0-62 (63 entries).
-/// None means no limit is defined for that generator.
-/// Equivalent to: generatorLimits
-pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; 63] = [
+/// Limit for the `invalid` generator type (index -1, cannot live in the array below).
+/// Equivalent to: `[GeneratorTypes.invalid]: { min: 0, max: 0, def: 0, nrpn: 0 }`
+pub const INVALID_GENERATOR_LIMIT: GeneratorLimit = GeneratorLimit::new(0, 0, 0, 0);
+
+/// Generator limits indexed by generator index 0-66 (67 entries).
+/// None means no limit is defined for that generator
+/// (indices removed from the TS 4.3.0 `GeneratorLimits` record: 14, 18-20, 42, 49, 55, 59).
+/// The `invalid` (-1) entry of the TS record is [`INVALID_GENERATOR_LIMIT`].
+/// Equivalent to: GeneratorLimits
+pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; GENERATORS_AMOUNT] = [
     // 0  startAddrsOffset
     lim(0, 32_768, 0, 1),
     // 1  endAddrOffset
@@ -141,7 +167,7 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; 63] = [
     lim(-32_768, 32_768, 0, 1),
     // 13 modLfoToVolume
     lim(-960, 960, 0, 1),
-    // 14 unused1
+    // 14 (unused1, removed)
     None,
     // 15 chorusEffectsSend
     lim(0, 1_000, 0, 1),
@@ -149,11 +175,11 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; 63] = [
     lim(0, 1_000, 0, 1),
     // 17 pan
     lim(-500, 500, 0, 1),
-    // 18 unused2
+    // 18 (unused2, removed)
     None,
-    // 19 unused3
+    // 19 (unused3, removed)
     None,
-    // 20 unused4
+    // 20 (unused4, removed)
     None,
     // 21 delayModLFO
     lim(-12_000, 5_000, -12_000, 2),
@@ -163,7 +189,7 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; 63] = [
     lim(-12_000, 5_000, -12_000, 2),
     // 24 freqVibLFO
     lim(-16_000, 4_500, 0, 4),
-    // 25 delayModEnv
+    // 25 delayModEnv (-32768 = instant, this is done to prevent click for lowpass)
     lim(-32_768, 5_000, -32_768, 2),
     // 26 attackModEnv
     lim(-32_768, 8_000, -32_768, 2),
@@ -195,14 +221,14 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; 63] = [
     lim(-1_200, 1_200, 0, 1),
     // 40 keyNumToVolEnvDecay
     lim(-1_200, 1_200, 0, 1),
-    // 41 instrument
+    // 41 instrument (non-value generator)
+    lim(0, 0, 0, 0),
+    // 42 (reserved1, removed)
     None,
-    // 42 reserved1
-    None,
-    // 43 keyRange
-    None,
-    // 44 velRange
-    None,
+    // 43 keyRange (non-value generator)
+    lim(0, 0, 0, 0),
+    // 44 velRange (non-value generator)
+    lim(0, 0, 0, 0),
     // 45 startloopAddrsCoarseOffset
     lim(-32_768, 32_768, 0, 1),
     // 46 keyNum
@@ -211,7 +237,7 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; 63] = [
     lim(-1, 127, -1, 1),
     // 48 initialAttenuation
     lim(0, 1_440, 0, 1),
-    // 49 reserved2
+    // 49 (reserved2, removed)
     None,
     // 50 endloopAddrsCoarseOffset
     lim(-32_768, 32_768, 0, 1),
@@ -219,11 +245,11 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; 63] = [
     lim(-120, 120, 0, 1),
     // 52 fineTune
     lim(-12_700, 12_700, 0, 1),
-    // 53 sampleID
-    None,
+    // 53 sampleID (non-value generator)
+    lim(0, 0, 0, 0),
     // 54 sampleModes
     lim(0, 3, 0, 0),
-    // 55 reserved3
+    // 55 (reserved3, removed)
     None,
     // 56 scaleTuning
     lim(0, 1_200, 100, 1),
@@ -231,20 +257,28 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; 63] = [
     lim(0, 99_999, 0, 0),
     // 58 overridingRootKey
     lim(-1, 127, -1, 0),
-    // 59 unused5
+    // 59 (unused5, removed)
     None,
-    // 60 endOper
-    None,
-    // 61 vibLfoToVolume  (NON-STANDARD)
-    lim(-960, 960, 0, 1),
-    // 62 vibLfoToFilterFc  (NON-STANDARD)
+    // 60 endOper (non-value generator)
+    lim(0, 0, 0, 0),
+    // 61 amplitude (NON-STANDARD)
+    lim(-1_000, 1_000, 0, 1),
+    // 62 vibLfoRate (NON-STANDARD)
+    lim(-1_000, 1_000, 0, 1),
+    // 63 vibLfoAmplitudeDepth (NON-STANDARD)
+    lim(0, 1_000, 0, 1),
+    // 64 vibLfoToFilterFc (NON-STANDARD)
     lim(-12_000, 12_000, 0, 2),
+    // 65 modLfoRate (NON-STANDARD)
+    lim(-1_000, 1_000, 0, 1),
+    // 66 modLfoAmplitudeDepth (NON-STANDARD)
+    lim(0, 1_000, 0, 1),
 ];
 
 const fn compute_default_values() -> [i16; GENERATORS_AMOUNT] {
     let mut arr = [0i16; GENERATORS_AMOUNT];
     let mut i: usize = 0;
-    while i < 63 {
+    while i < GENERATORS_AMOUNT {
         if let Some(lim) = GENERATOR_LIMITS[i] {
             arr[i] = lim.def as i16;
         }
@@ -253,8 +287,9 @@ const fn compute_default_values() -> [i16; GENERATORS_AMOUNT] {
     arr
 }
 
-/// Default generator values as a 64-element i16 array.
-/// Equivalent to: defaultGeneratorValues (Int16Array of size GENERATORS_AMOUNT)
+/// Default generator values as a 67-element i16 array.
+/// Equivalent to: defaultGeneratorValues (Int16Array of size GENERATORS_AMOUNT;
+/// moved into basic_preset.ts as a module-private constant in TS 4.3.0)
 pub const DEFAULT_GENERATOR_VALUES: [i16; GENERATORS_AMOUNT] = compute_default_values();
 
 #[cfg(test)]
@@ -290,25 +325,45 @@ mod tests {
     }
 
     #[test]
-    fn test_vib_lfo_to_volume() {
-        assert_eq!(gt::VIB_LFO_TO_VOLUME, 61);
+    fn test_amplitude() {
+        assert_eq!(gt::AMPLITUDE, 61);
+    }
+
+    #[test]
+    fn test_vib_lfo_rate() {
+        assert_eq!(gt::VIB_LFO_RATE, 62);
+    }
+
+    #[test]
+    fn test_vib_lfo_amplitude_depth() {
+        assert_eq!(gt::VIB_LFO_AMPLITUDE_DEPTH, 63);
     }
 
     #[test]
     fn test_vib_lfo_to_filter_fc() {
-        assert_eq!(gt::VIB_LFO_TO_FILTER_FC, 62);
+        assert_eq!(gt::VIB_LFO_TO_FILTER_FC, 64);
+    }
+
+    #[test]
+    fn test_mod_lfo_rate() {
+        assert_eq!(gt::MOD_LFO_RATE, 65);
+    }
+
+    #[test]
+    fn test_mod_lfo_amplitude_depth() {
+        assert_eq!(gt::MOD_LFO_AMPLITUDE_DEPTH, 66);
     }
 
     // --- module-level constants ---
 
     #[test]
     fn test_generators_amount() {
-        assert_eq!(GENERATORS_AMOUNT, 64);
+        assert_eq!(GENERATORS_AMOUNT, 67);
     }
 
     #[test]
     fn test_max_generator() {
-        assert_eq!(MAX_GENERATOR, 62);
+        assert_eq!(MAX_GENERATOR, 66);
     }
 
     // --- GENERATOR_LIMITS ---
@@ -365,13 +420,67 @@ mod tests {
     }
 
     #[test]
-    fn test_limits_instrument_is_none() {
-        assert!(GENERATOR_LIMITS[41].is_none());
+    fn test_limits_instrument_is_zero_limit() {
+        // TS 4.3.0 defines non-value generators with { min: 0, max: 0, def: 0, nrpn: 0 }
+        let lim = GENERATOR_LIMITS[41].unwrap();
+        assert_eq!(lim, GeneratorLimit::new(0, 0, 0, 0));
+    }
+
+    #[test]
+    fn test_limits_key_range_is_zero_limit() {
+        let lim = GENERATOR_LIMITS[43].unwrap();
+        assert_eq!(lim, GeneratorLimit::new(0, 0, 0, 0));
+    }
+
+    #[test]
+    fn test_limits_sample_id_is_zero_limit() {
+        let lim = GENERATOR_LIMITS[53].unwrap();
+        assert_eq!(lim, GeneratorLimit::new(0, 0, 0, 0));
+    }
+
+    #[test]
+    fn test_limits_end_oper_is_zero_limit() {
+        let lim = GENERATOR_LIMITS[60].unwrap();
+        assert_eq!(lim, GeneratorLimit::new(0, 0, 0, 0));
+    }
+
+    #[test]
+    fn test_limits_reserved1_is_none() {
+        assert!(GENERATOR_LIMITS[42].is_none());
+    }
+
+    #[test]
+    fn test_limits_amplitude() {
+        let lim = GENERATOR_LIMITS[gt::AMPLITUDE as usize].unwrap();
+        assert_eq!(lim.min, -1_000);
+        assert_eq!(lim.max, 1_000);
+        assert_eq!(lim.def, 0);
+        assert_eq!(lim.nrpn, 1);
+    }
+
+    #[test]
+    fn test_limits_vib_lfo_to_filter_fc() {
+        let lim = GENERATOR_LIMITS[gt::VIB_LFO_TO_FILTER_FC as usize].unwrap();
+        assert_eq!(lim.min, -12_000);
+        assert_eq!(lim.max, 12_000);
+        assert_eq!(lim.nrpn, 2);
+    }
+
+    #[test]
+    fn test_limits_mod_lfo_amplitude_depth() {
+        let lim = GENERATOR_LIMITS[gt::MOD_LFO_AMPLITUDE_DEPTH as usize].unwrap();
+        assert_eq!(lim.min, 0);
+        assert_eq!(lim.max, 1_000);
     }
 
     #[test]
     fn test_limits_length() {
-        assert_eq!(GENERATOR_LIMITS.len(), 63);
+        assert_eq!(GENERATOR_LIMITS.len(), 67);
+    }
+
+    #[test]
+    fn test_invalid_generator_limit() {
+        assert_eq!(INVALID_GENERATOR_LIMIT, GeneratorLimit::new(0, 0, 0, 0));
     }
 
     // --- DEFAULT_GENERATOR_VALUES ---
@@ -417,12 +526,12 @@ mod tests {
     }
 
     #[test]
-    fn test_default_index_63_is_zero() {
-        assert_eq!(DEFAULT_GENERATOR_VALUES[63], 0);
+    fn test_default_amplitude_is_zero() {
+        assert_eq!(DEFAULT_GENERATOR_VALUES[gt::AMPLITUDE as usize], 0);
     }
 
     #[test]
     fn test_default_values_length() {
-        assert_eq!(DEFAULT_GENERATOR_VALUES.len(), 64);
+        assert_eq!(DEFAULT_GENERATOR_VALUES.len(), 67);
     }
 }

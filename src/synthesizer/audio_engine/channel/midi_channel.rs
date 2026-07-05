@@ -27,9 +27,8 @@ use crate::synthesizer::audio_engine::synth_constants::{
 };
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::enums::{DataEntryState, custom_controllers, data_entry_states};
-use crate::synthesizer::types::{
-    ChannelProperty, ChannelPropertyChangeCallback, SynthProcessorEvent, SynthSystem,
-};
+use crate::synthesizer::types::{ChannelProperty, ChannelPropertyChangeCallback, SynthProcessorEvent};
+use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::spessa_synth_info;
 use crate::utils::midi_hacks::BankSelectHacks;
 
@@ -119,8 +118,8 @@ pub struct MidiChannel {
     pub lock_preset: bool,
 
     /// The MIDI system when the preset was locked.
-    /// Equivalent to: lockedSystem: SynthSystem
-    pub locked_system: SynthSystem,
+    /// Equivalent to: lockedSystem: MIDISystem
+    pub locked_system: MIDISystem,
 
     /// True if GS NRPN parameters are locked.
     /// Equivalent to: lockGSNRPNParams
@@ -210,7 +209,7 @@ impl MidiChannel {
             preset,
             preset_bank_idx,
             lock_preset: false,
-            locked_system: SynthSystem::Gs,
+            locked_system: MIDISystem::Gs,
             lock_gs_nrpn_params: false,
             channel_vibrato: ChannelVibrato::default(),
             poly_mode: true,
@@ -235,7 +234,7 @@ impl MidiChannel {
     /// When the preset is locked, returns the system it was locked under;
     /// otherwise returns the supplied current system.
     /// Equivalent to: get channelSystem()
-    pub fn channel_system(&self, current_system: SynthSystem) -> SynthSystem {
+    pub fn channel_system(&self, current_system: MIDISystem) -> MIDISystem {
         if self.lock_preset {
             self.locked_system
         } else {
@@ -493,7 +492,7 @@ impl MidiChannel {
 
     /// Locks or unlocks the preset from MIDI program changes.
     /// Equivalent to: setPresetLock(locked)
-    pub fn set_preset_lock(&mut self, locked: bool, current_system: SynthSystem) {
+    pub fn set_preset_lock(&mut self, locked: bool, current_system: MIDISystem) {
         if self.lock_preset == locked {
             return;
         }
@@ -782,7 +781,7 @@ impl MidiChannel {
         &mut self,
         is_drum: bool,
         sound_bank_manager: &crate::synthesizer::audio_engine::sound_bank_manager::SoundBankManager,
-        current_system: SynthSystem,
+        current_system: MIDISystem,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
         let ch_system = self.channel_system(current_system);

@@ -13,7 +13,7 @@ use crate::soundbank::basic_soundbank::midi_patch;
 use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
 use crate::synthesizer::audio_engine::synthesizer_snapshot::SynthesizerSnapshot;
 use crate::synthesizer::enums::custom_controllers;
-use crate::synthesizer::types::SynthSystem;
+use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::{spessa_synth_group_collapsed, spessa_synth_group_end, spessa_synth_info};
 use crate::utils::midi_hacks::BankSelectHacks;
 use crate::utils::sysex_detector::{is_gm2_on, is_gm_on, is_gs_on, is_xg_on};
@@ -89,7 +89,7 @@ pub fn modify_midi_internal(
         desired_program_changes.iter().map(|c| c.channel).collect();
 
     // Go through all events one by one
-    let mut system: SynthSystem = SynthSystem::Gs;
+    let mut system: MIDISystem = MIDISystem::Gs;
     let mut added_gs = false;
 
     // It copies midiPorts everywhere else, but here 0 works so DO NOT CHANGE!
@@ -448,7 +448,7 @@ pub fn modify_midi_internal(
                 // Check for XG on
                 if is_xg_on(msg) {
                     spessa_synth_info("XG system on detected");
-                    system = SynthSystem::Xg;
+                    system = MIDISystem::Xg;
                     added_gs = true; // Flag as true so GS won't get added
                 } else if msg.data.len() >= 6
                     && msg.data[0] == 0x43 // Yamaha
@@ -469,7 +469,7 @@ pub fn modify_midi_internal(
                     }
                 } else if is_gm2_on(msg) {
                     spessa_synth_info("GM2 system on detected");
-                    system = SynthSystem::Gm2;
+                    system = MIDISystem::Gm2;
                     added_gs = true; // Flag as true so GS won't get added
                 } else if is_gs_on(msg) {
                     // That's a GS on, we're done here

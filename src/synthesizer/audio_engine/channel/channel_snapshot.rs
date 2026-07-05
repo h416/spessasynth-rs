@@ -7,14 +7,14 @@
 /// In Rust, `MidiChannel` is unified inside `SynthesizerCore`, so we accept
 /// `&SynthesizerCore` / `&mut SynthesizerCore` directly, eliminating the
 /// dependency on the (not-yet-ported) `processor.rs`.
-use crate::soundbank::basic_soundbank::midi_patch::MidiPatchNamed;
+use crate::soundbank::basic_soundbank::midi_patch::MidiPatchFull;
 use crate::synthesizer::audio_engine::channel::drum_parameters::DrumParameters;
 use crate::synthesizer::audio_engine::channel::midi_channel::ChannelVibrato;
 use crate::synthesizer::audio_engine::channel::parameters::midi::{
     CONTROLLER_TABLE_SIZE, CUSTOM_CONTROLLER_TABLE_SIZE,
 };
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
-use crate::synthesizer::types::SynthSystem;
+use crate::soundbank::types::MIDISystem;
 
 /// Snapshot of a single MIDI channel's state.
 /// Equivalent to: class ChannelSnapshot
@@ -22,7 +22,7 @@ use crate::synthesizer::types::SynthSystem;
 pub struct ChannelSnapshot {
     /// The MIDI patch assigned to the channel (with preset name).
     /// Equivalent to: patch: MIDIPatchNamed
-    pub patch: MidiPatchNamed,
+    pub patch: MidiPatchFull,
 
     /// Whether the channel's program change is disabled.
     /// Equivalent to: lockPreset
@@ -30,7 +30,7 @@ pub struct ChannelSnapshot {
 
     /// The MIDI system active when the preset was locked.
     /// Equivalent to: lockedSystem
-    pub locked_system: SynthSystem,
+    pub locked_system: MIDISystem,
 
     /// Full MIDI controller table (14-bit values).
     /// Equivalent to: midiControllers: Int16Array
@@ -85,9 +85,9 @@ impl ChannelSnapshot {
     /// Equivalent to: constructor(...)
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        patch: MidiPatchNamed,
+        patch: MidiPatchFull,
         lock_preset: bool,
-        locked_system: SynthSystem,
+        locked_system: MIDISystem,
         midi_controllers: [i16; CONTROLLER_TABLE_SIZE],
         locked_controllers: Vec<bool>,
         custom_controllers: [f32; CUSTOM_CONTROLLER_TABLE_SIZE],
@@ -139,9 +139,13 @@ impl ChannelSnapshot {
             .as_ref()
             .map_or_else(|| "undefined".to_string(), |p| p.name.clone());
         Self {
-            patch: MidiPatchNamed {
+            patch: MidiPatchFull {
                 patch: ch.patch,
                 name: preset_name,
+                // Equivalent to: isDrum: this.preset.isDrum
+                // (the channel's drum flag tracks preset.isDrum on program change;
+                // the full preset->bank lookup is reworked in a later channel task)
+                is_drum: ch.drum_channel,
             },
             lock_preset: ch.lock_preset,
             locked_system: ch.locked_system,
@@ -237,7 +241,8 @@ mod tests {
     use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
     use crate::synthesizer::audio_engine::channel::parameters::midi::CUSTOM_CONTROLLER_TABLE_SIZE;
     use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
-    use crate::synthesizer::types::{SynthProcessorEvent, SynthProcessorOptions, SynthSystem};
+    use crate::synthesizer::types::{SynthProcessorEvent, SynthProcessorOptions};
+use crate::soundbank::types::MIDISystem;
     use std::sync::{Arc, Mutex};
 
     // -----------------------------------------------------------------------
@@ -266,8 +271,8 @@ mod tests {
         (core, events)
     }
 
-    fn default_patch_named(name: &str) -> MidiPatchNamed {
-        MidiPatchNamed {
+    fn default_patch_named(name: &str) -> MidiPatchFull {
+        MidiPatchFull {
             patch: MidiPatch {
                 program: 0,
                 bank_msb: 0,
@@ -275,6 +280,7 @@ mod tests {
                 is_gm_gs_drum: false,
             },
             name: name.to_string(),
+            is_drum: false,
         }
     }
 
@@ -298,7 +304,7 @@ mod tests {
         let snap = ChannelSnapshot::new(
             patch.clone(),
             true,
-            SynthSystem::Gm,
+            MIDISystem::Gm,
             midi_ctrl,
             locked.clone(),
             custom,
@@ -314,7 +320,7 @@ mod tests {
 
         assert_eq!(snap.patch.name, "Piano");
         assert!(snap.lock_preset);
-        assert_eq!(snap.locked_system, SynthSystem::Gm);
+        assert_eq!(snap.locked_system, MIDISystem::Gm);
         assert_eq!(snap.midi_controllers[0], 1);
         assert_eq!(snap.locked_controllers.len(), CONTROLLER_TABLE_SIZE);
         assert!((snap.custom_controllers[0] - 0.5).abs() < 1e-6);
@@ -337,7 +343,7 @@ mod tests {
         let snap = ChannelSnapshot::new(
             patch,
             false,
-            SynthSystem::Gs,
+            MIDISystem::Gs,
             [0i16; CONTROLLER_TABLE_SIZE],
             vec![false; CONTROLLER_TABLE_SIZE],
             [0.0f32; CUSTOM_CONTROLLER_TABLE_SIZE],
@@ -370,7 +376,7 @@ mod tests {
         let snap = ChannelSnapshot::new(
             patch,
             true,
-            SynthSystem::Xg,
+            MIDISystem::Xg,
             [7i16; CONTROLLER_TABLE_SIZE],
             vec![true; CONTROLLER_TABLE_SIZE],
             [1.0f32; CUSTOM_CONTROLLER_TABLE_SIZE],
@@ -455,10 +461,10 @@ mod tests {
     fn test_create_captures_lock_preset() {
         let (mut core, _) = make_core_with_channel();
         core.midi_channels[0].lock_preset = true;
-        core.midi_channels[0].locked_system = SynthSystem::Xg;
+        core.midi_channels[0].locked_system = MIDISystem::Xg;
         let snap = ChannelSnapshot::create(&core, 0);
         assert!(snap.lock_preset);
-        assert_eq!(snap.locked_system, SynthSystem::Xg);
+        assert_eq!(snap.locked_system, MIDISystem::Xg);
     }
 
     #[test]
@@ -571,10 +577,10 @@ mod tests {
         let (mut core, _) = make_core_with_channel();
         let mut snap = ChannelSnapshot::create(&core, 0);
         snap.lock_preset = true;
-        snap.locked_system = SynthSystem::Gm2;
+        snap.locked_system = MIDISystem::Gm2;
         snap.apply(&mut core);
         assert!(core.midi_channels[0].lock_preset);
-        assert_eq!(core.midi_channels[0].locked_system, SynthSystem::Gm2);
+        assert_eq!(core.midi_channels[0].locked_system, MIDISystem::Gm2);
     }
 
     #[test]

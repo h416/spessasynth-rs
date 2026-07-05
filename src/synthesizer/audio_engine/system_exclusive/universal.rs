@@ -3,7 +3,8 @@
 /// Ported from: src/synthesizer/audio_engine/engine_methods/system_exclusive/handle_gm.ts
 use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::sys_ex_not_recognized;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
-use crate::synthesizer::types::{MasterParameterChangeCallback, SynthSystem};
+use crate::synthesizer::types::MasterParameterChangeCallback;
+use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::{spessa_synth_info, spessa_synth_warn};
 use crate::utils::byte_functions::string::read_binary_string;
 
@@ -76,14 +77,14 @@ impl SynthesizerCore {
                 // GM system related
                 if syx[3] == 0x01 {
                     spessa_synth_info("GM1 system on");
-                    self.reset_all_controllers(SynthSystem::Gm);
+                    self.reset_all_controllers(MIDISystem::Gm);
                 } else if syx[3] == 0x03 {
                     spessa_synth_info("GM2 system on");
-                    self.reset_all_controllers(SynthSystem::Gm2);
+                    self.reset_all_controllers(MIDISystem::Gm2);
                 } else {
                     spessa_synth_info("GM system off, defaulting to GS");
                     self.set_master_parameter(MasterParameterChangeCallback::MidiSystem(
-                        SynthSystem::Gs,
+                        MIDISystem::Gs,
                     ));
                 }
             }

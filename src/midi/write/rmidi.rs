@@ -10,7 +10,7 @@ use crate::midi::types::{RMIDInfoDataPartial, RMIDIWriteOptions};
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::soundbank::basic_soundbank::preset_resolver::PresetResolver;
 use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
-use crate::synthesizer::types::SynthSystem;
+use crate::soundbank::types::MIDISystem;
 use crate::utils::midi_hacks::BankSelectHacks;
 use crate::utils::riff_chunk::{write_riff_chunk_parts, write_riff_chunk_raw};
 use crate::utils::sysex_detector::{is_gm2_on, is_gm_on, is_gs_drums_on, is_gs_on, is_xg_on};
@@ -88,7 +88,7 @@ fn correct_bank_offset_internal(
     bank_offset: u8,
     sound_bank: &dyn PresetResolver,
 ) {
-    let mut system = SynthSystem::Gm;
+    let mut system = MIDISystem::Gm;
 
     // ports[track_idx] = the current MIDI port for that track (default 0).
     // Note: the TypeScript comment says "here 0 works so DO NOT CHANGE!" for the
@@ -169,14 +169,14 @@ fn correct_bank_offset_internal(
             let event_ref = &mid.tracks[track_idx].events[event_idx];
             if !is_gs_drums_on(event_ref) {
                 if is_xg_on(event_ref) {
-                    system = SynthSystem::Xg;
+                    system = MIDISystem::Xg;
                 } else if is_gs_on(event_ref) {
-                    system = SynthSystem::Gs;
+                    system = MIDISystem::Gs;
                 } else if is_gm_on(event_ref) {
-                    system = SynthSystem::Gm;
+                    system = MIDISystem::Gm;
                     // This event will be removed if system stays Gm at the end.
                 } else if is_gm2_on(event_ref) {
-                    system = SynthSystem::Gm2;
+                    system = MIDISystem::Gm2;
                 }
                 continue;
             }
@@ -234,8 +234,6 @@ fn correct_bank_offset_internal(
             let target_bank_msb = target_preset.bank_msb;
             let target_bank_lsb = target_preset.bank_lsb;
             let target_is_gm_gs_drum = target_preset.is_gm_gs_drum;
-            let is_xg = BankSelectHacks::is_system_xg(system);
-            let target_is_xg_drums = target_preset.is_xg_drums(is_xg);
 
             program_mods.push((track_idx, event_idx, target_program));
 
@@ -245,10 +243,11 @@ fn correct_bank_offset_internal(
             }
 
             if let Some((lb_ti, lb_ei)) = channels_info[ch_num].last_bank_idx {
+                // Equivalent to: addBankOffset(targetPreset.bankMSB, bankOffset, system === "xg")
                 let new_bank = BankSelectHacks::add_bank_offset(
                     target_bank_msb,
                     bank_offset,
-                    target_is_xg_drums,
+                    system == MIDISystem::Xg,
                 );
                 bank_mods.push((lb_ti, lb_ei, new_bank));
             }
@@ -371,10 +370,12 @@ fn correct_bank_offset_internal(
             None => continue,
         };
 
-        let is_xg = BankSelectHacks::is_system_xg(system);
-        let is_xg_drums = target_preset.is_xg_drums(is_xg);
-        let target_bank =
-            BankSelectHacks::add_bank_offset(target_preset.bank_msb, bank_offset, is_xg_drums);
+        // Equivalent to: addBankOffset(targetPreset.bankMSB, bankOffset, system === "xg")
+        let target_bank = BankSelectHacks::add_bank_offset(
+            target_preset.bank_msb,
+            bank_offset,
+            system == MIDISystem::Xg,
+        );
 
         let bs_event = MidiMessage::new(
             ticks,
@@ -387,7 +388,7 @@ fn correct_bank_offset_internal(
     // ── GM → GS switch ────────────────────────────────────────────────────────
     // If no GS/XG/GM2 mode was detected, replace all GM ON sysex events with
     // a Roland GS ON message at the beginning of track 0.
-    if system == SynthSystem::Gm {
+    if system == MIDISystem::Gm {
         for track in mid.tracks.iter_mut() {
             track
                 .events
@@ -612,7 +613,7 @@ mod tests {
     use crate::midi::types::RMIDIWriteOptions;
     use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
     use crate::soundbank::basic_soundbank::preset_resolver::PresetResolver;
-    use crate::synthesizer::types::SynthSystem;
+    use crate::soundbank::types::MIDISystem;
 
     // ── Test helpers ──────────────────────────────────────────────────────────
 
@@ -634,7 +635,7 @@ mod tests {
     }
 
     impl PresetResolver for MockBank {
-        fn get_preset(&self, _patch: MidiPatch, _system: SynthSystem) -> Option<&BasicPreset> {
+        fn get_preset(&self, _patch: MidiPatch, _system: MIDISystem) -> Option<&BasicPreset> {
             Some(&self.preset)
         }
     }

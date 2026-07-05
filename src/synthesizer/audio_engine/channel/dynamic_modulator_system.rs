@@ -4,7 +4,7 @@
 use crate::soundbank::basic_soundbank::generator_types::GeneratorType;
 use crate::soundbank::basic_soundbank::modulator::Modulator;
 use crate::soundbank::basic_soundbank::modulator_source::ModulatorSource;
-use crate::soundbank::enums::{ModulatorSourceEnum, modulator_curve_types};
+use crate::soundbank::enums::{ModulatorControllerSource, modulator_curve_types};
 use crate::synthesizer::audio_engine::channel::parameters::midi::NON_CC_INDEX_OFFSET;
 
 // ---------------------------------------------------------------------------
@@ -72,10 +72,10 @@ impl DynamicModulatorSystem {
         if let Some(entry) = self.modulator_list.iter_mut().find(|e| e.id == id) {
             entry.modulator.transform_amount = amount;
         } else {
-            let (src_num, is_cc): (ModulatorSourceEnum, bool) = if source >= NON_CC_INDEX_OFFSET {
-                ((source - NON_CC_INDEX_OFFSET) as ModulatorSourceEnum, false)
+            let (src_num, is_cc): (ModulatorControllerSource, bool) = if source >= NON_CC_INDEX_OFFSET {
+                ((source - NON_CC_INDEX_OFFSET) as ModulatorControllerSource, false)
             } else {
-                (source as ModulatorSourceEnum, true)
+                (source as ModulatorControllerSource, true)
             };
             let modulator = Modulator::new(
                 ModulatorSource::new(

@@ -4,6 +4,9 @@
 ///
 /// # Skipped features
 /// - `trimSoundBank()` → ported as free function `trim_sound_bank` in `used_keys_loaded.rs`
+///   (TS 4.3.0 reworked it into `trim(presetData: PresetsWithKeyCombinations)`; that change
+///   is deferred to the midi_tools task)
+/// - `setSampleFormat()` → SF3/Vorbis compression, out of scope
 /// - `writeSF2()`, `writeDLS()`, `getSampleSoundBankFile()` → write-only, out of MIDI→WAV scope
 /// - `addCompletePresets()` → replaced by `clone_preset_from` / `merge_sound_banks`
 ///
@@ -19,12 +22,12 @@ use crate::soundbank::basic_soundbank::basic_instrument_zone::BasicInstrumentZon
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::basic_preset_zone::BasicPresetZone;
 use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
-use crate::soundbank::basic_soundbank::midi_patch::{MidiPatch, select_preset, sorter};
+use crate::soundbank::basic_soundbank::midi_patch::{MidiPatch, compare, select_patch};
 use crate::soundbank::basic_soundbank::modulator::{Modulator, SPESSASYNTH_DEFAULT_MODULATORS};
 use crate::soundbank::basic_soundbank::preset_resolver::PresetResolver;
 use crate::soundbank::types::{SF2VersionTag, SoundBankInfoData};
-use crate::synthesizer::types::SynthSystem;
-use crate::utils::loggin::spessa_synth_info;
+use crate::soundbank::types::MIDISystem;
+use crate::utils::loggin::SpessaLog;
 use crate::utils::midi_hacks::BankSelectHacks;
 
 // ---------------------------------------------------------------------------
@@ -370,6 +373,7 @@ impl BasicSoundBank {
 
     /// Sorts presets by patch and updates internal values.
     /// Equivalent to: public flush()
+    /// (TS 4.3.0: presets.sort(MIDIPatchTools.compare.bind(MIDIPatchTools)))
     pub fn flush(&mut self) {
         self.presets.sort_by(|a, b| {
             let pa = MidiPatch {
@@ -384,7 +388,7 @@ impl BasicSoundBank {
                 bank_lsb: b.bank_lsb,
                 is_gm_gs_drum: b.is_gm_gs_drum,
             };
-            sorter(&pa, &pb)
+            compare(&pa, &pb)
         });
         self.parse_internal();
     }
@@ -498,13 +502,18 @@ impl BasicSoundBank {
     /// Returns the most appropriate preset for the given MIDI patch and system.
     /// Returns `None` if the sound bank contains no presets.
     ///
-    /// Equivalent to: public getPreset(patch: MIDIPatch, system: SynthSystem): BasicPreset
+    /// Equivalent to: public getPreset(patch: MIDIPatch, system: MIDISystem): BasicPreset
     /// Note: TypeScript panics if presets is empty; Rust returns None.
-    pub fn get_preset(&self, patch: MidiPatch, system: SynthSystem) -> Option<&BasicPreset> {
+    pub fn get_preset(&self, patch: MidiPatch, system: MIDISystem) -> Option<&BasicPreset> {
         if self.presets.is_empty() {
             return None;
         }
-        Some(select_preset(&self.presets, patch, system))
+        let is_drum: Vec<bool> = self
+            .presets
+            .iter()
+            .map(|p| p.is_drum(self._is_xg_bank))
+            .collect();
+        Some(select_patch(&self.presets, &is_drum, patch, system))
     }
 
     // -----------------------------------------------------------------------
@@ -553,10 +562,10 @@ impl BasicSoundBank {
                 self._is_xg_bank = true;
                 if !ALLOWED.contains(&preset.program) {
                     self._is_xg_bank = false;
-                    spessa_synth_info(&format!(
-                        "This bank is not valid XG. Preset {}:{} is not a valid XG drum. \
+                    SpessaLog::info(&format!(
+                        "This bank is not valid XG. Preset {} is not a valid XG drum. \
                          XG mode will use presets on bank 128.",
-                        preset.bank_msb, preset.program
+                        preset
                     ));
                     break;
                 }
@@ -572,27 +581,27 @@ impl BasicSoundBank {
     /// Equivalent to: protected printInfo()
     pub fn print_info(&self) {
         let i = &self.sound_bank_info;
-        spessa_synth_info(&format!("name: \"{}\"", i.name));
-        spessa_synth_info(&format!(
+        SpessaLog::info(&format!("name: \"{}\"", i.name));
+        SpessaLog::info(&format!(
             "version: \"{}.{}\"",
             i.version.major, i.version.minor
         ));
-        spessa_synth_info(&format!("creation_date: \"{}\"", i.creation_date));
-        spessa_synth_info(&format!("sound_engine: \"{}\"", i.sound_engine));
+        SpessaLog::info(&format!("creation_date: \"{}\"", i.creation_date));
+        SpessaLog::info(&format!("sound_engine: \"{}\"", i.sound_engine));
         if let Some(ref v) = i.software {
-            spessa_synth_info(&format!("software: \"{}\"", v));
+            SpessaLog::info(&format!("software: \"{}\"", v));
         }
         if let Some(ref v) = i.engineer {
-            spessa_synth_info(&format!("engineer: \"{}\"", v));
+            SpessaLog::info(&format!("engineer: \"{}\"", v));
         }
         if let Some(ref v) = i.product {
-            spessa_synth_info(&format!("product: \"{}\"", v));
+            SpessaLog::info(&format!("product: \"{}\"", v));
         }
         if let Some(ref v) = i.copyright {
-            spessa_synth_info(&format!("copyright: \"{}\"", v));
+            SpessaLog::info(&format!("copyright: \"{}\"", v));
         }
         if let Some(ref v) = i.comment {
-            spessa_synth_info(&format!("comment: \"{}\"", v));
+            SpessaLog::info(&format!("comment: \"{}\"", v));
         }
     }
 
@@ -706,11 +715,8 @@ impl BasicSoundBank {
 /// Allows `BasicMIDI::get_used_programs_and_keys` to accept `&dyn PresetResolver`
 /// without creating a direct dependency on `BasicSoundBank`.
 impl PresetResolver for BasicSoundBank {
-    fn get_preset(&self, patch: MidiPatch, system: SynthSystem) -> Option<&BasicPreset> {
-        if self.presets.is_empty() {
-            return None;
-        }
-        Some(select_preset(&self.presets, patch, system))
+    fn get_preset(&self, patch: MidiPatch, system: MIDISystem) -> Option<&BasicPreset> {
+        BasicSoundBank::get_preset(self, patch, system)
     }
 }
 
@@ -723,7 +729,7 @@ mod tests {
     use super::*;
     use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
     use crate::soundbank::enums::sample_types;
-    use crate::synthesizer::types::SynthSystem;
+    use crate::soundbank::types::MIDISystem;
 
     // -----------------------------------------------------------------------
     // Helpers
@@ -947,21 +953,21 @@ mod tests {
     #[test]
     fn test_get_preset_returns_none_when_empty() {
         let bank = BasicSoundBank::new();
-        assert!(bank.get_preset(any_patch(), SynthSystem::Gm).is_none());
+        assert!(bank.get_preset(any_patch(), MIDISystem::Gm).is_none());
     }
 
     #[test]
     fn test_get_preset_returns_some_when_has_presets() {
         let mut bank = BasicSoundBank::new();
         bank.add_preset(make_preset("Piano", 0, 0));
-        assert!(bank.get_preset(any_patch(), SynthSystem::Gm).is_some());
+        assert!(bank.get_preset(any_patch(), MIDISystem::Gm).is_some());
     }
 
     #[test]
     fn test_preset_resolver_trait_empty_returns_none() {
         let bank = BasicSoundBank::new();
         let resolver: &dyn PresetResolver = &bank;
-        assert!(resolver.get_preset(any_patch(), SynthSystem::Gm).is_none());
+        assert!(resolver.get_preset(any_patch(), MIDISystem::Gm).is_none());
     }
 
     #[test]
@@ -969,7 +975,7 @@ mod tests {
         let mut bank = BasicSoundBank::new();
         bank.add_preset(make_preset("Piano", 0, 0));
         let resolver: &dyn PresetResolver = &bank;
-        assert!(resolver.get_preset(any_patch(), SynthSystem::Gm).is_some());
+        assert!(resolver.get_preset(any_patch(), MIDISystem::Gm).is_some());
     }
 
     #[test]
@@ -977,7 +983,7 @@ mod tests {
         let mut bank = BasicSoundBank::new();
         bank.add_preset(make_preset("Piano", 0, 0));
         let resolver: Box<dyn PresetResolver> = Box::new(bank);
-        assert!(resolver.get_preset(any_patch(), SynthSystem::Gm).is_some());
+        assert!(resolver.get_preset(any_patch(), MIDISystem::Gm).is_some());
     }
 
     // -----------------------------------------------------------------------

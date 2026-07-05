@@ -1,11 +1,19 @@
 /// midi_patch.rs
-/// purpose: MIDI patch (program/bank) data types and conversion utilities.
+/// purpose: MIDI patch (program/bank) data types, conversion utilities and the
+///          patch selection algorithm (MIDIPatchTools).
 /// Ported from: src/soundbank/basic_soundbank/midi_patch.ts
+///
+/// TS 4.3.0 merged preset_selector.ts into this file as `MIDIPatchTools.selectPatch`
+/// (static) and reworked it around the `MIDIPatchFull` interface (`isDrum` flag).
+/// In Rust, `MIDIPatchTools`' static methods are free functions, and `selectPatch`
+/// operates on `&[BasicPreset]` with a parallel `is_drum: &[bool]` slice, because
+/// Rust's `BasicPreset` does not store `parentSoundBank` (whose `isXGBank` flag
+/// defines `isDrum` in TypeScript).
 use std::cmp::Ordering;
 
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
-use crate::synthesizer::types::SynthSystem;
-use crate::utils::loggin::spessa_synth_info;
+use crate::soundbank::types::MIDISystem;
+use crate::utils::loggin::SpessaLog;
 use crate::utils::midi_hacks::BankSelectHacks;
 
 /// A MIDI patch (program + bank selection).
@@ -18,19 +26,27 @@ pub struct MidiPatch {
     pub bank_msb: u8,
     /// The MIDI bank LSB number.
     pub bank_lsb: u8,
-    /// If the preset is marked as GM/GS drum preset.
+    /// If the preset is marked as GM/GS drum preset. Note that XG drums do not have this flag.
     pub is_gm_gs_drum: bool,
 }
 
-/// A MIDI patch with an associated name.
-/// Equivalent to: MIDIPatchNamed (extends MIDIPatch)
+/// A MIDI patch with an associated name and drum flag.
+/// Equivalent to: MIDIPatchFull (extends MIDIPatch; TS 4.2.0 name: MIDIPatchNamed)
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MidiPatchNamed {
+pub struct MidiPatchFull {
     pub patch: MidiPatch,
+    /// The name of the patch.
     pub name: String,
+    /// Indicates if this patch is a drum patch.
+    /// If `is_gm_gs_drum` is true, then this is a GM/GS drum preset.
+    /// If `is_gm_gs_drum` is false, then this is a GM2/XG drum preset.
+    pub is_drum: bool,
 }
 
 /// Converts a MidiPatch to its string representation.
+/// The format is:
+/// - `DRUM:program` for `isGMGSDrum` set to `true`.
+/// - `bankLSB:bankMSB:program` for `isGMGSDrum` set to `false`.
 /// Equivalent to: MIDIPatchTools.toMIDIString
 pub fn to_midi_string(patch: &MidiPatch) -> String {
     if patch.is_gm_gs_drum {
@@ -45,7 +61,7 @@ pub fn to_midi_string(patch: &MidiPatch) -> String {
 pub fn from_midi_string(s: &str) -> Result<MidiPatch, String> {
     let parts: Vec<&str> = s.split(':').collect();
     if parts.len() > 3 || parts.len() < 2 {
-        return Err("Invalid MIDI string:".to_string());
+        return Err(format!("Invalid MIDI string: {s}"));
     }
     if s.starts_with("DRUM") {
         let program = parts[1]
@@ -76,28 +92,48 @@ pub fn from_midi_string(s: &str) -> Result<MidiPatch, String> {
     }
 }
 
-/// Converts a MidiPatchNamed to its string representation.
-/// Equivalent to: MIDIPatchTools.toNamedMIDIString
-pub fn to_named_midi_string(patch: &MidiPatchNamed) -> String {
-    format!("{} {}", to_midi_string(&patch.patch), patch.name)
+/// Converts a MidiPatchFull to its string representation.
+/// The format is:
+/// - `<MIDIPatch string> D <name>` for `is_drum` set to `true`.
+/// - `<MIDIPatch string> M <name>` for `is_drum` set to `false`.
+/// Equivalent to: MIDIPatchTools.toFullMIDIString (TS 4.2.0 name: toNamedMIDIString)
+pub fn to_full_midi_string(patch: &MidiPatchFull) -> String {
+    format!(
+        "{} {} {}",
+        to_midi_string(&patch.patch),
+        if patch.is_drum { "D" } else { "M" },
+        patch.name
+    )
 }
 
-/// Parses a MidiPatchNamed from its string representation.
-/// Equivalent to: MIDIPatchTools.fromNamedMIDIString
-pub fn from_named_midi_string(s: &str) -> Result<MidiPatchNamed, String> {
+/// Parses a MidiPatchFull from its string representation.
+/// Equivalent to: MIDIPatchTools.fromFullMIDIString (TS 4.2.0 name: fromNamedMIDIString)
+pub fn from_full_midi_string(s: &str) -> Result<MidiPatchFull, String> {
     let first_space = s
         .find(' ')
         .ok_or_else(|| format!("Invalid named MIDI string: {s}"))?;
-    let patch = from_midi_string(&s[..first_space])?;
-    let name = s[first_space + 1..].to_string();
-    Ok(MidiPatchNamed { patch, name })
+    let second_space = s[first_space + 1..]
+        .find(' ')
+        .map(|i| i + first_space + 1)
+        .ok_or_else(|| format!("Invalid named MIDI string: {s}"))?;
+
+    let midi_part = &s[..first_space];
+    let drum_mode = &s[first_space + 1..second_space];
+    let name = s[second_space + 1..].to_string();
+    let patch = from_midi_string(midi_part)?;
+
+    Ok(MidiPatchFull {
+        patch,
+        is_drum: drum_mode == "D",
+        name,
+    })
 }
 
-/// Checks if two MidiPatches match.
+/// Checks if two MIDI patches represent the same one.
 /// Equivalent to: MIDIPatchTools.matches
 pub fn matches(patch1: &MidiPatch, patch2: &MidiPatch) -> bool {
     if patch1.is_gm_gs_drum || patch2.is_gm_gs_drum {
-        // For drums only compare program and the drum flag
+        // For drums only compare programs
         return patch1.is_gm_gs_drum == patch2.is_gm_gs_drum && patch1.program == patch2.program;
     }
     patch1.program == patch2.program
@@ -105,21 +141,215 @@ pub fn matches(patch1: &MidiPatch, patch2: &MidiPatch) -> bool {
         && patch1.bank_msb == patch2.bank_msb
 }
 
-/// Sorts two MidiPatches. Drum presets are forced to be last.
-/// Equivalent to: MIDIPatchTools.sorter
-pub fn sorter(a: &MidiPatch, b: &MidiPatch) -> Ordering {
-    if a.program != b.program {
-        return a.program.cmp(&b.program);
-    }
+/// A comparison function for sorting, ordering the patches in ascending order.
+/// Equivalent to: MIDIPatchTools.compare (TS 4.2.0 name: sorter; 4.3.0 moved the
+/// drum check before the program comparison)
+pub fn compare(a: &MidiPatch, b: &MidiPatch) -> Ordering {
+    // Force drum presets to be last
     match (a.is_gm_gs_drum, b.is_gm_gs_drum) {
         (true, false) => return Ordering::Greater,
         (false, true) => return Ordering::Less,
         _ => {}
     }
+    // First, sort by program
+    if a.program != b.program {
+        return a.program.cmp(&b.program);
+    }
+    // Next, sort by bankMSB
     if a.bank_msb != b.bank_msb {
         return a.bank_msb.cmp(&b.bank_msb);
     }
+    // Finally, sort by bankLSB
     a.bank_lsb.cmp(&b.bank_lsb)
+}
+
+/// Checks if the given patch is an XG/GM2 drum patch.
+/// `is_drum` is the preset's `isDrum` flag (see [`BasicPreset::is_drum`]).
+/// Equivalent to: MIDIPatchTools.isXGDrum(p) = p.isDrum && !p.isGMGSDrum
+#[inline]
+pub fn is_xg_drum(is_drum: bool, is_gm_gs_drum: bool) -> bool {
+    is_drum && !is_gm_gs_drum
+}
+
+/// Returns the index of any drum preset, preferring XG or GM/GS drums.
+/// Equivalent to: private static getAnyDrums(presets, preferXG)
+fn get_any_drums(presets: &[BasicPreset], is_drum: &[bool], prefer_xg: bool) -> usize {
+    let p = if prefer_xg {
+        // Get any XG drums
+        (0..presets.len()).find(|&i| is_xg_drum(is_drum[i], presets[i].is_gm_gs_drum))
+    } else {
+        // Get any GM/GS drums
+        (0..presets.len()).find(|&i| presets[i].is_gm_gs_drum)
+    };
+    if let Some(i) = p {
+        // Return the found preset
+        return i;
+    }
+    // Return any drum preset ... no? Then just return any preset
+    (0..presets.len()).find(|&i| is_drum[i]).unwrap_or(0)
+}
+
+/// A sophisticated patch selection system based on the MIDI Patch system.
+/// This is the algorithm that the synthesizer uses for selecting presets.
+///
+/// `is_drum` is a slice parallel to `patches` holding each preset's `isDrum` flag
+/// (in TypeScript this is the `MIDIPatchFull.isDrum` property, computed through
+/// `parentSoundBank.isXGBank`).
+///
+/// # Panics
+/// Panics if `patches` is empty.
+///
+/// Equivalent to: MIDIPatchTools.selectPatch(patches, patch, system)
+pub fn select_patch<'a>(
+    patches: &'a [BasicPreset],
+    is_drum: &[bool],
+    mut patch: MidiPatch,
+    system: MIDISystem,
+) -> &'a BasicPreset {
+    assert!(!patches.is_empty(), "No presets!");
+    assert_eq!(patches.len(), is_drum.len(), "is_drum slice mismatch");
+
+    if patch.is_gm_gs_drum && BankSelectHacks::is_system_xg(system) {
+        // GM/GS drums with XG. This shouldn't happen. Force XG drums.
+        patch = MidiPatch {
+            is_gm_gs_drum: false,
+            bank_lsb: 0,
+            bank_msb: BankSelectHacks::get_drum_bank(system).unwrap_or(127),
+            ..patch
+        };
+    }
+
+    let is_gm_gs_drum = patch.is_gm_gs_drum;
+    let bank_lsb = patch.bank_lsb;
+    let bank_msb = patch.bank_msb;
+    let program = patch.program;
+    let is_xg = BankSelectHacks::is_system_xg(system);
+    let xg_drums = BankSelectHacks::is_xg_drum(bank_msb) && is_xg;
+
+    // Check for exact match
+    let exact = (0..patches.len()).find(|&i| patches[i].matches(&patch));
+    if let Some(i) = exact {
+        // Special case:
+        // Non XG banks sometimes specify melodic "MT" presets at bank 127,
+        // Which matches XG banks.
+        // Testcase: 4gmgsmt-sf2_04-compat.sf2
+        // Only match if the preset declares itself as drums
+        if !xg_drums || is_xg_drum(is_drum[i], patches[i].is_gm_gs_drum) {
+            return &patches[i];
+        }
+    }
+
+    // Helper to log failed exact matches
+    let return_replacement = |i: usize| {
+        SpessaLog::info(&format!(
+            "Preset {} not found. ({:?}) Replaced with {}",
+            to_midi_string(&patch),
+            system,
+            to_full_midi_string(&MidiPatchFull {
+                patch: MidiPatch {
+                    program: patches[i].program,
+                    bank_msb: patches[i].bank_msb,
+                    bank_lsb: patches[i].bank_lsb,
+                    is_gm_gs_drum: patches[i].is_gm_gs_drum,
+                },
+                name: patches[i].name.clone(),
+                is_drum: is_drum[i],
+            }),
+        ));
+    };
+
+    // No exact match...
+    if is_gm_gs_drum {
+        // GM/GS drums: check for the exact program match
+        if let Some(i) =
+            (0..patches.len()).find(|&i| patches[i].is_gm_gs_drum && patches[i].program == program)
+        {
+            return_replacement(i);
+            return &patches[i];
+        }
+
+        // No match, pick any matching drum
+        if let Some(i) = (0..patches.len()).find(|&i| is_drum[i] && patches[i].program == program) {
+            return_replacement(i);
+            return &patches[i];
+        }
+
+        // No match, pick the first drum preset, preferring GM/GS
+        let i = get_any_drums(patches, is_drum, false);
+        return_replacement(i);
+        return &patches[i];
+    }
+    if xg_drums {
+        // XG drums: Look for exact bank and program match
+        if let Some(i) = (0..patches.len())
+            .find(|&i| patches[i].program == program && is_drum[i] && !patches[i].is_gm_gs_drum)
+        {
+            return_replacement(i);
+            return &patches[i];
+        }
+
+        // No match, pick any matching drum
+        let p = (0..patches.len()).find(|&i| is_drum[i] && patches[i].program == program);
+
+        // Program 49 and above start to diverge between GS and XG.
+        // For example,
+        // XG MU2000 and similar have regular drums on program 56, while GS has the SFX kit.
+        // So avoid selecting it and pick any XG drums.
+        if let Some(i) = p
+            && patches[i].program < 49
+        {
+            return_replacement(i);
+            return &patches[i];
+        }
+
+        // Pick any drums, preferring XG
+        let i = get_any_drums(patches, is_drum, true);
+        return_replacement(i);
+        return &patches[i];
+    }
+    // Melodic preset
+    let matching_programs: Vec<usize> = (0..patches.len())
+        .filter(|&i| patches[i].program == program && !is_drum[i])
+        .collect();
+    if matching_programs.is_empty() {
+        // The first preset
+        return_replacement(0);
+        return &patches[0];
+    }
+    let p = if is_xg {
+        // XG uses LSB so search for that.
+        matching_programs
+            .iter()
+            .find(|&&i| patches[i].bank_lsb == bank_lsb)
+            .copied()
+    } else {
+        // GS uses MSB so search for that.
+        matching_programs
+            .iter()
+            .find(|&&i| patches[i].bank_msb == bank_msb)
+            .copied()
+    };
+    if let Some(i) = p {
+        return_replacement(i);
+        return &patches[i];
+    }
+    // Special XG case: 64 on LSB can't default to 64 MSB.
+    // Testcase: Cybergate.mid
+    // Selects 64 LSB on warm pad, on DLSbyXG.dls it gets replaced with Bird 2 SFX
+    if bank_lsb != 64 || !is_xg {
+        let bank = bank_msb.max(bank_lsb);
+        // Any matching bank.
+        if let Some(&i) = matching_programs
+            .iter()
+            .find(|&&i| patches[i].bank_lsb == bank || patches[i].bank_msb == bank)
+        {
+            return_replacement(i);
+            return &patches[i];
+        }
+    }
+    // The first matching program
+    return_replacement(matching_programs[0]);
+    &patches[matching_programs[0]]
 }
 
 #[cfg(test)]
@@ -203,55 +433,65 @@ mod tests {
         assert_eq!(from_midi_string(&to_midi_string(&p)).unwrap(), p);
     }
 
-    // --- to_named_midi_string ---
+    // --- to_full_midi_string ---
 
     #[test]
-    fn test_to_named_midi_string_normal() {
-        let np = MidiPatchNamed {
+    fn test_to_full_midi_string_melodic() {
+        let np = MidiPatchFull {
             patch: normal(10, 2, 3),
             name: "Piano".to_string(),
+            is_drum: false,
         };
-        assert_eq!(to_named_midi_string(&np), "3:2:10 Piano");
+        assert_eq!(to_full_midi_string(&np), "3:2:10 M Piano");
     }
 
     #[test]
-    fn test_to_named_midi_string_drum() {
-        let np = MidiPatchNamed {
+    fn test_to_full_midi_string_drum() {
+        let np = MidiPatchFull {
             patch: drum(0),
             name: "Standard Kit".to_string(),
+            is_drum: true,
         };
-        assert_eq!(to_named_midi_string(&np), "DRUM:0 Standard Kit");
+        assert_eq!(to_full_midi_string(&np), "DRUM:0 D Standard Kit");
     }
 
-    // --- from_named_midi_string ---
+    // --- from_full_midi_string ---
 
     #[test]
-    fn test_from_named_midi_string_normal() {
-        let np = from_named_midi_string("3:2:10 Piano").unwrap();
+    fn test_from_full_midi_string_melodic() {
+        let np = from_full_midi_string("3:2:10 M Piano").unwrap();
         assert_eq!(np.patch, normal(10, 2, 3));
         assert_eq!(np.name, "Piano");
+        assert!(!np.is_drum);
     }
 
     #[test]
-    fn test_from_named_midi_string_drum() {
-        let np = from_named_midi_string("DRUM:0 Standard Kit").unwrap();
+    fn test_from_full_midi_string_drum() {
+        let np = from_full_midi_string("DRUM:0 D Standard Kit").unwrap();
         assert_eq!(np.patch, drum(0));
         assert_eq!(np.name, "Standard Kit");
+        assert!(np.is_drum);
     }
 
     #[test]
-    fn test_from_named_midi_string_no_space_is_err() {
-        assert!(from_named_midi_string("3:2:10").is_err());
+    fn test_from_full_midi_string_one_space_is_err() {
+        assert!(from_full_midi_string("3:2:10 M").is_err());
     }
 
     #[test]
-    fn test_from_named_midi_string_roundtrip() {
-        let np = MidiPatchNamed {
+    fn test_from_full_midi_string_no_space_is_err() {
+        assert!(from_full_midi_string("3:2:10").is_err());
+    }
+
+    #[test]
+    fn test_from_full_midi_string_roundtrip() {
+        let np = MidiPatchFull {
             patch: normal(7, 0, 0),
             name: "Harpsichord".to_string(),
+            is_drum: false,
         };
         assert_eq!(
-            from_named_midi_string(&to_named_midi_string(&np)).unwrap(),
+            from_full_midi_string(&to_full_midi_string(&np)).unwrap(),
             np
         );
     }
@@ -294,226 +534,73 @@ mod tests {
         assert!(!matches(&drum(10), &normal(10, 0, 0)));
     }
 
-    // --- sorter ---
+    // --- compare ---
 
     #[test]
-    fn test_sorter_by_program() {
-        assert_eq!(sorter(&normal(5, 0, 0), &normal(10, 0, 0)), Ordering::Less);
+    fn test_compare_by_program() {
+        assert_eq!(compare(&normal(5, 0, 0), &normal(10, 0, 0)), Ordering::Less);
         assert_eq!(
-            sorter(&normal(10, 0, 0), &normal(5, 0, 0)),
+            compare(&normal(10, 0, 0), &normal(5, 0, 0)),
             Ordering::Greater
         );
     }
 
     #[test]
-    fn test_sorter_equal_program_no_drum() {
+    fn test_compare_equal_program_no_drum() {
         assert_eq!(
-            sorter(&normal(10, 0, 0), &normal(10, 0, 0)),
+            compare(&normal(10, 0, 0), &normal(10, 0, 0)),
             Ordering::Equal
         );
     }
 
     #[test]
-    fn test_sorter_drum_after_normal_same_program() {
-        assert_eq!(sorter(&drum(10), &normal(10, 0, 0)), Ordering::Greater);
-        assert_eq!(sorter(&normal(10, 0, 0), &drum(10)), Ordering::Less);
+    fn test_compare_drum_after_normal_any_program() {
+        // TS 4.3.0: the drum check comes before the program comparison,
+        // so drums sort after melodic presets regardless of program.
+        assert_eq!(compare(&drum(0), &normal(127, 0, 0)), Ordering::Greater);
+        assert_eq!(compare(&normal(127, 0, 0), &drum(0)), Ordering::Less);
     }
 
     #[test]
-    fn test_sorter_by_bank_msb() {
-        assert_eq!(sorter(&normal(10, 1, 0), &normal(10, 2, 0)), Ordering::Less);
+    fn test_compare_by_bank_msb() {
+        assert_eq!(
+            compare(&normal(10, 1, 0), &normal(10, 2, 0)),
+            Ordering::Less
+        );
     }
 
     #[test]
-    fn test_sorter_by_bank_lsb() {
-        assert_eq!(sorter(&normal(10, 0, 1), &normal(10, 0, 2)), Ordering::Less);
+    fn test_compare_by_bank_lsb() {
+        assert_eq!(
+            compare(&normal(10, 0, 1), &normal(10, 0, 2)),
+            Ordering::Less
+        );
+    }
+
+    // --- is_xg_drum ---
+
+    #[test]
+    fn test_is_xg_drum_true_for_non_gmgs_drum() {
+        assert!(is_xg_drum(true, false));
+    }
+
+    #[test]
+    fn test_is_xg_drum_false_for_gmgs_drum() {
+        assert!(!is_xg_drum(true, true));
+    }
+
+    #[test]
+    fn test_is_xg_drum_false_for_melodic() {
+        assert!(!is_xg_drum(false, false));
     }
 }
 
 // ---------------------------------------------------------------------------
-// Merged from: src/soundbank/basic_soundbank/preset_selector.rs
-// ---------------------------------------------------------------------------
-
-/// preset_selector.rs
-/// purpose: Sophisticated preset selection based on the MIDI Patch system.
-/// Ported from: src/soundbank/basic_soundbank/preset_selector.ts
-
-/// Returns any drum preset from `presets`, preferring XG or GM/GS drums.
-/// Equivalent to: getAnyDrums
-fn get_any_drums(presets: &[BasicPreset], prefer_xg: bool, is_xg: bool) -> &BasicPreset {
-    let p = if prefer_xg {
-        presets.iter().find(|p| p.is_xg_drums(is_xg))
-    } else {
-        presets.iter().find(|p| p.is_gm_gs_drum)
-    };
-    if let Some(p) = p {
-        return p;
-    }
-    // Return any drum preset, or the first preset as a fallback
-    presets
-        .iter()
-        .find(|p| p.is_any_drums(is_xg))
-        .unwrap_or(&presets[0])
-}
-
-/// A sophisticated preset selection system based on the MIDI Patch system.
-///
-/// # Panics
-/// Panics if `presets` is empty.
-///
-/// Equivalent to: selectPreset
-pub fn select_preset(
-    presets: &[BasicPreset],
-    mut patch: MidiPatch,
-    system: SynthSystem,
-) -> &BasicPreset {
-    assert!(!presets.is_empty(), "No presets!");
-
-    if patch.is_gm_gs_drum && BankSelectHacks::is_system_xg(system) {
-        // GM/GS drums with XG. This shouldn't happen. Force XG drums.
-        patch = MidiPatch {
-            is_gm_gs_drum: false,
-            bank_lsb: 0,
-            bank_msb: BankSelectHacks::get_drum_bank(system).unwrap_or(127),
-            ..patch
-        };
-    }
-
-    let is_gm_gs_drum = patch.is_gm_gs_drum;
-    let bank_lsb = patch.bank_lsb;
-    let bank_msb = patch.bank_msb;
-    let program = patch.program;
-    let is_xg = BankSelectHacks::is_system_xg(system);
-    let xg_drums = BankSelectHacks::is_xg_drum(bank_msb) && is_xg;
-
-    // Check for exact match
-    let exact = presets.iter().find(|p| p.matches(&patch));
-    if let Some(p) = exact {
-        // Special case: non-XG banks sometimes specify melodic "MT" presets at bank 127,
-        // which matches XG banks. Only match if the preset declares itself as drums.
-        if !xg_drums || p.is_xg_drums(is_xg) {
-            return p;
-        }
-    }
-
-    // Helper to log failed exact matches
-    let log_replacement = |pres: &BasicPreset| {
-        spessa_synth_info(&format!(
-            "Preset {} not found. ({:?}) Replaced with {}",
-            to_midi_string(&patch),
-            system,
-            pres,
-        ));
-    };
-
-    // No exact match...
-    if is_gm_gs_drum {
-        // GM/GS drums: check for the exact program match
-        if let Some(p) = presets
-            .iter()
-            .find(|p| p.is_gm_gs_drum && p.program == program)
-        {
-            log_replacement(p);
-            return p;
-        }
-
-        // No match, pick any matching drum
-        if let Some(p) = presets
-            .iter()
-            .find(|p| p.is_any_drums(is_xg) && p.program == program)
-        {
-            log_replacement(p);
-            return p;
-        }
-
-        // No match, pick the first drum preset, preferring GM/GS
-        let p = get_any_drums(presets, false, is_xg);
-        log_replacement(p);
-        return p;
-    }
-
-    if xg_drums {
-        // XG drums: look for exact bank and program match
-        if let Some(p) = presets
-            .iter()
-            .find(|p| p.program == program && p.is_xg_drums(is_xg))
-        {
-            log_replacement(p);
-            return p;
-        }
-
-        // No match, pick any matching drum
-        if let Some(p) = presets
-            .iter()
-            .find(|p| p.is_any_drums(is_xg) && p.program == program)
-        {
-            log_replacement(p);
-            return p;
-        }
-
-        // Pick any drums, preferring XG
-        let p = get_any_drums(presets, true, is_xg);
-        log_replacement(p);
-        return p;
-    }
-
-    // Melodic preset
-    let matching_programs: Vec<&BasicPreset> = presets
-        .iter()
-        .filter(|p| p.program == program && !p.is_any_drums(is_xg))
-        .collect();
-
-    if matching_programs.is_empty() {
-        let first = &presets[0];
-        log_replacement(first);
-        return first;
-    }
-
-    let p = if is_xg {
-        // XG uses LSB so search for that
-        matching_programs
-            .iter()
-            .find(|p| p.bank_lsb == bank_lsb)
-            .copied()
-    } else {
-        // GS uses MSB so search for that
-        matching_programs
-            .iter()
-            .find(|p| p.bank_msb == bank_msb)
-            .copied()
-    };
-
-    if let Some(p) = p {
-        log_replacement(p);
-        return p;
-    }
-
-    // Special XG case: 64 on LSB can't default to 64 MSB.
-    // Testcase: Cybergate.mid
-    if bank_lsb != 64 || !is_xg {
-        let bank = bank_msb.max(bank_lsb);
-        if let Some(p) = matching_programs
-            .iter()
-            .find(|p| p.bank_lsb == bank || p.bank_msb == bank)
-            .copied()
-        {
-            log_replacement(p);
-            return p;
-        }
-    }
-
-    // The first matching program
-    let first = matching_programs[0];
-    log_replacement(first);
-    first
-}
-
-// ---------------------------------------------------------------------------
-// Tests (from preset_selector.rs)
+// Tests for select_patch (ported from the former preset_selector tests)
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod preset_selector_tests {
+mod select_patch_tests {
     use super::*;
 
     // --- helpers ---
@@ -563,12 +650,28 @@ mod preset_selector_tests {
         }
     }
 
+    /// Builds the parallel isDrum slice for the given presets, mirroring
+    /// `BasicPreset::is_drum(is_xg_bank)`.
+    fn drum_flags(presets: &[BasicPreset], is_xg_bank: bool) -> Vec<bool> {
+        presets.iter().map(|p| p.is_drum(is_xg_bank)).collect()
+    }
+
+    fn select<'a>(
+        presets: &'a [BasicPreset],
+        p: MidiPatch,
+        system: MIDISystem,
+        is_xg_bank: bool,
+    ) -> &'a BasicPreset {
+        let flags = drum_flags(presets, is_xg_bank);
+        select_patch(presets, &flags, p, system)
+    }
+
     // --- exact match ---
 
     #[test]
     fn test_exact_match_melodic_gs() {
         let presets = vec![melodic(0, 0, 0), melodic(10, 2, 0), melodic(20, 0, 0)];
-        let p = select_preset(&presets, patch(10, 2, 0), SynthSystem::Gs);
+        let p = select(&presets, patch(10, 2, 0), MIDISystem::Gs, false);
         assert_eq!(p.program, 10);
         assert_eq!(p.bank_msb, 2);
     }
@@ -579,7 +682,7 @@ mod preset_selector_tests {
             melodic(0, 0, 0),
             melodic(10, 0, 3), // bank_lsb=3
         ];
-        let p = select_preset(&presets, patch(10, 0, 3), SynthSystem::Xg);
+        let p = select(&presets, patch(10, 0, 3), MIDISystem::Xg, false);
         assert_eq!(p.program, 10);
         assert_eq!(p.bank_lsb, 3);
     }
@@ -587,7 +690,7 @@ mod preset_selector_tests {
     #[test]
     fn test_exact_match_gm_gs_drum() {
         let presets = vec![melodic(0, 0, 0), gm_gs_drum(0)];
-        let p = select_preset(&presets, drum_patch(0), SynthSystem::Gs);
+        let p = select(&presets, drum_patch(0), MIDISystem::Gs, false);
         assert!(p.is_gm_gs_drum);
         assert_eq!(p.program, 0);
     }
@@ -603,7 +706,7 @@ mod preset_selector_tests {
         ];
         // Under XG, is_gm_gs_drum is forced to false, bank_msb becomes 127
         // So exact match becomes patch(0, 127, 0) against xg_drum(0, 127)
-        let p = select_preset(&presets, drum_patch(0), SynthSystem::Xg);
+        let p = select(&presets, drum_patch(0), MIDISystem::Xg, true);
         assert!(!p.is_gm_gs_drum);
         assert_eq!(p.bank_msb, 127);
     }
@@ -613,7 +716,7 @@ mod preset_selector_tests {
     #[test]
     #[should_panic(expected = "No presets!")]
     fn test_empty_presets_panics() {
-        select_preset(&[], patch(0, 0, 0), SynthSystem::Gs);
+        select_patch(&[], &[], patch(0, 0, 0), MIDISystem::Gs);
     }
 
     // --- melodic fallback to first ---
@@ -622,7 +725,7 @@ mod preset_selector_tests {
     fn test_melodic_no_program_match_returns_first() {
         let presets = vec![melodic(5, 0, 0), melodic(6, 0, 0)];
         // Request program 99 (doesn't exist)
-        let p = select_preset(&presets, patch(99, 0, 0), SynthSystem::Gs);
+        let p = select(&presets, patch(99, 0, 0), MIDISystem::Gs, false);
         assert_eq!(p.program, 5); // first preset
     }
 
@@ -635,7 +738,7 @@ mod preset_selector_tests {
             melodic(10, 2, 0), // bank_msb=2
             melodic(10, 5, 0), // bank_msb=5
         ];
-        let p = select_preset(&presets, patch(10, 5, 0), SynthSystem::Gs);
+        let p = select(&presets, patch(10, 5, 0), MIDISystem::Gs, false);
         assert_eq!(p.bank_msb, 5);
     }
 
@@ -648,7 +751,7 @@ mod preset_selector_tests {
             melodic(10, 0, 3), // bank_lsb=3
             melodic(10, 0, 7), // bank_lsb=7
         ];
-        let p = select_preset(&presets, patch(10, 0, 7), SynthSystem::Xg);
+        let p = select(&presets, patch(10, 0, 7), MIDISystem::Xg, false);
         assert_eq!(p.bank_lsb, 7);
     }
 
@@ -659,9 +762,7 @@ mod preset_selector_tests {
         // Only bank_msb=3 available, request bank_msb=9
         let presets = vec![melodic(10, 3, 0)];
         // No exact program+bank match found; falls back via max(msb, lsb)
-        let p = select_preset(&presets, patch(10, 9, 0), SynthSystem::Gs);
-        // bank_msb=9 or bank_lsb=0 → max is 9; preset has bank_msb=3 → no bank match
-        // → falls through to first matching program
+        let p = select(&presets, patch(10, 9, 0), MIDISystem::Gs, false);
         assert_eq!(p.program, 10);
     }
 
@@ -669,7 +770,7 @@ mod preset_selector_tests {
     fn test_melodic_fallback_to_first_matching_program() {
         let presets = vec![melodic(10, 3, 0), melodic(10, 5, 0)];
         // Request program 10, bank_msb=99 → no exact bank match, no any-bank match
-        let p = select_preset(&presets, patch(10, 99, 0), SynthSystem::Gs);
+        let p = select(&presets, patch(10, 99, 0), MIDISystem::Gs, false);
         // max(99, 0)=99, neither has bank_msb or bank_lsb == 99 → first matching program
         assert_eq!(p.program, 10);
         assert_eq!(p.bank_msb, 3);
@@ -680,7 +781,7 @@ mod preset_selector_tests {
     #[test]
     fn test_gm_gs_drum_exact_program_match() {
         let presets = vec![gm_gs_drum(25), gm_gs_drum(0)];
-        let p = select_preset(&presets, drum_patch(25), SynthSystem::Gs);
+        let p = select(&presets, drum_patch(25), MIDISystem::Gs, false);
         assert!(p.is_gm_gs_drum);
         assert_eq!(p.program, 25);
     }
@@ -692,13 +793,10 @@ mod preset_selector_tests {
             xg_drum(25, 120), // XG drum, program=25
             gm_gs_drum(0),    // GM/GS drum, program=0
         ];
-        // GS system: is_xg=false, so is_any_drums returns is_gm_gs_drum only (xg_drum(25,120) is not a GM/GS drum)
-        // Actually wait: with GS system, is_xg=false, so:
-        //   gm_gs_drum(0): is_gm_gs_drum=true, program=0 → not matching program 25
-        //   xg_drum(25, 120): is_gm_gs_drum=false, is_any_drums(false)=false
-        // No match for "is_gm_gs_drum && program==25", no "is_any_drums && program==25"
+        // Non-XG bank: xg_drum(25,120).is_drum == false
+        // No match for "is_gm_gs_drum && program==25", no "is_drum && program==25"
         // → get_any_drums(prefer_xg=false) → finds gm_gs_drum(0)
-        let p = select_preset(&presets, drum_patch(25), SynthSystem::Gs);
+        let p = select(&presets, drum_patch(25), MIDISystem::Gs, false);
         assert!(p.is_gm_gs_drum);
         assert_eq!(p.program, 0);
     }
@@ -709,27 +807,37 @@ mod preset_selector_tests {
     fn test_xg_drum_exact_program_match() {
         let presets = vec![xg_drum(0, 127), xg_drum(25, 127)];
         // Request XG drum program 25: bank_msb=127, is_xg=true
-        let p = select_preset(&presets, patch(25, 127, 0), SynthSystem::Xg);
+        let p = select(&presets, patch(25, 127, 0), MIDISystem::Xg, true);
         assert_eq!(p.program, 25);
         assert_eq!(p.bank_msb, 127);
     }
 
     #[test]
-    fn test_xg_drum_fallback_any_drum_with_program() {
+    fn test_xg_drum_fallback_any_drum_with_program_below_49() {
         // XG drum program=25 not available as XG, but a GM/GS drum with program=25 exists
         let presets = vec![xg_drum(0, 127), gm_gs_drum(25)];
-        // Request bank_msb=127, program=25, XG system
-        // No preset with program==25 && is_xg_drums(true) → check is_any_drums && program==25
-        // gm_gs_drum(25): is_any_drums(true) = is_gm_gs_drum || ... = true → match
-        let p = select_preset(&presets, patch(25, 127, 0), SynthSystem::Xg);
+        // program 25 < 49 → the any-drum fallback is allowed
+        let p = select(&presets, patch(25, 127, 0), MIDISystem::Xg, true);
         assert_eq!(p.program, 25);
+    }
+
+    #[test]
+    fn test_xg_drum_program_49_and_above_avoids_gs_kit() {
+        // TS 4.3.0: for program >= 49 the any-drum (GM/GS) fallback is skipped
+        // because GS and XG kits diverge there; any XG drums are preferred.
+        let presets = vec![xg_drum(0, 127), gm_gs_drum(56)];
+        let p = select(&presets, patch(56, 127, 0), MIDISystem::Xg, true);
+        // Skips gm_gs_drum(56); picks any XG drums (program 0, bank 127).
+        assert_eq!(p.bank_msb, 127);
+        assert_eq!(p.program, 0);
+        assert!(!p.is_gm_gs_drum);
     }
 
     #[test]
     fn test_xg_drum_fallback_any_xg_drum() {
         let presets = vec![xg_drum(0, 127), melodic(10, 0, 0)];
         // Request bank_msb=127, program=25 (not found) → fall back to any XG drum
-        let p = select_preset(&presets, patch(25, 127, 0), SynthSystem::Xg);
+        let p = select(&presets, patch(25, 127, 0), MIDISystem::Xg, true);
         assert_eq!(p.bank_msb, 127);
     }
 
@@ -742,13 +850,9 @@ mod preset_selector_tests {
             melodic(10, 0, 0),
         ];
         // With XG, bank_lsb=64 must not fall back to bank_msb=64 or bank_lsb=64 match
-        // (the special case: if bank_lsb==64 && is_xg, skip the any-bank fallback)
-        // No bank_lsb=64 match for the first find, then we skip any-bank fallback
-        // → first matching program
-        let p = select_preset(&presets, patch(10, 0, 64), SynthSystem::Xg);
-        // Falls through to first matching program (melodic(10,64,0) or melodic(10,0,0))
+        let p = select(&presets, patch(10, 0, 64), MIDISystem::Xg, false);
+        // Falls through to first matching program
         assert_eq!(p.program, 10);
-        // Should be the first matching-program entry
         assert_eq!(p.bank_msb, 64);
     }
 
@@ -759,7 +863,7 @@ mod preset_selector_tests {
         ];
         // GS system with bank_lsb=64: the special case (bank_lsb==64 && is_xg) does NOT apply
         // max(bank_msb=0, bank_lsb=64)=64 → matches preset's bank_msb=64
-        let p = select_preset(&presets, patch(10, 0, 64), SynthSystem::Gs);
+        let p = select(&presets, patch(10, 0, 64), MIDISystem::Gs, false);
         assert_eq!(p.program, 10);
         assert_eq!(p.bank_msb, 64);
     }
@@ -770,7 +874,7 @@ mod preset_selector_tests {
     fn test_single_preset_always_returns_it() {
         let presets = vec![melodic(0, 0, 0)];
         // Even a completely different patch returns the only preset
-        let p = select_preset(&presets, patch(99, 99, 99), SynthSystem::Gs);
+        let p = select(&presets, patch(99, 99, 99), MIDISystem::Gs, false);
         assert_eq!(p.program, 0);
     }
 
@@ -780,7 +884,7 @@ mod preset_selector_tests {
     fn test_drum_preset_not_returned_for_melodic_request() {
         let presets = vec![gm_gs_drum(10), melodic(10, 0, 0)];
         // Melodic request: drums should be filtered out from matching_programs
-        let p = select_preset(&presets, patch(10, 0, 0), SynthSystem::Gs);
+        let p = select(&presets, patch(10, 0, 0), MIDISystem::Gs, false);
         assert!(!p.is_gm_gs_drum);
         assert_eq!(p.program, 10);
     }
@@ -790,21 +894,24 @@ mod preset_selector_tests {
     #[test]
     fn test_get_any_drums_prefers_gm_gs_when_prefer_xg_false() {
         let presets = vec![xg_drum(0, 127), gm_gs_drum(0)];
-        let p = get_any_drums(&presets, false, true);
-        assert!(p.is_gm_gs_drum);
+        let flags = drum_flags(&presets, true);
+        let i = get_any_drums(&presets, &flags, false);
+        assert!(presets[i].is_gm_gs_drum);
     }
 
     #[test]
     fn test_get_any_drums_prefers_xg_when_prefer_xg_true() {
         let presets = vec![gm_gs_drum(0), xg_drum(0, 127)];
-        let p = get_any_drums(&presets, true, true);
-        assert!(p.is_xg_drums(true));
+        let flags = drum_flags(&presets, true);
+        let i = get_any_drums(&presets, &flags, true);
+        assert!(is_xg_drum(flags[i], presets[i].is_gm_gs_drum));
     }
 
     #[test]
     fn test_get_any_drums_returns_first_when_no_drum_found() {
         let presets = vec![melodic(0, 0, 0), melodic(10, 0, 0)];
-        let p = get_any_drums(&presets, false, false);
-        assert_eq!(p.program, 0); // first preset
+        let flags = drum_flags(&presets, false);
+        let i = get_any_drums(&presets, &flags, false);
+        assert_eq!(presets[i].program, 0); // first preset
     }
 }

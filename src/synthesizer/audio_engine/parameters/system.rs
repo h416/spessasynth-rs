@@ -145,7 +145,7 @@ mod tests {
         ALL_CHANNELS_OR_DIFFERENT_ACTION, SYNTHESIZER_GAIN, VOICE_CAP,
     };
     use crate::synthesizer::enums::interpolation_types;
-    use crate::synthesizer::types::SynthSystem;
+    use crate::soundbank::types::MIDISystem;
 
     // --- DEFAULT_MASTER_PARAMETERS: field values ---
 
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn test_default_midi_system_is_gs() {
-        assert_eq!(DEFAULT_MASTER_PARAMETERS.midi_system, SynthSystem::Gs);
+        assert_eq!(DEFAULT_MASTER_PARAMETERS.midi_system, MIDISystem::Gs);
     }
 
     #[test]

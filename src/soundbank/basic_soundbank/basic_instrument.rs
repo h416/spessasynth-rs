@@ -23,6 +23,7 @@ use crate::soundbank::basic_soundbank::modulator::Modulator;
 use crate::soundbank::soundfont::write::types::ExtendedSF2Chunks;
 use crate::utils::byte_functions::little_endian::write_word;
 use crate::utils::byte_functions::string::write_binary_string_indexed;
+use crate::utils::loggin::SpessaLog;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -92,8 +93,8 @@ pub struct BasicInstrument {
     pub zones: Vec<BasicInstrumentZone>,
 
     /// Global zone (generators/modulators applied to all zones).
-    /// `BasicGlobalZone` is a type alias for `BasicZone`.
-    /// Equivalent to: public readonly globalZone: BasicGlobalZone = new BasicGlobalZone()
+    /// Equivalent to: public readonly globalZone = new BasicZone()
+    /// (TS 4.3.0 removed the BasicGlobalZone subclass)
     pub global_zone: BasicZone,
 
     /// Preset indices that use this instrument (back-references).
@@ -186,10 +187,11 @@ impl BasicInstrument {
                 z.use_count = z.use_count.saturating_sub(1);
             }
         } else {
-            eprintln!(
-                "Cannot unlink preset {} from instrument {}: not linked.",
+            // Equivalent to: SpessaLog.warn(`Cannot unlink ${preset.name} from ${this.name}: not linked.`)
+            SpessaLog::warn(&format!(
+                "Cannot unlink preset {} from {}: not linked.",
                 preset_idx, self.name
-            );
+            ));
         }
     }
 
@@ -417,6 +419,8 @@ impl BasicInstrument {
     /// `index` is the starting bag (zone) index for this instrument.
     /// Equivalent to: public write(instData: ExtendedSF2Chunks, index: number)
     pub fn write(&self, inst_data: &mut ExtendedSF2Chunks, index: usize) {
+        // Equivalent to: SpessaLog.info(`%cWriting ${this.name}...`, ConsoleColors.info)
+        SpessaLog::info(&format!("Writing {}...", self.name));
         // Name: first 20 chars to pdta, next 20 chars to xdta.
         let first_20: String = self.name.chars().take(20).collect();
         let rest: String = self.name.chars().skip(20).collect();

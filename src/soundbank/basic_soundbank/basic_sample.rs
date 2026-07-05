@@ -19,7 +19,7 @@
 /// Vorbis decoding (`decode_vorbis_into_audio_data`) is needed for SF3 reading but
 /// will be implemented after adding the lewton / symphonia crate (TODO).
 use crate::soundbank::enums::{SampleType, sample_types};
-use crate::utils::loggin::spessa_synth_warn;
+use crate::utils::loggin::SpessaLog;
 
 /// Default resample target rate used when the sample rate is out of range.
 /// Equivalent to: const RESAMPLE_RATE = 48_000
@@ -312,7 +312,7 @@ impl BasicSample {
         if let Some(pos) = self.linked_to.iter().position(|&i| i == instrument_idx) {
             self.linked_to.remove(pos);
         } else {
-            spessa_synth_warn(&format!(
+            SpessaLog::warn(&format!(
                 "Cannot unlink instrument {} from '{}': not linked.",
                 instrument_idx, self.name
             ));
@@ -360,7 +360,7 @@ impl BasicSample {
     fn decode_vorbis_into_audio_data(&mut self) {
         // TODO: Add vorbis decoding crate (lewton or symphonia) to Cargo.toml.
         // Equivalent to the stbvorbis.decode() call in TypeScript.
-        spessa_synth_warn(&format!(
+        SpessaLog::warn(&format!(
             "decode_vorbis not implemented for sample '{}'. Filling with silence.",
             self.name
         ));

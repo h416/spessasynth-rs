@@ -10,7 +10,8 @@ use crate::synthesizer::audio_engine::channel::parameters::midi::{
 use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::enums::{custom_controllers, data_entry_states};
-use crate::synthesizer::types::{SynthProcessorEvent, SynthSystem};
+use crate::synthesizer::types::SynthProcessorEvent;
+use crate::soundbank::types::MIDISystem;
 use crate::utils::midi_hacks::BankSelectHacks;
 
 /// MIDI controller numbers that are NOT reset by resetControllers (RP-15).
@@ -59,13 +60,13 @@ impl MidiChannel {
         send_cc: bool,
         voices: &mut [Voice],
         current_time: f64,
-        current_system: SynthSystem,
+        current_system: MIDISystem,
     ) -> Vec<SynthProcessorEvent> {
         if self.locked_controllers[midi_controllers::PORTAMENTO_CONTROL as usize] {
             return Vec::new();
         }
         let ch_system = self.channel_system(current_system);
-        let value = if ch_system == SynthSystem::Xg { 60 } else { 0 };
+        let value = if ch_system == MIDISystem::Xg { 60 } else { 0 };
         self.controller_change(
             midi_controllers::PORTAMENTO_CONTROL,
             value,
@@ -88,7 +89,7 @@ impl MidiChannel {
         send_event: bool,
         voices: &mut [Voice],
         current_time: f64,
-        current_system: SynthSystem,
+        current_system: MIDISystem,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
         self.channel_octave_tuning.fill(0);
@@ -179,7 +180,7 @@ impl MidiChannel {
     pub fn reset_preset(
         &mut self,
         sound_bank_manager: &crate::synthesizer::audio_engine::sound_bank_manager::SoundBankManager,
-        current_system: SynthSystem,
+        current_system: MIDISystem,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
         let ch_system = self.channel_system(current_system);
@@ -208,7 +209,7 @@ impl MidiChannel {
         &mut self,
         voices: &mut [Voice],
         current_time: f64,
-        current_system: SynthSystem,
+        current_system: MIDISystem,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
         self.channel_octave_tuning.fill(0);

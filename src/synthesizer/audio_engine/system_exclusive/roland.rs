@@ -13,7 +13,8 @@ use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::{
 };
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::enums::custom_controllers;
-use crate::synthesizer::types::{MasterParameterChangeCallback, SynthSystem};
+use crate::synthesizer::types::MasterParameterChangeCallback;
+use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::spessa_synth_info;
 use crate::utils::byte_functions::string::read_binary_string;
 
@@ -344,9 +345,11 @@ impl SynthesizerCore {
 
                             0x06 => {
                                 // LFO1 amplitude depth
+                                // Note: 4.2.0 `vibLfoToVolume` semantics retained in slot 61
+                                // (renamed `amplitude` in TS 4.3.0); see render_voice.rs.
                                 self.midi_channels[channel].sys_ex_modulators.set_modulator(
                                     source,
-                                    generator_types::VIB_LFO_TO_VOLUME,
+                                    generator_types::AMPLITUDE,
                                     normalized_value * 960.0,
                                     is_bipolar,
                                     false,
@@ -425,11 +428,11 @@ impl SynthesizerCore {
                                 if message_value == 0x00 {
                                     // This is a GS reset
                                     spessa_synth_info("GS Reset received!");
-                                    self.reset_all_controllers(SynthSystem::Gs);
+                                    self.reset_all_controllers(MIDISystem::Gs);
                                 } else if message_value == 0x7f {
                                     // GS mode off
                                     spessa_synth_info("GS system off, switching to GM");
-                                    self.reset_all_controllers(SynthSystem::Gm);
+                                    self.reset_all_controllers(MIDISystem::Gm);
                                 }
                             }
 

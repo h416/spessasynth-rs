@@ -6,7 +6,7 @@ use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
 use crate::soundbank::basic_soundbank::basic_zone::BasicZone;
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 use crate::soundbank::downloadable_sounds::dls_verifier::verify_header;
-use crate::soundbank::enums::{DLSLoopType, dls_loop_types};
+use crate::soundbank::downloadable_sounds::enums::{DLSLoopType, dls_loop_types};
 use crate::soundbank::types::DLSLoop;
 use crate::synthesizer::types::SampleLoopingMode;
 use crate::utils::indexed_array::IndexedByteArray;
@@ -337,7 +337,8 @@ mod tests {
     use crate::soundbank::basic_soundbank::basic_zone::BasicZone;
     use crate::soundbank::basic_soundbank::generator::Generator;
     use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
-    use crate::soundbank::enums::{dls_loop_types, sample_types};
+    use crate::soundbank::downloadable_sounds::enums::dls_loop_types;
+    use crate::soundbank::enums::sample_types;
     use crate::utils::indexed_array::IndexedByteArray;
     use crate::utils::riff_chunk::{RIFFChunk, read_riff_chunk};
 

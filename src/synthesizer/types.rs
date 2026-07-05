@@ -1,20 +1,13 @@
 /// types.rs
 /// purpose: Common data types for the synthesizer.
 /// Ported from: src/synthesizer/types.ts
+///
+/// Note: TS 4.3.0 moved `SynthSystem` to soundbank/types.ts as `MIDISystem`;
+/// the Rust definition now lives in `crate::soundbank::types`.
 use crate::midi::enums::MidiController;
-use crate::soundbank::basic_soundbank::midi_patch::{MidiPatch, MidiPatchNamed};
+use crate::soundbank::basic_soundbank::midi_patch::{MidiPatch, MidiPatchFull};
+use crate::soundbank::types::MIDISystem;
 use crate::synthesizer::enums::InterpolationType;
-
-/// MIDI system mode.
-/// Equivalent to: SynthSystem
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum SynthSystem {
-    Gm,
-    Gm2,
-    #[default]
-    Gs,
-    Xg,
-}
 
 /// Equivalent to: NoteOnCallback
 #[derive(Clone, Copy, Debug)]
@@ -60,14 +53,12 @@ pub struct MuteChannelCallback {
     pub is_muted: bool,
 }
 
-/// Equivalent to: PresetListEntry (extends MIDIPatchNamed)
-#[derive(Clone, Debug)]
-pub struct PresetListEntry {
-    pub named: MidiPatchNamed,
-    pub is_any_drums: bool,
-}
+/// A preset list entry. TS 4.3.0 exposes the preset list as `MIDIPatchFull[]`
+/// (the separate PresetListEntry interface with `isAnyDrums` was removed).
+/// Equivalent to: MIDIPatchFull
+pub type PresetListEntry = MidiPatchFull;
 
-/// Equivalent to: PresetList
+/// Equivalent to: presetList: MIDIPatchFull[]
 pub type PresetList = Vec<PresetListEntry>;
 
 /// The synthesizer display system exclusive data, excluding the F0 byte.
@@ -122,7 +113,7 @@ pub struct MasterParameterType {
     /// Interpolation type used for sample playback.
     pub interpolation_type: InterpolationType,
     /// MIDI system used for bank selects and system exclusives.
-    pub midi_system: SynthSystem,
+    pub midi_system: MIDISystem,
     /// Monophonic retrigger mode (emulates Microsoft GS Wavetable Synth behavior).
     pub monophonic_retrigger_mode: bool,
     /// Reverb gain, from 0 to any number. 1 is 100% reverb.
@@ -147,7 +138,7 @@ pub enum MasterParameterChangeCallback {
     MasterPan(f64),
     VoiceCap(u32),
     InterpolationType(InterpolationType),
-    MidiSystem(SynthSystem),
+    MidiSystem(MIDISystem),
     MonophonicRetriggerMode(bool),
     ReverbGain(f64),
     ChorusGain(f64),
@@ -246,18 +237,18 @@ mod tests {
     use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
     use crate::synthesizer::enums::interpolation_types;
 
-    // --- SynthSystem ---
+    // --- MIDISystem ---
 
     #[test]
     fn test_synth_system_default_is_gs() {
-        assert_eq!(SynthSystem::default(), SynthSystem::Gs);
+        assert_eq!(MIDISystem::default(), MIDISystem::Gs);
     }
 
     #[test]
     fn test_synth_system_variants_distinct() {
-        assert_ne!(SynthSystem::Gm, SynthSystem::Gm2);
-        assert_ne!(SynthSystem::Gs, SynthSystem::Xg);
-        assert_ne!(SynthSystem::Gm, SynthSystem::Gs);
+        assert_ne!(MIDISystem::Gm, MIDISystem::Gm2);
+        assert_ne!(MIDISystem::Gs, MIDISystem::Xg);
+        assert_ne!(MIDISystem::Gm, MIDISystem::Gs);
     }
 
     // --- SynthMethodOptions ---
@@ -387,7 +378,7 @@ mod tests {
             master_pan: 0.0,
             voice_cap: 350,
             interpolation_type: interpolation_types::LINEAR,
-            midi_system: SynthSystem::Gs,
+            midi_system: MIDISystem::Gs,
             monophonic_retrigger_mode: false,
             reverb_gain: 1.0,
             chorus_gain: 1.0,
@@ -398,7 +389,7 @@ mod tests {
         };
         assert_eq!(mp.voice_cap, 350);
         assert_eq!(mp.device_id, -1);
-        assert_eq!(mp.midi_system, SynthSystem::Gs);
+        assert_eq!(mp.midi_system, MIDISystem::Gs);
     }
 
     // --- MasterParameterChangeCallback ---
@@ -407,7 +398,7 @@ mod tests {
     fn test_master_parameter_change_callback_variants() {
         let v1 = MasterParameterChangeCallback::MasterGain(1.5);
         let v2 = MasterParameterChangeCallback::VoiceCap(256);
-        let v3 = MasterParameterChangeCallback::MidiSystem(SynthSystem::Xg);
+        let v3 = MasterParameterChangeCallback::MidiSystem(MIDISystem::Xg);
         let v4 = MasterParameterChangeCallback::DeviceId(-1);
         let v5 = MasterParameterChangeCallback::BlackMidiMode(true);
 
