@@ -4,7 +4,7 @@
 use crate::midi::enums::midi_controllers;
 use crate::synthesizer::audio_engine::engine_components::synth_constants::MIN_NOTE_LENGTH;
 use crate::synthesizer::audio_engine::engine_components::voice::Voice;
-use crate::synthesizer::audio_engine::synthesizer_core::MidiChannel;
+use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
 use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::{NoteOffCallback, SynthProcessorEvent};
 use crate::utils::loggin::spessa_synth_warn;

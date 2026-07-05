@@ -3,7 +3,7 @@
 /// Ported from: src/synthesizer/audio_engine/engine_methods/program_change.ts
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::synthesizer::audio_engine::engine_components::sound_bank_manager::SoundBankManager;
-use crate::synthesizer::audio_engine::synthesizer_core::MidiChannel;
+use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
 use crate::synthesizer::types::{
     ChannelPropertyChangeCallback, ProgramChangeCallback, SynthProcessorEvent, SynthSystem,
 };

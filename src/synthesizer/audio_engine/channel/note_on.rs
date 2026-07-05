@@ -9,7 +9,7 @@ use crate::soundbank::basic_soundbank::modulator::Modulator;
 use crate::synthesizer::audio_engine::engine_components::compute_modulator::{
     compute_modulators, SourceFilter,
 };
-use crate::synthesizer::audio_engine::engine_methods::portamento_time::portamento_time_to_seconds;
+use crate::synthesizer::audio_engine::channel::portamento_time::portamento_time_to_seconds;
 use crate::synthesizer::audio_engine::engine_components::synth_constants::{
     GENERATOR_OVERRIDE_NO_CHANGE_VALUE, MIN_EXCLUSIVE_LENGTH,
 };

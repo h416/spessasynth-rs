@@ -2,13 +2,13 @@
 /// purpose: Controller reset handlers for MidiChannel.
 /// Ported from: src/synthesizer/audio_engine/engine_methods/controller_control/reset_controllers.ts
 use crate::midi::enums::midi_controllers;
-use crate::synthesizer::audio_engine::engine_components::controller_tables::{
+use crate::synthesizer::audio_engine::channel::drum_parameters::reset_drum_params;
+use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
+use crate::synthesizer::audio_engine::channel::parameters::midi::{
     CUSTOM_RESET_ARRAY, DEFAULT_MIDI_CONTROLLER_VALUES,
 };
-use crate::synthesizer::audio_engine::engine_components::drum_parameters::reset_drum_params;
 use crate::synthesizer::audio_engine::engine_components::synth_constants::DEFAULT_PERCUSSION;
 use crate::synthesizer::audio_engine::engine_components::voice::Voice;
-use crate::synthesizer::audio_engine::synthesizer_core::MidiChannel;
 use crate::synthesizer::enums::{custom_controllers, data_entry_states};
 use crate::synthesizer::types::{SynthProcessorEvent, SynthSystem};
 use crate::utils::midi_hacks::BankSelectHacks;

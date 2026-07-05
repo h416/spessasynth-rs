@@ -5,7 +5,7 @@ use crate::soundbank::basic_soundbank::generator_types::GeneratorType;
 use crate::soundbank::basic_soundbank::modulator::Modulator;
 use crate::soundbank::basic_soundbank::modulator_source::ModulatorSource;
 use crate::soundbank::enums::{ModulatorSourceEnum, modulator_curve_types};
-use crate::synthesizer::audio_engine::engine_components::controller_tables::NON_CC_INDEX_OFFSET;
+use crate::synthesizer::audio_engine::channel::parameters::midi::NON_CC_INDEX_OFFSET;
 
 // ---------------------------------------------------------------------------
 // DynamicModulatorEntry
@@ -124,7 +124,7 @@ impl DynamicModulatorSystem {
 mod tests {
     use super::*;
     use crate::soundbank::basic_soundbank::generator_types::generator_types;
-    use crate::synthesizer::audio_engine::engine_components::controller_tables::NON_CC_INDEX_OFFSET;
+    use crate::synthesizer::audio_engine::channel::parameters::midi::NON_CC_INDEX_OFFSET;
 
     // -----------------------------------------------------------------------
     // Helpers

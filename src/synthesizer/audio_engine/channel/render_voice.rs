@@ -10,7 +10,7 @@ use crate::synthesizer::audio_engine::engine_components::unit_converter::{
     abs_cents_to_hz, cb_attenuation_to_gain, timecents_to_seconds,
 };
 use crate::synthesizer::audio_engine::engine_components::voice::Voice;
-use crate::synthesizer::audio_engine::synthesizer_core::MidiChannel;
+use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
 use crate::synthesizer::enums::custom_controllers;
 use crate::utils::loggin::spessa_synth_warn;
 

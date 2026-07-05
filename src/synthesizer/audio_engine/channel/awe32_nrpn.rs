@@ -8,7 +8,7 @@ use crate::soundbank::basic_soundbank::generator_types::GeneratorType;
 ///   https://github.com/user-attachments/files/15757220/adip301.pdf
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 use crate::synthesizer::audio_engine::engine_components::voice::Voice;
-use crate::synthesizer::audio_engine::synthesizer_core::MidiChannel;
+use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
 use crate::utils::loggin::spessa_synth_warn;
 
 /// AWE32 NRPN generator index → SF2 GeneratorType mapping.

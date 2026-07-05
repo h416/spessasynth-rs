@@ -6,12 +6,12 @@ use crate::synthesizer::audio_engine::engine_components::synth_constants::{
     DEFAULT_PERCUSSION, MIN_NOTE_LENGTH,
 };
 use crate::synthesizer::audio_engine::engine_components::voice::Voice;
-use crate::synthesizer::audio_engine::synthesizer_core::MidiChannel;
+use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
 use crate::synthesizer::enums::{custom_controllers, data_entry_states};
 use crate::synthesizer::types::{ControllerChangeCallback, SynthProcessorEvent, SynthSystem};
 use crate::utils::midi_hacks::BankSelectHacks;
 
-use super::data_entry::data_entry_coarse::non_registered_msb;
+use super::data_entry::non_registered_msb;
 
 impl MidiChannel {
     /// Handles a MIDI controller change for this channel.

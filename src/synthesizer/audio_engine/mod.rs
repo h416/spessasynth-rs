@@ -1,3 +1,4 @@
+pub mod channel;
 pub mod effects;
 pub mod engine_components;
 pub mod engine_methods;

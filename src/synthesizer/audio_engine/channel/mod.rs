@@ -1,0 +1,14 @@
+pub mod awe32_nrpn;
+pub mod channel_snapshot;
+pub mod controller_change;
+pub mod data_entry;
+pub mod drum_parameters;
+pub mod dynamic_modulator_system;
+pub mod midi_channel;
+pub mod note_off;
+pub mod note_on;
+pub mod parameters;
+pub mod portamento_time;
+pub mod program_change;
+pub mod render_voice;
+pub mod reset;

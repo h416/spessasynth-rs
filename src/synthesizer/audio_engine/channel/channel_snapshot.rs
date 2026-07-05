@@ -8,11 +8,12 @@
 /// `&SynthesizerCore` / `&mut SynthesizerCore` directly, eliminating the
 /// dependency on the (not-yet-ported) `processor.rs`.
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatchNamed;
-use crate::synthesizer::audio_engine::engine_components::controller_tables::{
+use crate::synthesizer::audio_engine::channel::drum_parameters::DrumParameters;
+use crate::synthesizer::audio_engine::channel::midi_channel::ChannelVibrato;
+use crate::synthesizer::audio_engine::channel::parameters::midi::{
     CONTROLLER_TABLE_SIZE, CUSTOM_CONTROLLER_TABLE_SIZE,
 };
-use crate::synthesizer::audio_engine::engine_components::drum_parameters::DrumParameters;
-use crate::synthesizer::audio_engine::synthesizer_core::{ChannelVibrato, SynthesizerCore};
+use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::types::SynthSystem;
 
 /// Snapshot of a single MIDI channel's state.
@@ -234,7 +235,7 @@ impl ChannelSnapshot {
 mod tests {
     use super::*;
     use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
-    use crate::synthesizer::audio_engine::engine_components::controller_tables::CUSTOM_CONTROLLER_TABLE_SIZE;
+    use crate::synthesizer::audio_engine::channel::parameters::midi::CUSTOM_CONTROLLER_TABLE_SIZE;
     use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
     use crate::synthesizer::types::{SynthProcessorEvent, SynthProcessorOptions, SynthSystem};
     use std::sync::{Arc, Mutex};

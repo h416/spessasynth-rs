@@ -10,7 +10,7 @@ use crate::soundbank::basic_soundbank::modulator_curves::{
 };
 use crate::soundbank::enums::{ModulatorCurveType, modulator_curve_types, modulator_sources};
 use crate::soundbank::types::ModulatorSourceIndex;
-use crate::synthesizer::audio_engine::engine_components::controller_tables::NON_CC_INDEX_OFFSET;
+use crate::synthesizer::audio_engine::channel::parameters::midi::NON_CC_INDEX_OFFSET;
 use crate::utils::byte_functions::bit_mask::{bit_mask_to_bool, to_numeric_bool};
 
 // ---------------------------------------------------------------------------
@@ -290,7 +290,7 @@ fn curve_type_name(curve_type: ModulatorCurveType) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::synthesizer::audio_engine::engine_components::controller_tables::{
+    use crate::synthesizer::audio_engine::channel::parameters::midi::{
         CONTROLLER_TABLE_SIZE, DEFAULT_MIDI_CONTROLLER_VALUES,
     };
 
