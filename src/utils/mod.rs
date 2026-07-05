@@ -1,13 +1,21 @@
 /// utils/mod.rs
 /// purpose: Public API of the utils module.
-/// Ported from: src/utils/exports.ts
+/// Ported from: src/utils/exports.ts (spessasynth_core 4.3.0)
 ///
 /// Per CLAUDE.md, TypeScript's `exports.ts` maps to `mod.rs` in Rust.
 /// Types/constants are defined here; re-exports expose sub-module items.
 ///
 /// Note: `SpessaSynthCoreUtils` (a JS-only utility aggregate object) is not ported.
+///
+/// Note: `sysex_detector.rs` is scheduled for removal in 4.3.0 (its `isXGOn`/`isGSOn`/etc.
+/// detectors were replaced by a new abstraction in `midi/midi_tools/midi_utils.ts` /
+/// `parameter_tracker.ts`). Its 3 Rust call sites (`midi/write/rmidi.rs`,
+/// `midi/midi_tools/{modify_midi,used_programs_and_keys}.rs`) require that new abstraction to
+/// be ported first, so deletion is deferred to Task 17/18 per the task's own escape hatch; the
+/// module is kept as-is for now.
 pub mod byte_functions;
 pub mod date;
+pub mod fill_with_defaults;
 pub mod indexed_array;
 pub mod loggin;
 pub mod midi_hacks;
@@ -73,15 +81,5 @@ impl Default for WaveWriteOptions {
     }
 }
 
-/// Default WAV write options.
-/// Equivalent to: `DEFAULT_WAV_WRITE_OPTIONS` in exports.ts
-pub const DEFAULT_WAV_WRITE_OPTIONS: WaveWriteOptions = WaveWriteOptions {
-    normalize_audio: true,
-    loop_points: None,
-    metadata: WaveMetadata {
-        title: None,
-        artist: None,
-        album: None,
-        genre: None,
-    },
-};
+// Note: `DEFAULT_WAV_WRITE_OPTIONS` moved to `write_wav.rs` in 4.3.0 (it is no longer part of
+// `exports.ts` / the package's public API); see `write_wav::DEFAULT_WAV_WRITE_OPTIONS`.

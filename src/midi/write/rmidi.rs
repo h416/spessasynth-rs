@@ -218,7 +218,7 @@ fn correct_bank_offset_internal(
             let patch = MidiPatch {
                 program: sent_program,
                 bank_lsb: last_bank_lsb_data,
-                bank_msb: BankSelectHacks::subtrak_bank_offset(
+                bank_msb: BankSelectHacks::subtract_bank_offset(
                     last_bank_data,
                     mid.bank_offset as u8,
                     false,

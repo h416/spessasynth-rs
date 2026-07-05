@@ -1,6 +1,10 @@
 /// other.rs
 /// purpose: Miscellaneous utility functions.
-/// Ported from: src/utils/other.ts
+/// Ported from: src/utils/other.ts (spessasynth_core 4.3.0)
+///
+/// Note: TS 4.3.0 renamed `consoleColors` to `ConsoleColors` (naming-only, values unchanged).
+/// Rust already uses the idiomatic `console_colors` module with SCREAMING_SNAKE_CASE constants,
+/// so no change was needed for that rename.
 /// Return value of format_time().
 /// Equivalent to: { minutes, seconds, time }
 pub struct FormattedTime {
@@ -23,11 +27,16 @@ pub fn format_time(total_seconds: f64) -> FormattedTime {
 }
 
 /// Converts a byte slice to a space-separated uppercase hex string.
+/// Note: 4.3.0 changed this to only insert a space *between* elements (no trailing space
+/// after the last byte); 4.2.0 always appended a trailing space.
 /// Equivalent to: arrayToHexString
 pub fn array_to_hex_string(arr: &[u8]) -> String {
     let mut hex_string = String::new();
-    for &byte in arr {
-        hex_string.push_str(&format!("{:02X} ", byte));
+    for (i, &byte) in arr.iter().enumerate() {
+        hex_string.push_str(&format!("{:02X}", byte));
+        if i < arr.len() - 1 {
+            hex_string.push(' ');
+        }
     }
     hex_string
 }
@@ -119,36 +128,37 @@ mod tests {
 
     #[test]
     fn test_hex_string_single_byte_zero() {
-        assert_eq!(array_to_hex_string(&[0x00]), "00 ");
+        assert_eq!(array_to_hex_string(&[0x00]), "00");
     }
 
     #[test]
     fn test_hex_string_single_byte_ff() {
-        assert_eq!(array_to_hex_string(&[0xFF]), "FF ");
+        assert_eq!(array_to_hex_string(&[0xFF]), "FF");
     }
 
     #[test]
     fn test_hex_string_multiple_bytes() {
-        assert_eq!(array_to_hex_string(&[0x00, 0xFF, 0xAB]), "00 FF AB ");
+        assert_eq!(array_to_hex_string(&[0x00, 0xFF, 0xAB]), "00 FF AB");
     }
 
     #[test]
     fn test_hex_string_uppercase() {
         // Letters must be uppercase
-        assert_eq!(array_to_hex_string(&[0xde, 0xad]), "DE AD ");
+        assert_eq!(array_to_hex_string(&[0xde, 0xad]), "DE AD");
     }
 
     #[test]
     fn test_hex_string_pads_single_nibble() {
         // 0x0F → "0F"
-        assert_eq!(array_to_hex_string(&[0x0F]), "0F ");
+        assert_eq!(array_to_hex_string(&[0x0F]), "0F");
     }
 
     #[test]
-    fn test_hex_string_trailing_space() {
-        // Each byte is followed by a space, including the last
+    fn test_hex_string_no_trailing_space() {
+        // 4.3.0: space is only inserted *between* elements, not after the last one
         let s = array_to_hex_string(&[0x01, 0x02]);
-        assert!(s.ends_with(' '));
+        assert!(!s.ends_with(' '));
+        assert_eq!(s, "01 02");
     }
 
     // --- console_colors ---

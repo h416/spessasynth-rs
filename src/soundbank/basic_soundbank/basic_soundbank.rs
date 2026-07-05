@@ -549,7 +549,7 @@ impl BasicSoundBank {
         ];
 
         for preset in &self.presets {
-            if BankSelectHacks::is_xg_drums(preset.bank_msb) {
+            if BankSelectHacks::is_xg_drum(preset.bank_msb) {
                 self._is_xg_bank = true;
                 if !ALLOWED.contains(&preset.program) {
                     self._is_xg_bank = false;

@@ -1,6 +1,11 @@
 /// midi_hacks.rs
 /// purpose: Bank select hacks for GS, XG, GM2 patch selection compatibility.
-/// Ported from: src/utils/midi_hacks.ts
+/// Ported from: src/utils/midi_hacks.ts (spessasynth_core 4.3.0)
+///
+/// Note: TS 4.3.0 renamed the `SynthSystem` type to `MIDISystem` and relocated it from
+/// `synthesizer/types.ts` to `soundbank/types.ts`. That rename/relocation touches ~22 files
+/// across the synthesizer/soundbank/midi modules and is deferred to Task 14 (which already
+/// owns `src/soundbank/types.rs`); `SynthSystem` is kept as-is here for now.
 use crate::synthesizer::types::SynthSystem;
 
 /// XG SFX Voice bank MSB.
@@ -41,8 +46,8 @@ impl BankSelectHacks {
     }
 
     /// Returns `true` if `bank_msb` corresponds to an XG drum bank (120 or 127).
-    /// Equivalent to: BankSelectHacks.isXGDrums
-    pub fn is_xg_drums(bank_msb: u8) -> bool {
+    /// Equivalent to: BankSelectHacks.isXGDrum (renamed from isXGDrums in 4.3.0)
+    pub fn is_xg_drum(bank_msb: u8) -> bool {
         bank_msb == 120 || bank_msb == 127
     }
 
@@ -50,7 +55,7 @@ impl BankSelectHacks {
     /// (XG drums, XG SFX voice, or GM2 default bank).
     /// Equivalent to: BankSelectHacks.isValidXGMSB
     pub fn is_valid_xg_msb(bank_msb: u8) -> bool {
-        Self::is_xg_drums(bank_msb) || bank_msb == XG_SFX_VOICE || bank_msb == GM2_DEFAULT_BANK
+        Self::is_xg_drum(bank_msb) || bank_msb == XG_SFX_VOICE || bank_msb == GM2_DEFAULT_BANK
     }
 
     /// Returns `true` if the system belongs to the XG family (GM2 or XG).
@@ -60,20 +65,22 @@ impl BankSelectHacks {
     }
 
     /// Adds `bank_offset` to `bank_msb`, clamped to 127.
-    /// When `xg_drums` is `true`, XG drum banks (120, 127) are returned unchanged.
-    /// Equivalent to: BankSelectHacks.addBankOffset
-    pub fn add_bank_offset(bank_msb: u8, bank_offset: u8, xg_drums: bool) -> u8 {
-        if xg_drums && Self::is_xg_drums(bank_msb) {
+    /// When `is_xg` is `true`, XG drum banks (120, 127) are returned unchanged.
+    /// Equivalent to: BankSelectHacks.addBankOffset(bankMSB, bankOffset, isXG)
+    pub fn add_bank_offset(bank_msb: u8, bank_offset: u8, is_xg: bool) -> u8 {
+        // Do not change XG drums (120, 127)
+        if is_xg && Self::is_xg_drum(bank_msb) {
             return bank_msb;
         }
         (bank_msb as u16 + bank_offset as u16).min(127) as u8
     }
 
     /// Subtracts `bank_offset` from `bank_msb`, clamped to 0.
-    /// When `xg_drums` is `true`, XG drum banks (120, 127) are returned unchanged.
-    /// Equivalent to: BankSelectHacks.subtrackBankOffset (note: TS typo preserved)
-    pub fn subtrak_bank_offset(bank_msb: u8, bank_offset: u8, xg_drums: bool) -> u8 {
-        if xg_drums && Self::is_xg_drums(bank_msb) {
+    /// When `is_xg` is `true`, XG drum banks (120, 127) are returned unchanged.
+    /// Equivalent to: BankSelectHacks.subtractBankOffset (4.3.0 fixed the "subtrack" typo)
+    pub fn subtract_bank_offset(bank_msb: u8, bank_offset: u8, is_xg: bool) -> u8 {
+        // Do not change XG drums (120, 127)
+        if is_xg && Self::is_xg_drum(bank_msb) {
             return bank_msb;
         }
         bank_msb.saturating_sub(bank_offset)
@@ -135,31 +142,31 @@ mod tests {
         assert_eq!(BankSelectHacks::get_drum_bank(SynthSystem::Gs), None);
     }
 
-    // --- is_xg_drums ---
+    // --- is_xg_drum ---
 
     #[test]
-    fn test_is_xg_drums_120_true() {
-        assert!(BankSelectHacks::is_xg_drums(120));
+    fn test_is_xg_drum_120_true() {
+        assert!(BankSelectHacks::is_xg_drum(120));
     }
 
     #[test]
-    fn test_is_xg_drums_127_true() {
-        assert!(BankSelectHacks::is_xg_drums(127));
+    fn test_is_xg_drum_127_true() {
+        assert!(BankSelectHacks::is_xg_drum(127));
     }
 
     #[test]
-    fn test_is_xg_drums_0_false() {
-        assert!(!BankSelectHacks::is_xg_drums(0));
+    fn test_is_xg_drum_0_false() {
+        assert!(!BankSelectHacks::is_xg_drum(0));
     }
 
     #[test]
-    fn test_is_xg_drums_64_false() {
-        assert!(!BankSelectHacks::is_xg_drums(64));
+    fn test_is_xg_drum_64_false() {
+        assert!(!BankSelectHacks::is_xg_drum(64));
     }
 
     #[test]
-    fn test_is_xg_drums_121_false() {
-        assert!(!BankSelectHacks::is_xg_drums(121));
+    fn test_is_xg_drum_121_false() {
+        assert!(!BankSelectHacks::is_xg_drum(121));
     }
 
     // --- is_valid_xg_msb ---
@@ -253,36 +260,36 @@ mod tests {
         assert_eq!(BankSelectHacks::add_bank_offset(100, 27, true), 127);
     }
 
-    // --- subtrak_bank_offset ---
+    // --- subtract_bank_offset ---
 
     #[test]
-    fn test_subtrak_bank_offset_normal() {
-        assert_eq!(BankSelectHacks::subtrak_bank_offset(20, 5, true), 15);
+    fn test_subtract_bank_offset_normal() {
+        assert_eq!(BankSelectHacks::subtract_bank_offset(20, 5, true), 15);
     }
 
     #[test]
-    fn test_subtrak_bank_offset_clamps_to_0() {
-        assert_eq!(BankSelectHacks::subtrak_bank_offset(3, 10, false), 0);
+    fn test_subtract_bank_offset_clamps_to_0() {
+        assert_eq!(BankSelectHacks::subtract_bank_offset(3, 10, false), 0);
     }
 
     #[test]
-    fn test_subtrak_bank_offset_xg_drums_preserved_when_flag_true() {
-        assert_eq!(BankSelectHacks::subtrak_bank_offset(120, 5, true), 120);
-        assert_eq!(BankSelectHacks::subtrak_bank_offset(127, 5, true), 127);
+    fn test_subtract_bank_offset_xg_drums_preserved_when_flag_true() {
+        assert_eq!(BankSelectHacks::subtract_bank_offset(120, 5, true), 120);
+        assert_eq!(BankSelectHacks::subtract_bank_offset(127, 5, true), 127);
     }
 
     #[test]
-    fn test_subtrak_bank_offset_xg_drums_modified_when_flag_false() {
-        assert_eq!(BankSelectHacks::subtrak_bank_offset(120, 5, false), 115);
+    fn test_subtract_bank_offset_xg_drums_modified_when_flag_false() {
+        assert_eq!(BankSelectHacks::subtract_bank_offset(120, 5, false), 115);
     }
 
     #[test]
-    fn test_subtrak_bank_offset_zero_offset() {
-        assert_eq!(BankSelectHacks::subtrak_bank_offset(50, 0, true), 50);
+    fn test_subtract_bank_offset_zero_offset() {
+        assert_eq!(BankSelectHacks::subtract_bank_offset(50, 0, true), 50);
     }
 
     #[test]
-    fn test_subtrak_bank_offset_result_exactly_0() {
-        assert_eq!(BankSelectHacks::subtrak_bank_offset(10, 10, true), 0);
+    fn test_subtract_bank_offset_result_exactly_0() {
+        assert_eq!(BankSelectHacks::subtract_bank_offset(10, 10, true), 0);
     }
 }

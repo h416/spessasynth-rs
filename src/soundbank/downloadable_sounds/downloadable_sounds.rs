@@ -228,7 +228,7 @@ impl DownloadableSounds {
             let drum_idx = dls
                 .instruments
                 .iter()
-                .position(|i| BankSelectHacks::is_xg_drums(i.bank_msb) || i.is_gm_gs_drum);
+                .position(|i| BankSelectHacks::is_xg_drum(i.bank_msb) || i.is_gm_gs_drum);
             if drum_idx.is_none() {
                 spessa_synth_warn("MobileBAE aliasing chunk without a drum preset. Aborting!");
                 spessa_synth_group_end();

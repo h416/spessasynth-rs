@@ -1,15 +1,33 @@
-use crate::utils::WaveWriteOptions;
+use crate::utils::{WaveMetadata, WaveWriteOptions};
 /// write_wav.rs
 /// purpose: Writes audio data to WAV file format (RIFF/PCM).
-/// Ported from: src/utils/write_wav.ts
+/// Ported from: src/utils/write_wav.ts (spessasynth_core 4.3.0)
 ///
-/// Note: `fillWithDefaults` from TypeScript is replaced by `Option::unwrap_or_default()`.
-/// `WaveWriteOptions` / `WaveMetadata` are defined in `utils/mod.rs` (exports.ts mapping).
+/// Note: `DEFAULT_WAV_WRITE_OPTIONS` moved here from `exports.ts` in 4.3.0 (it is no longer
+/// part of the package's public API); the Rust constant moved out of `utils/mod.rs`
+/// accordingly. `RIFFChunk.write`/`RIFFChunk.writeParts` (formerly free functions
+/// `writeRIFFChunkRaw`/`writeRIFFChunkParts`) are called via the new `RIFFChunk::` associated
+/// functions to match the 4.3.0 call sites exactly.
+use crate::utils::fill_with_defaults::fill_with_defaults;
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::write_little_endian_indexed;
-use crate::utils::riff_chunk::{write_riff_chunk_parts, write_riff_chunk_raw};
+use crate::utils::riff_chunk::RIFFChunk;
 use crate::utils::byte_functions::string::write_binary_string_indexed;
 use std::ops::Deref;
+
+/// Default WAV write options.
+/// Equivalent to: `DEFAULT_WAV_WRITE_OPTIONS` in write_wav.ts (moved here from exports.ts in
+/// 4.3.0)
+pub const DEFAULT_WAV_WRITE_OPTIONS: WaveWriteOptions = WaveWriteOptions {
+    normalize_audio: true,
+    loop_points: None,
+    metadata: WaveMetadata {
+        title: None,
+        artist: None,
+        album: None,
+        genre: None,
+    },
+};
 
 /// Writes audio data into a valid WAV file and returns the raw bytes.
 ///
@@ -31,8 +49,7 @@ pub fn audio_to_wav(
     let num_channels = audio_data.len();
     let bytes_per_sample: usize = 2; // 16-bit PCM
 
-    // fillWithDefaults(options, DEFAULT_WAV_WRITE_OPTIONS)
-    let full_options = options.unwrap_or_default();
+    let full_options = fill_with_defaults(options, DEFAULT_WAV_WRITE_OPTIONS);
     let loop_points = full_options.loop_points.as_ref();
     let metadata = &full_options.metadata;
 
@@ -47,27 +64,27 @@ pub fn audio_to_wav(
         let mut sub_chunks: Vec<IndexedByteArray> = Vec::new();
 
         // "Created with SpessaSynth" comment is always added when any metadata is present
-        sub_chunks.push(write_riff_chunk_raw(
+        sub_chunks.push(RIFFChunk::write(
             "ICMT",
             b"Created with SpessaSynth",
             true,
             false,
         ));
         if let Some(artist) = &metadata.artist {
-            sub_chunks.push(write_riff_chunk_raw("IART", artist.as_bytes(), true, false));
+            sub_chunks.push(RIFFChunk::write("IART", artist.as_bytes(), true, false));
         }
         if let Some(album) = &metadata.album {
-            sub_chunks.push(write_riff_chunk_raw("IPRD", album.as_bytes(), true, false));
+            sub_chunks.push(RIFFChunk::write("IPRD", album.as_bytes(), true, false));
         }
         if let Some(genre) = &metadata.genre {
-            sub_chunks.push(write_riff_chunk_raw("IGNR", genre.as_bytes(), true, false));
+            sub_chunks.push(RIFFChunk::write("IGNR", genre.as_bytes(), true, false));
         }
         if let Some(title) = &metadata.title {
-            sub_chunks.push(write_riff_chunk_raw("INAM", title.as_bytes(), true, false));
+            sub_chunks.push(RIFFChunk::write("INAM", title.as_bytes(), true, false));
         }
 
         let sub_refs: Vec<&[u8]> = sub_chunks.iter().map(|c| c.deref()).collect();
-        write_riff_chunk_parts("INFO", &sub_refs, true).to_vec()
+        RIFFChunk::write_parts("INFO", &sub_refs, true).to_vec()
     } else {
         vec![]
     };
@@ -101,7 +118,7 @@ pub fn audio_to_wav(
 
         let cue_count = IndexedByteArray::from_vec(vec![2, 0, 0, 0]); // 2 cue points (LE u32)
         let sub_refs: Vec<&[u8]> = vec![&*cue_count, &*cue_start, &*cue_end];
-        write_riff_chunk_parts("cue ", &sub_refs, false).to_vec()
+        RIFFChunk::write_parts("cue ", &sub_refs, false).to_vec()
     } else {
         vec![]
     };

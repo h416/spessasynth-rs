@@ -166,13 +166,13 @@ impl BasicPreset {
     /// Returns true if this is an XG drum preset.
     /// Equivalent to: public get isXGDrums()
     pub fn is_xg_drums(&self, is_xg_bank: bool) -> bool {
-        is_xg_bank && BankSelectHacks::is_xg_drums(self.bank_msb)
+        is_xg_bank && BankSelectHacks::is_xg_drum(self.bank_msb)
     }
 
     /// Returns true if this is any kind of drum preset (GM/GS or XG).
     /// Equivalent to: public get isAnyDrums()
     pub fn is_any_drums(&self, is_xg_bank: bool) -> bool {
-        self.is_gm_gs_drum || (is_xg_bank && BankSelectHacks::is_xg_drums(self.bank_msb))
+        self.is_gm_gs_drum || (is_xg_bank && BankSelectHacks::is_xg_drum(self.bank_msb))
     }
 
     // -----------------------------------------------------------------------

@@ -1,10 +1,12 @@
 /// variable_length_quantity.rs
 /// purpose: Variable-length quantity (VLQ) encoding used in MIDI files.
-/// Ported from: src/utils/byte_functions/variable_length_quantity.ts
+/// Ported from: src/utils/byte_functions/variable_length_quantity.ts (spessasynth_core 4.3.0;
+/// only change from 4.2.0 is the `MIDIbyteArray` -> `midiByteArray` parameter rename, no
+/// behavior change)
 use crate::utils::indexed_array::IndexedByteArray;
 
 /// Reads a VLQ-encoded integer from an IndexedByteArray, advancing current_index.
-/// Equivalent to: readVariableLengthQuantity(MIDIbyteArray)
+/// Equivalent to: readVariableLengthQuantity(midiByteArray)
 pub fn read_variable_length_quantity(data: &mut IndexedByteArray) -> u32 {
     let mut out: u32 = 0;
     loop {

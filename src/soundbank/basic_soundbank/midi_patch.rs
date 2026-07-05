@@ -384,7 +384,7 @@ pub fn select_preset(
     let bank_msb = patch.bank_msb;
     let program = patch.program;
     let is_xg = BankSelectHacks::is_system_xg(system);
-    let xg_drums = BankSelectHacks::is_xg_drums(bank_msb) && is_xg;
+    let xg_drums = BankSelectHacks::is_xg_drum(bank_msb) && is_xg;
 
     // Check for exact match
     let exact = presets.iter().find(|p| p.matches(&patch));

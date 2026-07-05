@@ -1,10 +1,19 @@
-/// load_date.rs
-/// Purpose: Parse a date string from various formats into a NaiveDateTime.
-/// Ported from: src/utils/load_date.ts
+/// date.rs
+/// Purpose: Parse a date string from various formats into a NaiveDateTime, and format a
+/// NaiveDateTime back into an ISO 8601 string.
+/// Ported from: src/utils/date.ts (spessasynth_core 4.3.0; file renamed from load_date.ts,
+/// which added `toISODateString` and switched to `SpessaLog.warn`)
 use chrono::{Local, NaiveDate, NaiveDateTime};
 use regex::Regex;
 
-use crate::utils::loggin::spessa_synth_warn;
+use crate::utils::loggin::SpessaLog;
+
+/// Formats a `NaiveDateTime` as an ISO 8601 string without a fractional-seconds component,
+/// terminated with "Z" (mirrors `date.toISOString().split(".")[0] + "Z"`).
+/// Equivalent to: `toISODateString(date)`
+pub fn to_iso_date_string(date: NaiveDateTime) -> String {
+    format!("{}Z", date.format("%Y-%m-%dT%H:%M:%S"))
+}
 
 /// Portuguese → English weekday and month translations.
 /// Needed for soundfont date strings like "sábado 26 setembro 2020, 16:40:14".
@@ -165,7 +174,7 @@ pub fn parse_date_string(date_string: &str) -> NaiveDateTime {
         return dt;
     }
 
-    spessa_synth_warn(&format!(
+    SpessaLog::warn(&format!(
         "Invalid date: \"{date_string}\". Replacing with the current date!"
     ));
     Local::now().naive_local()
@@ -187,6 +196,36 @@ mod tests {
             .unwrap()
             .and_hms_opt(h, mi, s)
             .unwrap()
+    }
+
+    // --- to_iso_date_string (new in 4.3.0) ---
+
+    #[test]
+    fn test_to_iso_date_string_basic() {
+        assert_eq!(
+            to_iso_date_string(ymdhms(2020, 9, 26, 16, 40, 14)),
+            "2020-09-26T16:40:14Z"
+        );
+    }
+
+    #[test]
+    fn test_to_iso_date_string_midnight() {
+        assert_eq!(to_iso_date_string(ymd(2000, 1, 1)), "2000-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn test_to_iso_date_string_no_fractional_seconds() {
+        // Even if the NaiveDateTime carried fractional seconds, the ISO string must not.
+        let dt = ymdhms(2023, 12, 31, 23, 59, 59);
+        let s = to_iso_date_string(dt);
+        assert!(!s.contains('.'));
+        assert!(s.ends_with('Z'));
+    }
+
+    #[test]
+    fn test_to_iso_date_string_roundtrip_with_parse() {
+        let parsed = parse_date_string("2020-09-26T16:40:14");
+        assert_eq!(to_iso_date_string(parsed), "2020-09-26T16:40:14Z");
     }
 
     // --- Empty string / whitespace only ---

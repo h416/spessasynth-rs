@@ -1,16 +1,30 @@
 /// riff_chunk.rs
 /// purpose: RIFF chunk read/write utilities.
-/// Ported from: src/utils/riff_chunk.ts
+/// Ported from: src/utils/riff_chunk.ts (spessasynth_core 4.3.0)
 ///
 /// Note: TypeScript's `WAVFourCC`, `GenericRIFFFourCC`, and `FourCC` are string literal union
 /// types used only for documentation/type checking. In Rust these are represented as `String`.
 /// Per CLAUDE.md, these type aliases are defined here (not in soundbank/types.rs) to avoid
 /// the circular dependency that exists in the TypeScript version.
+///
+/// TS 4.3.0 turned the free functions `readRIFFChunk` / `writeRIFFChunkRaw` /
+/// `writeRIFFChunkParts` / `findRIFFListType` into static methods on the `RIFFChunk` class
+/// (`RIFFChunk.read` / `RIFFChunk.write` / `RIFFChunk.writeParts` / `RIFFChunk.findListType`),
+/// and added a new `RIFFChunk.getParts` method. This is a purely organizational change (no
+/// behavior difference) plus the new `getParts` capability.
+///
+/// The associated functions below mirror the new 4.3.0 class layout 1:1. The original free
+/// functions (`read_riff_chunk`, `write_riff_chunk_raw`, `write_riff_chunk_parts`,
+/// `find_riff_list_type`) are kept as thin backward-compatible wrappers because ~15 other
+/// files (soundbank/*, midi/*) that are out of scope for this task still call them; those call
+/// sites will be migrated to `RIFFChunk::...` as each of those files is ported in later
+/// phase-2 tasks (Task 15/16/17).
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, write_dword};
 use crate::utils::byte_functions::string::{
-    read_binary_string, read_binary_string_indexed, write_binary_string_indexed,
+    get_string_bytes, read_binary_string, read_binary_string_indexed, write_binary_string_indexed,
 };
+use std::borrow::Cow;
 
 /// Equivalent to TypeScript's `GenericRIFFFourCC = "RIFF" | "LIST" | "INFO"`.
 pub type GenericRIFFFourCC = String;
@@ -40,150 +54,246 @@ impl RIFFChunk {
     pub fn new(header: FourCC, size: u32, data: IndexedByteArray) -> Self {
         Self { header, size, data }
     }
+
+    /// Reads a RIFF chunk from an array.
+    /// * `data_array` - the array to read from.
+    /// * `read_data` - if the data should be read as well.
+    /// * `force_shift` - if the index should be shifted to the end of the chunk even if the
+    ///   data has not been read.
+    ///
+    /// Equivalent to: `RIFFChunk.read(dataArray, readData = true, forceShift = false)`
+    pub fn read(data_array: &mut IndexedByteArray, read_data: bool, force_shift: bool) -> RIFFChunk {
+        let header = read_binary_string_indexed(data_array, 4);
+        let mut size = read_little_endian_indexed(data_array, 4);
+        // Safeguard against evil DLS files (e.g. CrysDLS v1.23.dls)
+        // https://github.com/spessasus/spessasynth_core/issues/5
+        if header.is_empty() {
+            size = 0;
+        }
+
+        let chunk_data = if read_data {
+            let start = data_array.current_index;
+            let end = start + size as usize;
+            data_array.slice(start, end)
+        } else {
+            IndexedByteArray::new(0)
+        };
+
+        if read_data || force_shift {
+            data_array.current_index += size as usize;
+            #[allow(clippy::manual_is_multiple_of)]
+            if size % 2 != 0 {
+                data_array.current_index += 1;
+            }
+        }
+
+        RIFFChunk::new(header, size, chunk_data)
+    }
+
+    /// Writes a RIFF chunk correctly.
+    /// * `header` - the FourCC code of the header.
+    /// * `data` - the binary chunk data.
+    /// * `add_zero_byte` - if a zero byte should be at the end of the chunk's data.
+    /// * `is_list` - if a "LIST" should be set as the chunk type and the actual type should be
+    ///   written at the start of the data.
+    ///
+    /// Equivalent to: `RIFFChunk.write(header, data, addZeroByte = false, isList = false)`
+    pub fn write(header: &str, data: &[u8], add_zero_byte: bool, is_list: bool) -> IndexedByteArray {
+        assert_eq!(header.len(), 4, "Invalid header length: {}", header);
+
+        let data_start_offset: usize = if is_list { 12 } else { 8 };
+        let header_written: &str = if is_list { "LIST" } else { header };
+
+        let mut data_length = data.len();
+        if add_zero_byte {
+            data_length += 1;
+        }
+        let mut written_size = data_length;
+        if is_list {
+            written_size += 4;
+        }
+
+        let mut final_size = data_start_offset + data_length;
+        #[allow(clippy::manual_is_multiple_of)]
+        if final_size % 2 != 0 {
+            // Pad byte does not get included in the size
+            final_size += 1;
+        }
+
+        let mut out_array = IndexedByteArray::new(final_size);
+        // FourCC ("RIFF", "LIST", "pdta" etc.)
+        write_binary_string_indexed(&mut out_array, header_written, 0);
+        // Chunk size
+        write_dword(&mut out_array, written_size as u32);
+        if is_list {
+            // List type (e.g. "INFO")
+            write_binary_string_indexed(&mut out_array, header, 0);
+        }
+        // Write data at data_start_offset (out_array.current_index is now at data_start_offset)
+        for (i, &byte) in data.iter().enumerate() {
+            out_array[data_start_offset + i] = byte;
+        }
+
+        out_array
+    }
+
+    /// "Writes" a RIFF chunk as a list of binary blobs, which can be appended to a list
+    /// without using more memory, then finally allocated at the end with `write_parts`.
+    /// This allows avoiding large array allocations and only one `write_parts` call at the end.
+    /// * `header` - the FourCC code of the header.
+    /// * `chunks` - binary chunk data parts, will be combined in order.
+    /// * `is_list` - if a "LIST" should be set as the chunk type and the actual type should be
+    ///   written at the start of the data.
+    ///
+    /// Equivalent to: `RIFFChunk.getParts(header, chunks, isList = false)`
+    pub fn get_parts<'a>(header: &str, chunks: &[&'a [u8]], is_list: bool) -> Vec<Cow<'a, [u8]>> {
+        assert_eq!(header.len(), 4, "Invalid header length: {}", header);
+
+        let mut header_written = header;
+        let mut total_size: usize = chunks.iter().map(|c| c.len()).sum();
+        if is_list {
+            // Written header is LIST and the passed header is the first 4 bytes of chunk data
+            total_size += 4;
+            header_written = "LIST";
+        }
+        let mut dword_size = IndexedByteArray::new(4);
+        write_dword(&mut dword_size, total_size as u32);
+
+        // Header (LIST or actual header), then size
+        let mut parts: Vec<Cow<[u8]>> = vec![
+            Cow::Owned(get_string_bytes(header_written, false, false).to_vec()),
+            Cow::Owned(dword_size.to_vec()),
+        ];
+
+        // If LIST, the actual chunk "type" is at the beginning of data
+        if is_list {
+            parts.push(Cow::Owned(get_string_bytes(header, false, false).to_vec()));
+        }
+        // Data
+        for &c in chunks {
+            parts.push(Cow::Borrowed(c));
+        }
+
+        // Pad byte, does not get included in the size
+        #[allow(clippy::manual_is_multiple_of)]
+        if total_size % 2 != 0 {
+            parts.push(Cow::Owned(vec![0u8]));
+        }
+
+        parts
+    }
+
+    /// Writes RIFF chunk given binary blobs.
+    /// It merges them together into data and allocates one large array.
+    /// * `header` - the FourCC code of the header.
+    /// * `chunks` - binary chunk data parts, will be combined in order.
+    /// * `is_list` - if a "LIST" should be set as the chunk type and the actual type should be
+    ///   written at the start of the data.
+    ///
+    /// Equivalent to: `RIFFChunk.writeParts(header, chunks, isList = false)`
+    pub fn write_parts(header: &str, chunks: &[&[u8]], is_list: bool) -> IndexedByteArray {
+        assert_eq!(header.len(), 4, "Invalid header length: {}", header);
+
+        let data_start_offset: usize = if is_list { 12 } else { 8 };
+        let header_written: &str = if is_list { "LIST" } else { header };
+
+        let data_length: usize = chunks.iter().map(|c| c.len()).sum();
+        let mut written_size = data_length;
+        if is_list {
+            written_size += 4;
+        }
+
+        let mut final_size = data_start_offset + data_length;
+        #[allow(clippy::manual_is_multiple_of)]
+        if final_size % 2 != 0 {
+            // Pad byte does not get included in the size
+            final_size += 1;
+        }
+
+        let mut out_array = IndexedByteArray::new(final_size);
+        // FourCC
+        write_binary_string_indexed(&mut out_array, header_written, 0);
+        // Chunk size
+        write_dword(&mut out_array, written_size as u32);
+        if is_list {
+            // List type
+            write_binary_string_indexed(&mut out_array, header, 0);
+        }
+
+        let mut data_offset = data_start_offset;
+        for chunk in chunks {
+            for (i, &byte) in chunk.iter().enumerate() {
+                out_array[data_offset + i] = byte;
+            }
+            data_offset += chunk.len();
+        }
+
+        out_array
+    }
+
+    /// Finds a given type in a list.
+    /// Also skips the current index to after the list FourCC.
+    /// Equivalent to: `RIFFChunk.findListType(collection, type)`
+    pub fn find_list_type<'a>(
+        collection: &'a mut [RIFFChunk],
+        type_: &str,
+    ) -> Option<&'a mut RIFFChunk> {
+        // Use position() with immutable iter to find the index, then mutably borrow once.
+        let pos = collection.iter().position(|c| {
+            if c.header != "LIST" {
+                return false;
+            }
+            // The list type is at offset 0 of chunk.data (readBinaryString default offset = 0)
+            read_binary_string(&c.data, 4, 0) == type_
+        })?;
+        let chunk = &mut collection[pos];
+        // Side effect: skip cursor past the list FourCC so caller can read sub-chunks
+        chunk.data.current_index = 4;
+        Some(chunk)
+    }
 }
 
+// -----------------------------------------------------------------------------------------
+// Backward-compatible free-function wrappers (pre-4.3.0 API shape).
+// See the module doc comment above for why these are kept.
+// -----------------------------------------------------------------------------------------
+
 /// Reads a RIFF chunk from an `IndexedByteArray`, advancing the cursor.
-/// Equivalent to: `readRIFFChunk(dataArray, readData = true, forceShift = false)`
+/// Equivalent to: `RIFFChunk.read(dataArray, readData = true, forceShift = false)`
 pub fn read_riff_chunk(
     data_array: &mut IndexedByteArray,
     read_data: bool,
     force_shift: bool,
 ) -> RIFFChunk {
-    let header = read_binary_string_indexed(data_array, 4);
-    let mut size = read_little_endian_indexed(data_array, 4);
-    // Safeguard against evil DLS files (e.g. CrysDLS v1.23.dls)
-    // https://github.com/spessasus/spessasynth_core/issues/5
-    if header.is_empty() {
-        size = 0;
-    }
-
-    let chunk_data = if read_data {
-        let start = data_array.current_index;
-        let end = start + size as usize;
-        data_array.slice(start, end)
-    } else {
-        IndexedByteArray::new(0)
-    };
-
-    if read_data || force_shift {
-        data_array.current_index += size as usize;
-        #[allow(clippy::manual_is_multiple_of)]
-        if size % 2 != 0 {
-            data_array.current_index += 1;
-        }
-    }
-
-    RIFFChunk::new(header, size, chunk_data)
+    RIFFChunk::read(data_array, read_data, force_shift)
 }
 
 /// Writes a RIFF chunk given a raw byte slice.
-/// Equivalent to: `writeRIFFChunkRaw(header, data, addZeroByte = false, isList = false)`
+/// Equivalent to: `RIFFChunk.write(header, data, addZeroByte = false, isList = false)`
 pub fn write_riff_chunk_raw(
     header: &str,
     data: &[u8],
     add_zero_byte: bool,
     is_list: bool,
 ) -> IndexedByteArray {
-    assert_eq!(header.len(), 4, "Invalid header length: {}", header);
-
-    let data_start_offset: usize = if is_list { 12 } else { 8 };
-    let header_written: &str = if is_list { "LIST" } else { header };
-
-    let mut data_length = data.len();
-    if add_zero_byte {
-        data_length += 1;
-    }
-    let mut written_size = data_length;
-    if is_list {
-        written_size += 4;
-    }
-
-    let mut final_size = data_start_offset + data_length;
-    #[allow(clippy::manual_is_multiple_of)]
-    if final_size % 2 != 0 {
-        // Pad byte does not get included in the size
-        final_size += 1;
-    }
-
-    let mut out_array = IndexedByteArray::new(final_size);
-    // FourCC ("RIFF", "LIST", "pdta" etc.)
-    write_binary_string_indexed(&mut out_array, header_written, 0);
-    // Chunk size
-    write_dword(&mut out_array, written_size as u32);
-    if is_list {
-        // List type (e.g. "INFO")
-        write_binary_string_indexed(&mut out_array, header, 0);
-    }
-    // Write data at data_start_offset (out_array.current_index is now at data_start_offset)
-    for (i, &byte) in data.iter().enumerate() {
-        out_array[data_start_offset + i] = byte;
-    }
-
-    out_array
+    RIFFChunk::write(header, data, add_zero_byte, is_list)
 }
 
 /// Writes a RIFF chunk from multiple byte slices, combining them in order.
-/// Equivalent to: `writeRIFFChunkParts(header, chunks, isList = false)`
+/// Equivalent to: `RIFFChunk.writeParts(header, chunks, isList = false)`
 pub fn write_riff_chunk_parts(header: &str, chunks: &[&[u8]], is_list: bool) -> IndexedByteArray {
-    assert_eq!(header.len(), 4, "Invalid header length: {}", header);
-
-    let data_start_offset: usize = if is_list { 12 } else { 8 };
-    let header_written: &str = if is_list { "LIST" } else { header };
-
-    let data_length: usize = chunks.iter().map(|c| c.len()).sum();
-    let mut written_size = data_length;
-    if is_list {
-        written_size += 4;
-    }
-
-    let mut final_size = data_start_offset + data_length;
-    #[allow(clippy::manual_is_multiple_of)]
-    if final_size % 2 != 0 {
-        // Pad byte does not get included in the size
-        final_size += 1;
-    }
-
-    let mut out_array = IndexedByteArray::new(final_size);
-    // FourCC
-    write_binary_string_indexed(&mut out_array, header_written, 0);
-    // Chunk size
-    write_dword(&mut out_array, written_size as u32);
-    if is_list {
-        // List type
-        write_binary_string_indexed(&mut out_array, header, 0);
-    }
-
-    let mut data_offset = data_start_offset;
-    for chunk in chunks {
-        for (i, &byte) in chunk.iter().enumerate() {
-            out_array[data_offset + i] = byte;
-        }
-        data_offset += chunk.len();
-    }
-
-    out_array
+    RIFFChunk::write_parts(header, chunks, is_list)
 }
 
 /// Finds a chunk with a given LIST type in a collection.
 /// Also sets `data.current_index` to 4 (past the LIST type FourCC) on the found chunk,
 /// so the caller can immediately start reading sub-chunks.
-/// Equivalent to: `findRIFFListType(collection, type)`
+/// Equivalent to: `RIFFChunk.findListType(collection, type)`
 pub fn find_riff_list_type<'a>(
     collection: &'a mut [RIFFChunk],
     type_: &str,
 ) -> Option<&'a mut RIFFChunk> {
-    // Use position() with immutable iter to find the index, then mutably borrow once.
-    let pos = collection.iter().position(|c| {
-        if c.header != "LIST" {
-            return false;
-        }
-        // The list type is at offset 0 of chunk.data (readBinaryString default offset = 0)
-        read_binary_string(&c.data, 4, 0) == type_
-    })?;
-    let chunk = &mut collection[pos];
-    // Side effect: skip cursor past the list FourCC so caller can read sub-chunks
-    chunk.data.current_index = 4;
-    Some(chunk)
+    RIFFChunk::find_list_type(collection, type_)
 }
 
 #[cfg(test)]
@@ -391,6 +501,67 @@ mod tests {
         // final_size = 8 + 3 = 11 → 12
         assert_eq!(out.len(), 12);
         assert_eq!(out[11], 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // RIFFChunk::get_parts (new in 4.3.0)
+    // -----------------------------------------------------------------------
+
+    fn concat_parts(parts: &[Cow<[u8]>]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for p in parts {
+            out.extend_from_slice(p);
+        }
+        out
+    }
+
+    #[test]
+    fn test_get_parts_matches_write_parts_basic() {
+        let c1: &[u8] = &[1, 2];
+        let c2: &[u8] = &[3, 4];
+        let parts = RIFFChunk::get_parts("TEST", &[c1, c2], false);
+        let joined = concat_parts(&parts);
+        let direct = write_riff_chunk_parts("TEST", &[c1, c2], false);
+        assert_eq!(joined, direct.to_vec());
+    }
+
+    #[test]
+    fn test_get_parts_matches_write_parts_is_list() {
+        let c1: &[u8] = &[0xDE, 0xAD, 0xBE, 0xEF];
+        let parts = RIFFChunk::get_parts("pdta", &[c1], true);
+        let joined = concat_parts(&parts);
+        let direct = write_riff_chunk_parts("pdta", &[c1], true);
+        assert_eq!(joined, direct.to_vec());
+    }
+
+    #[test]
+    fn test_get_parts_matches_write_parts_odd_total_gets_pad() {
+        let c1: &[u8] = &[1, 2, 3];
+        let parts = RIFFChunk::get_parts("TEST", &[c1], false);
+        let joined = concat_parts(&parts);
+        let direct = write_riff_chunk_parts("TEST", &[c1], false);
+        assert_eq!(joined, direct.to_vec());
+        assert_eq!(*joined.last().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_get_parts_matches_write_parts_empty_chunks() {
+        let parts = RIFFChunk::get_parts("TEST", &[], false);
+        let joined = concat_parts(&parts);
+        let direct = write_riff_chunk_parts("TEST", &[], false);
+        assert_eq!(joined, direct.to_vec());
+    }
+
+    #[test]
+    fn test_get_parts_borrows_chunk_data_without_copying() {
+        // The chunk data parts should be borrowed (Cow::Borrowed), not cloned.
+        let c1: &[u8] = &[9, 9, 9, 9];
+        let parts = RIFFChunk::get_parts("data", &[c1], false);
+        // parts: [header(4B), size(4B), data(4B)] -> index 2 is the chunk itself
+        match &parts[2] {
+            Cow::Borrowed(s) => assert_eq!(*s, c1),
+            Cow::Owned(_) => panic!("expected chunk data to be borrowed, not cloned"),
+        }
     }
 
     // -----------------------------------------------------------------------
