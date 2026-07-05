@@ -6,7 +6,7 @@ use crate::soundbank::basic_soundbank::generator_types::{
     GENERATORS_AMOUNT, generator_types as gt,
 };
 use crate::soundbank::basic_soundbank::modulator::Modulator;
-use crate::synthesizer::audio_engine::engine_components::compute_modulator::{
+use crate::synthesizer::audio_engine::voice::compute_modulator::{
     compute_modulators, SourceFilter,
 };
 use crate::synthesizer::audio_engine::channel::portamento_time::portamento_time_to_seconds;
@@ -641,7 +641,7 @@ impl SynthesizerCore {
                 }
             };
 
-            let cv = crate::synthesizer::audio_engine::engine_components::voice_cache::CachedVoice::from_bank_params(
+            let cv = crate::synthesizer::audio_engine::voice::voice_cache::CachedVoice::from_bank_params(
                 vp,
                 audio_data,
                 original_key,

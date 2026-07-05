@@ -8,7 +8,7 @@ use crate::soundbank::basic_soundbank::generator_types::GeneratorType;
 use crate::soundbank::enums::modulator_sources;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
 use crate::synthesizer::audio_engine::channel::parameters::midi::NON_CC_INDEX_OFFSET;
-use crate::synthesizer::audio_engine::engine_components::voice::Voice;
+use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::enums::{custom_controllers, data_entry_states};
 use crate::synthesizer::types::{SynthProcessorEvent, SynthSystem};
 use crate::utils::loggin::spessa_synth_info;

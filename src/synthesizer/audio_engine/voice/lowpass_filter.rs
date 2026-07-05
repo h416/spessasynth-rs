@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
-use crate::synthesizer::audio_engine::engine_components::unit_converter::{
+use crate::synthesizer::audio_engine::voice::unit_converter::{
     abs_cents_to_hz, cb_attenuation_to_gain,
 };
 

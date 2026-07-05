@@ -4,11 +4,11 @@
 use crate::soundbank::basic_soundbank::generator_types::GENERATORS_AMOUNT;
 use crate::soundbank::basic_soundbank::modulator::DecodedModulator;
 use crate::soundbank::basic_soundbank::modulator_source::VoiceModInputs;
-use crate::synthesizer::audio_engine::engine_components::compute_modulator::VoiceContext;
-use crate::synthesizer::audio_engine::engine_components::dsp_chain::lowpass_filter::LowpassFilter;
-use crate::synthesizer::audio_engine::engine_components::dsp_chain::modulation_envelope::ModulationEnvelope;
-use crate::synthesizer::audio_engine::engine_components::dsp_chain::volume_envelope::VolumeEnvelope;
-use crate::synthesizer::audio_engine::engine_components::dsp_chain::wavetable_oscillator::WavetableOscillator;
+use crate::synthesizer::audio_engine::voice::compute_modulator::VoiceContext;
+use crate::synthesizer::audio_engine::voice::lowpass_filter::LowpassFilter;
+use crate::synthesizer::audio_engine::voice::modulation_envelope::ModulationEnvelope;
+use crate::synthesizer::audio_engine::voice::volume_envelope::VolumeEnvelope;
+use crate::synthesizer::audio_engine::voice::wavetable_oscillator::WavetableOscillator;
 use crate::synthesizer::audio_engine::engine_components::master_parameters::DEFAULT_MASTER_PARAMETERS;
 use crate::synthesizer::audio_engine::engine_components::synth_constants::{
     MIN_EXCLUSIVE_LENGTH, MIN_NOTE_LENGTH,

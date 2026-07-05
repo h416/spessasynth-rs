@@ -7,7 +7,7 @@ use crate::soundbank::basic_soundbank::generator_types::GeneratorType;
 ///   http://archive.gamedev.net/archive/reference/articles/article445.html
 ///   https://github.com/user-attachments/files/15757220/adip301.pdf
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
-use crate::synthesizer::audio_engine::engine_components::voice::Voice;
+use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
 use crate::utils::loggin::spessa_synth_warn;
 

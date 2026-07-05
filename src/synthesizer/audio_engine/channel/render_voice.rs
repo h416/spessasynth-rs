@@ -5,11 +5,11 @@ use std::sync::OnceLock;
 
 use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
-use crate::synthesizer::audio_engine::engine_components::dsp_chain::lfo::{get_lfo_value, get_lfo_value_sine};
-use crate::synthesizer::audio_engine::engine_components::unit_converter::{
+use crate::synthesizer::audio_engine::voice::lfo::{get_lfo_value, get_lfo_value_sine};
+use crate::synthesizer::audio_engine::voice::unit_converter::{
     abs_cents_to_hz, cb_attenuation_to_gain, timecents_to_seconds,
 };
-use crate::synthesizer::audio_engine::engine_components::voice::Voice;
+use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
 use crate::synthesizer::enums::custom_controllers;
 use crate::utils::loggin::spessa_synth_warn;

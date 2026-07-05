@@ -19,13 +19,13 @@ use crate::synthesizer::audio_engine::channel::parameters::midi::{
     CONTROLLER_TABLE_SIZE, CUSTOM_CONTROLLER_TABLE_SIZE, CUSTOM_RESET_ARRAY,
     DEFAULT_MIDI_CONTROLLER_VALUES, NON_CC_INDEX_OFFSET,
 };
-use crate::synthesizer::audio_engine::engine_components::compute_modulator::{
+use crate::synthesizer::audio_engine::voice::compute_modulator::{
     ChannelContext, SourceFilter, compute_modulators,
 };
 use crate::synthesizer::audio_engine::engine_components::synth_constants::{
     GENERATOR_OVERRIDE_NO_CHANGE_VALUE, MIN_NOTE_LENGTH,
 };
-use crate::synthesizer::audio_engine::engine_components::voice::Voice;
+use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::enums::{DataEntryState, custom_controllers, data_entry_states};
 use crate::synthesizer::types::{
     ChannelProperty, ChannelPropertyChangeCallback, SynthProcessorEvent, SynthSystem,

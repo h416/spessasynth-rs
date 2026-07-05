@@ -1,7 +1,7 @@
 /// master_parameters.rs
 /// purpose: Master parameter get/set handlers for SynthesizerCore.
 /// Ported from: src/synthesizer/audio_engine/engine_methods/controller_control/master_parameters.ts
-use crate::synthesizer::audio_engine::engine_components::voice::Voice;
+use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::types::{
     MasterParameterChangeCallback, MasterParameterType, SynthProcessorEvent,

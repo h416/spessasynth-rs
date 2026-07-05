@@ -20,12 +20,12 @@ use crate::synthesizer::audio_engine::effects::insertion::{
     thru::ThruFx,
 };
 use crate::synthesizer::audio_engine::effects::reverb::SpessaSynthReverb;
-use crate::synthesizer::audio_engine::engine_components::dsp_chain::lowpass_filter::LowpassFilter;
+use crate::synthesizer::audio_engine::voice::lowpass_filter::LowpassFilter;
 use crate::synthesizer::audio_engine::engine_components::key_modifier_manager::KeyModifierManager;
 use crate::synthesizer::audio_engine::engine_components::master_parameters::DEFAULT_MASTER_PARAMETERS;
 use crate::synthesizer::audio_engine::engine_components::sound_bank_manager::SoundBankManager;
 use crate::synthesizer::audio_engine::engine_components::synth_constants::DEFAULT_PERCUSSION;
-use crate::synthesizer::audio_engine::engine_components::voice::Voice;
+use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::{
     CachedVoiceList, MasterParameterType, SynthProcessorEvent, SynthProcessorOptions, SynthSystem,
@@ -928,7 +928,7 @@ impl SynthesizerCore {
         midi_note: u8,
         velocity: u8,
     ) -> CachedVoiceList {
-        use crate::synthesizer::audio_engine::engine_components::voice_cache::CachedVoice;
+        use crate::synthesizer::audio_engine::voice::voice_cache::CachedVoice;
 
         let voice_params = preset.get_voice_parameters(
             midi_note,

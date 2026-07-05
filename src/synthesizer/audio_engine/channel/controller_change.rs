@@ -5,7 +5,7 @@ use crate::midi::enums::midi_controllers;
 use crate::synthesizer::audio_engine::engine_components::synth_constants::{
     DEFAULT_PERCUSSION, MIN_NOTE_LENGTH,
 };
-use crate::synthesizer::audio_engine::engine_components::voice::Voice;
+use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
 use crate::synthesizer::enums::{custom_controllers, data_entry_states};
 use crate::synthesizer::types::{ControllerChangeCallback, SynthProcessorEvent, SynthSystem};

@@ -216,7 +216,7 @@ pub type SampleLoopingMode = u8;
 /// A list of voices for a given key:velocity.
 /// Equivalent to: CachedVoiceList
 pub type CachedVoiceList =
-    Vec<crate::synthesizer::audio_engine::engine_components::voice_cache::CachedVoice>;
+    Vec<crate::synthesizer::audio_engine::voice::voice_cache::CachedVoice>;
 
 /// Synthesizer processor options.
 /// Equivalent to: SynthProcessorOptions

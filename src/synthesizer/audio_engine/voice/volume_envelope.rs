@@ -2,7 +2,7 @@
 /// purpose: applies a volume envelope for a given voice
 /// Ported from: src/synthesizer/audio_engine/engine_components/dsp_chain/volume_envelope.ts
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
-use crate::synthesizer::audio_engine::engine_components::unit_converter::{
+use crate::synthesizer::audio_engine::voice::unit_converter::{
     cb_attenuation_to_gain, cb_attenuation_to_gain_f64, timecents_to_seconds,
 };
 

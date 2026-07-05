@@ -8,7 +8,7 @@ use crate::synthesizer::audio_engine::channel::parameters::midi::{
     CUSTOM_RESET_ARRAY, DEFAULT_MIDI_CONTROLLER_VALUES,
 };
 use crate::synthesizer::audio_engine::engine_components::synth_constants::DEFAULT_PERCUSSION;
-use crate::synthesizer::audio_engine::engine_components::voice::Voice;
+use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::enums::{custom_controllers, data_entry_states};
 use crate::synthesizer::types::{SynthProcessorEvent, SynthSystem};
 use crate::utils::midi_hacks::BankSelectHacks;
