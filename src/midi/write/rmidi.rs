@@ -155,13 +155,11 @@ fn correct_bank_offset_internal(
         .collect();
     event_list.sort_by_key(|&(ticks, ti, _)| (ticks, ti));
 
-    // Modifications collected during the scan pass (applied afterwards to avoid
-    // borrow conflicts while iterating the sorted list).
-    let mut program_mods: Vec<(usize, usize, u8)> = Vec::new(); // (ti, ei, new_program)
-    let mut bank_mods: Vec<(usize, usize, u8)> = Vec::new(); // (ti, ei, new data[1])
-    let mut bank_lsb_mods: Vec<(usize, usize, u8)> = Vec::new(); // (ti, ei, new data[1])
-
     // ── Scan pass ────────────────────────────────────────────────────────────
+    // Note: like TS 4.3.0, all event mutations (program number and bank-select data bytes) are
+    // applied *immediately* during the scan, not batched — so a later program change on the
+    // same channel reads the already-rewritten value of a shared bank-select event, exactly as
+    // `ch.lastBank.data[1] = ...` behaves in rmidi.ts.
     for &(_, track_idx, event_idx) in &event_list {
         // `event_status` is mutable: it is updated in-place when a SysEx event is replaced with
         // a regular Controller Change / Program Change below (mirrors TS reassigning its local
@@ -297,10 +295,12 @@ fn correct_bank_offset_internal(
             let patch = MidiPatch {
                 program: sent_program,
                 bank_lsb: last_bank_lsb_data,
+                // Equivalent to: subtractBankOffset(ch.lastBank?.data?.[1] ?? 0,
+                //   mid.bankOffset, system === "xg")
                 bank_msb: BankSelectHacks::subtract_bank_offset(
                     last_bank_data,
                     mid.bank_offset as u8,
-                    false,
+                    system == MIDISystem::Xg,
                 ),
                 is_gm_gs_drum: channels_info[ch_num].drums,
             };
@@ -309,12 +309,17 @@ fn correct_bank_offset_internal(
                 continue;
             };
 
+            // Copy the fields we need out of the preset (which borrows `sound_bank`, not
+            // `mid`) so `mid` can be mutated below.
             let target_program = target_preset.program;
             let target_bank_msb = target_preset.bank_msb;
             let target_bank_lsb = target_preset.bank_lsb;
             let target_is_gm_gs_drum = target_preset.is_gm_gs_drum;
 
-            program_mods.push((track_idx, event_idx, target_program));
+            // Set the program number (immediately, like TS's `e.data[0] = ...`).
+            if let Some(b) = mid.tracks[track_idx].events[event_idx].data.get_mut(0) {
+                *b = target_program;
+            }
 
             // If GM/GS drums are returned in an XG context, leave bank selects as-is.
             if target_is_gm_gs_drum && BankSelectHacks::is_system_xg(system) {
@@ -322,16 +327,26 @@ fn correct_bank_offset_internal(
             }
 
             if let Some((lb_ti, lb_ei)) = channels_info[ch_num].last_bank_idx {
-                // Equivalent to: addBankOffset(targetPreset.bankMSB, bankOffset, system === "xg")
+                // Equivalent to: ch.lastBank.data[1] =
+                //   addBankOffset(targetPreset.bankMSB, bankOffset, system === "xg")
                 let new_bank = BankSelectHacks::add_bank_offset(
                     target_bank_msb,
                     bank_offset,
                     system == MIDISystem::Xg,
                 );
-                bank_mods.push((lb_ti, lb_ei, new_bank));
+                if let Some(b) = mid.tracks[lb_ti].events[lb_ei].data.get_mut(1) {
+                    *b = new_bank;
+                }
+            } else {
+                // TS: `if (ch.lastBank === undefined) return;` — no MSB means the LSB is not
+                // touched either.
+                continue;
             }
             if let Some((lbl_ti, lbl_ei)) = channels_info[ch_num].last_bank_lsb_idx {
-                bank_lsb_mods.push((lbl_ti, lbl_ei, target_bank_lsb));
+                // Equivalent to: ch.lastBankLSB.data[1] = targetPreset.bankLSB
+                if let Some(b) = mid.tracks[lbl_ti].events[lbl_ei].data.get_mut(1) {
+                    *b = target_bank_lsb;
+                }
             }
             continue;
         }
@@ -348,23 +363,6 @@ fn correct_bank_offset_internal(
             channels_info[ch_num].last_bank_lsb_idx = Some((track_idx, event_idx));
         } else {
             channels_info[ch_num].last_bank_idx = Some((track_idx, event_idx));
-        }
-    }
-
-    // ── Apply modifications ───────────────────────────────────────────────────
-    for &(ti, ei, new_val) in &program_mods {
-        if let Some(b) = mid.tracks[ti].events[ei].data.get_mut(0) {
-            *b = new_val;
-        }
-    }
-    for &(ti, ei, new_val) in &bank_mods {
-        if let Some(b) = mid.tracks[ti].events[ei].data.get_mut(1) {
-            *b = new_val;
-        }
-    }
-    for &(ti, ei, new_val) in &bank_lsb_mods {
-        if let Some(b) = mid.tracks[ti].events[ei].data.get_mut(1) {
-            *b = new_val;
         }
     }
 
@@ -720,6 +718,29 @@ mod tests {
 
     impl PresetResolver for MockBank {
         fn get_preset(&self, _patch: MidiPatch, _system: MIDISystem) -> Option<&BasicPreset> {
+            Some(&self.preset)
+        }
+    }
+
+    /// Like `MockBank`, but records every `MidiPatch` it is queried with, so tests can assert
+    /// what bank/program values `correct_bank_offset_internal` actually looked up.
+    struct RecordingBank {
+        preset: BasicPreset,
+        queries: std::cell::RefCell<Vec<MidiPatch>>,
+    }
+
+    impl RecordingBank {
+        fn new(preset: BasicPreset) -> Self {
+            Self {
+                preset,
+                queries: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl PresetResolver for RecordingBank {
+        fn get_preset(&self, patch: MidiPatch, _system: MIDISystem) -> Option<&BasicPreset> {
+            self.queries.borrow_mut().push(patch);
             Some(&self.preset)
         }
     }
@@ -1367,6 +1388,86 @@ mod tests {
         assert!(
             has_drums_on_sysex,
             "GS Drums On sysex should be left in the track untouched"
+        );
+    }
+
+    // ── XG bank-offset handling (subtractBankOffset's isXG flag) ────────────
+
+    #[test]
+    fn test_correct_bank_offset_xg_system_preserves_drum_bank_127_on_lookup() {
+        // In an XG file (XG Reset seen), a bank-select MSB of 127 (XG drum bank) followed by a
+        // program change must be looked up with bankMSB=127 preserved — subtractBankOffset must
+        // receive isXG=true (TS: `system === "xg"`), so the file's bank offset (1 here) is NOT
+        // subtracted from the XG drum bank. With the old `false` flag this would become 126.
+        let xg_reset = MidiMessage::new(
+            0,
+            midi_message_types::SYSTEM_EXCLUSIVE,
+            vec![0x43, 0x10, 0x4c, 0x00, 0x00, 0x7e, 0x00],
+        );
+        let mut mid = BasicMidi::new();
+        mid.time_division = 480;
+        let mut track = MidiTrack::new();
+        track.push_event(make_msg(0, midi_message_types::TRACK_NAME, b"".to_vec()));
+        track.push_event(xg_reset);
+        // Bank select MSB = 127 (XG drums) on ch 0
+        track.push_event(make_msg(0, 0xB0, vec![0x00, 127]));
+        // Program change ch 0
+        track.push_event(make_msg(0, 0xC0, vec![0]));
+        track.push_event(make_msg(0, 0x90, vec![60, 100]));
+        track.push_event(make_msg(480, midi_message_types::END_OF_TRACK, vec![]));
+        mid.tracks.push(track);
+        mid.flush(false);
+        // Simulate an RMIDI whose events have a bank offset of 1 baked in.
+        mid.bank_offset = 1;
+
+        let bank = RecordingBank::new(BasicPreset::default());
+        correct_bank_offset_internal(&mut mid, 0, &bank);
+
+        let queries = bank.queries.borrow();
+        assert_eq!(queries.len(), 1, "expected exactly one preset lookup");
+        assert_eq!(
+            queries[0].bank_msb, 127,
+            "XG drum bank 127 must be preserved (isXG=true), not offset-subtracted to 126"
+        );
+    }
+
+    // ── Immediate write-back semantics (TS parity) ──────────────────────────
+
+    #[test]
+    fn test_correct_bank_offset_second_pc_reads_rewritten_bank_value() {
+        // TS rewrites `ch.lastBank.data[1]` synchronously during the scan (rmidi.ts:198-205),
+        // so when ONE bank-select is followed by TWO program changes on the same channel, the
+        // second program change's lookup reads the already-rewritten bank value (the preset's
+        // bankMSB), not the original file value. Verify the Rust port does the same.
+        let mut preset = BasicPreset::default();
+        preset.program = 0;
+        preset.bank_msb = 5;
+        let bank = RecordingBank::new(preset);
+
+        let mut mid = BasicMidi::new();
+        mid.time_division = 480;
+        let mut track = MidiTrack::new();
+        track.push_event(make_msg(0, midi_message_types::TRACK_NAME, b"".to_vec()));
+        // One bank select MSB = 3 on ch 0, shared by both program changes below.
+        track.push_event(make_msg(0, 0xB0, vec![0x00, 3]));
+        track.push_event(make_msg(0, 0xC0, vec![10])); // PC #1
+        track.push_event(make_msg(0, 0x90, vec![60, 100]));
+        track.push_event(make_msg(240, 0xC0, vec![20])); // PC #2 (same channel, later tick)
+        track.push_event(make_msg(480, midi_message_types::END_OF_TRACK, vec![]));
+        mid.tracks.push(track);
+        mid.flush(false);
+
+        correct_bank_offset_internal(&mut mid, 0, &bank);
+
+        let queries = bank.queries.borrow();
+        assert_eq!(queries.len(), 2, "expected two preset lookups");
+        // PC #1 sees the original file bank value (3).
+        assert_eq!(queries[0].bank_msb, 3);
+        // PC #1's lookup rewrote the shared bank-select to preset.bank_msb (5, offset 0), so
+        // PC #2 must see 5 — matching TS's synchronous `ch.lastBank.data[1] = ...` write.
+        assert_eq!(
+            queries[1].bank_msb, 5,
+            "second PC should read the bank value rewritten by the first PC"
         );
     }
 }
