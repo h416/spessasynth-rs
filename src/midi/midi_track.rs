@@ -1,6 +1,11 @@
 /// midi_track.rs
 /// purpose: A single MIDI track with events and metadata.
-/// Ported from: src/midi/midi_track.ts
+/// Ported from: src/midi/midi_track.ts (spessasynth_core 4.3.0)
+///
+/// Reviewed against the 4.3.0 diff: the only change is widening the TS `Omit<MIDIMessage[], ...>`
+/// compile-time restriction to also forbid `shift`/`unshift` (in addition to `push`/`splice`),
+/// which is a TS-only type-safety annotation with no Rust equivalent and no runtime behavior
+/// change (`addEvents`/`pushEvent`/`deleteEvent` are unchanged). No functional edits needed.
 use std::collections::HashSet;
 
 use crate::midi::midi_message::MidiMessage;

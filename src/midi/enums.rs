@@ -1,6 +1,18 @@
 /// enums.rs
 /// purpose: MIDI message type and controller number constants.
-/// Ported from: src/midi/enums.ts
+/// Ported from: src/midi/enums.ts (spessasynth_core 4.3.0)
+///
+/// TS 4.3.0 renamed `midiMessageTypes` → `MIDIMessageTypes`, `midiControllers` →
+/// `MIDIControllers`, `midiControllers.expressionController` → `expression`, and
+/// `expressionControllerLSB` → `expressionLSB` (naming-only; values unchanged). Rust already
+/// uses SCREAMING_SNAKE_CASE module-level constants (`midi_message_types`, `midi_controllers`),
+/// so those renames need no Rust-side change. `EXPRESSION`/`EXPRESSION_LSB` are added below as
+/// the new canonical names; `EXPRESSION_CONTROLLER`/`EXPRESSION_CONTROLLER_LSB` are kept as
+/// backward-compatible aliases because a few other files (out of scope for this task) still use
+/// the old name.
+///
+/// TS 4.3.0 also added `RegisteredParameterTypes`, `NonRegisteredMSB`, and `NonRegisteredLSB`
+/// (used by `midi_tools/midi_utils.ts`'s `analyzeRPN`/`analyzeNRPN`, not yet ported).
 /// MIDI message type constants.
 /// Equivalent to: midiMessageTypes
 pub mod midi_message_types {
@@ -63,7 +75,10 @@ pub mod midi_controllers {
     pub const BALANCE: u8 = 8;
     pub const UNDEFINED_CC9: u8 = 9;
     pub const PAN: u8 = 10;
-    pub const EXPRESSION_CONTROLLER: u8 = 11;
+    /// Equivalent to: `MIDIControllers.expression` (TS 4.3.0; was `expressionController`).
+    pub const EXPRESSION: u8 = 11;
+    /// Deprecated alias kept for backward compatibility with the pre-4.3.0 name.
+    pub const EXPRESSION_CONTROLLER: u8 = EXPRESSION;
     pub const EFFECT_CONTROL1: u8 = 12;
     pub const EFFECT_CONTROL2: u8 = 13;
     pub const UNDEFINED_CC14: u8 = 14;
@@ -95,7 +110,10 @@ pub mod midi_controllers {
     pub const BALANCE_LSB: u8 = 40;
     pub const UNDEFINED_CC9_LSB: u8 = 41;
     pub const PAN_LSB: u8 = 42;
-    pub const EXPRESSION_CONTROLLER_LSB: u8 = 43;
+    /// Equivalent to: `MIDIControllers.expressionLSB` (TS 4.3.0; was `expressionControllerLSB`).
+    pub const EXPRESSION_LSB: u8 = 43;
+    /// Deprecated alias kept for backward compatibility with the pre-4.3.0 name.
+    pub const EXPRESSION_CONTROLLER_LSB: u8 = EXPRESSION_LSB;
     pub const EFFECT_CONTROL1_LSB: u8 = 44;
     pub const EFFECT_CONTROL2_LSB: u8 = 45;
     pub const UNDEFINED_CC14_LSB: u8 = 46;
@@ -185,6 +203,50 @@ pub mod midi_controllers {
 /// Equivalent to: MIDIController
 pub type MidiController = u8;
 
+/// Registered Parameter Number (RPN) type constants.
+/// Equivalent to: RegisteredParameterTypes (TS 4.3.0)
+pub mod registered_parameter_types {
+    pub const PITCH_WHEEL_RANGE: u16 = 0x00_00;
+    pub const FINE_TUNING: u16 = 0x00_01;
+    pub const COARSE_TUNING: u16 = 0x00_02;
+    pub const MODULATION_DEPTH: u16 = 0x00_05;
+    pub const RESET_PARAMETERS: u16 = 0x3f_ff;
+}
+
+/// Non-Registered Parameter Number (NRPN) MSB constants.
+/// Equivalent to: NonRegisteredMSB (TS 4.3.0)
+pub mod non_registered_msb {
+    pub const PART_PARAMETER: u8 = 0x01;
+    pub const DRUM_PITCH: u8 = 0x18;
+    pub const DRUM_PITCH_FINE: u8 = 0x19;
+    pub const DRUM_LEVEL: u8 = 0x1a;
+    pub const DRUM_PAN: u8 = 0x1c;
+    pub const DRUM_REVERB: u8 = 0x1d;
+    pub const DRUM_CHORUS: u8 = 0x1e;
+    pub const DRUM_DELAY: u8 = 0x1f;
+
+    pub const AWE32: u8 = 0x7f;
+    pub const SF2: u8 = 120;
+}
+
+/// Non-Registered Parameter Number (NRPN) LSB constants.
+/// <https://cdn.roland.com/assets/media/pdf/SC-8850_OM.pdf>
+/// <http://hummer.stanford.edu/sig/doc/classes/MidiOutput/rpn.html>
+/// These also seem to match XG.
+/// Equivalent to: NonRegisteredLSB (TS 4.3.0)
+pub mod non_registered_lsb {
+    pub const VIBRATO_RATE: u8 = 0x08;
+    pub const VIBRATO_DEPTH: u8 = 0x09;
+    pub const VIBRATO_DELAY: u8 = 0x0a;
+
+    pub const TVF_CUTOFF_FREQUENCY: u8 = 0x20;
+    pub const TVF_RESONANCE: u8 = 0x21;
+
+    pub const ENVELOPE_ATTACK_TIME: u8 = 0x63;
+    pub const ENVELOPE_DECAY_TIME: u8 = 0x64;
+    pub const ENVELOPE_RELEASE_TIME: u8 = 0x66;
+}
+
 #[cfg(test)]
 mod tests {
     use super::midi_controllers as cc;
@@ -262,5 +324,46 @@ mod tests {
     #[test]
     fn test_registered_parameter_msb() {
         assert_eq!(cc::REGISTERED_PARAMETER_MSB, 101);
+    }
+
+    #[test]
+    fn test_expression_new_name_matches_old_alias() {
+        assert_eq!(cc::EXPRESSION, 11);
+        assert_eq!(cc::EXPRESSION, cc::EXPRESSION_CONTROLLER);
+    }
+
+    #[test]
+    fn test_expression_lsb_new_name_matches_old_alias() {
+        assert_eq!(cc::EXPRESSION_LSB, 43);
+        assert_eq!(cc::EXPRESSION_LSB, cc::EXPRESSION_CONTROLLER_LSB);
+    }
+
+    // --- registered_parameter_types / non_registered_msb / non_registered_lsb (4.3.0) ---
+
+    #[test]
+    fn test_registered_parameter_types() {
+        use super::registered_parameter_types as rpn;
+        assert_eq!(rpn::PITCH_WHEEL_RANGE, 0x0000);
+        assert_eq!(rpn::FINE_TUNING, 0x0001);
+        assert_eq!(rpn::COARSE_TUNING, 0x0002);
+        assert_eq!(rpn::MODULATION_DEPTH, 0x0005);
+        assert_eq!(rpn::RESET_PARAMETERS, 0x3fff);
+    }
+
+    #[test]
+    fn test_non_registered_msb() {
+        use super::non_registered_msb as nrpn_msb;
+        assert_eq!(nrpn_msb::PART_PARAMETER, 0x01);
+        assert_eq!(nrpn_msb::DRUM_PITCH, 0x18);
+        assert_eq!(nrpn_msb::AWE32, 0x7f);
+        assert_eq!(nrpn_msb::SF2, 120);
+    }
+
+    #[test]
+    fn test_non_registered_lsb() {
+        use super::non_registered_lsb as nrpn_lsb;
+        assert_eq!(nrpn_lsb::VIBRATO_RATE, 0x08);
+        assert_eq!(nrpn_lsb::TVF_CUTOFF_FREQUENCY, 0x20);
+        assert_eq!(nrpn_lsb::ENVELOPE_RELEASE_TIME, 0x66);
     }
 }

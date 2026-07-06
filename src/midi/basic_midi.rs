@@ -1,18 +1,43 @@
 /// basic_midi.rs
 /// purpose: Central MIDI data structure with parse, iterate, and tick-to-seconds utilities.
-/// Ported from: src/midi/basic_midi.ts
+/// Ported from: src/midi/basic_midi.ts (spessasynth_core 4.3.0)
+///
+/// Key 4.3.0 changes ported here:
+/// - `BasicMIDI.fromArrayBuffer` now performs the RIFF ("RMID") / "XMF_" / plain-SMF format
+///   dispatch itself (calling `parseRMIDIInternal`/`loadXMF`/`parseSMFInternal` directly) instead
+///   of delegating to a single `loadMIDIFromArrayBufferInternal` — the dispatch used to live in
+///   `read/midi.ts` (4.2.0's `midi_loader.ts`). This Rust port's previous (phase-1) structure had
+///   the dispatch in `read/midi.rs`; it is moved here to `from_array_buffer` to match.
+/// - `timeDivision`'s default changed from 0 to 480.
+/// - A new `timeline: readonly Readonly<TimelineEvent>[]` field: a flattened, time-sorted list
+///   of all events (as `{tr: trackNum, ev: eventIndexInTrack}` pairs), rebuilt at the end of
+///   `parseInternal` via `iterate`. `iterate`'s callback signature grew a third `eventIndexes`
+///   parameter to support this (and to let callers like `write/rmidi.ts` replace events in-place
+///   by index).
+/// - Touhou loop false-positive fix ("Touhou loop 誤検出の修正" in the 4.3.0 release notes): CC2
+///   (Touhou)/CC111 (RPG Maker) loop-start markers, and CC4 (Touhou) loop-end markers, now
+///   additionally require the CC value to be 0 (CC116/CC117, the dedicated EMIDI/XMI loop
+///   markers, remain unconditional). A duplicate CC4/CC117 loop-end marker now also resets
+///   `loopType` back to "hard" (previously only `loopEnd` was reset to 0, leaving a stale "soft"
+///   loop type from the first, now-invalidated, hit).
+/// - `getUsedProgramsAndKeys`'s return type changed shape (`Map<preset, Set<"key-velocity">>` →
+///   `Map<preset, Map<midiNote, Set<velocity>>>`) and `modify()`/`applySnapshot()`/
+///   `preloadSynth()` were also touched — none of these BasicMIDI *methods* are wired up in this
+///   Rust port yet (pre-existing gap predating 4.3.0, unrelated to this diff; the underlying
+///   `midi_tools` functions exist but are not exposed as `BasicMidi` methods), so they are not
+///   addressed here.
 use std::collections::{HashMap, HashSet};
 
 use crate::midi::enums::midi_message_types;
 use crate::midi::midi_message::MidiMessage;
 use crate::midi::midi_track::MidiTrack;
-use crate::midi::read::midi::load_midi_from_array_buffer_internal;
-use crate::midi::types::{MidiFormat, MidiLoop, MidiLoopType, TempoChange};
+use crate::midi::read::midi::parse_smf_internal;
+use crate::midi::read::rmidi::parse_rmidi_internal;
+use crate::midi::types::{MidiFormat, MidiLoop, MidiLoopType, TempoChange, TimelineEvent};
 use crate::soundbank::types::GenericRange;
 use crate::utils::byte_functions::big_endian::read_big_endian;
-use crate::utils::loggin::{
-    spessa_synth_group, spessa_synth_group_end, spessa_synth_info, spessa_synth_warn,
-};
+use crate::utils::indexed_array::IndexedByteArray;
+use crate::utils::loggin::SpessaLog;
 use crate::utils::byte_functions::string::read_binary_string;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -56,6 +81,14 @@ fn compute_ticks_to_seconds(
 pub struct BasicMidi {
     /// The tracks in the sequence.
     pub tracks: Vec<MidiTrack>,
+    /// A flattened, time-sorted list of all events in the MIDI sequence. The order between the
+    /// tracks is preserved. Each entry points to the event's track number and its index within
+    /// that track. This is the recommended way of iterating over the MIDI sequence's events.
+    ///
+    /// Do not mutate this outside of `parse_internal` (TS: `readonly Readonly<TimelineEvent>[]`;
+    /// Rust has no equivalent compile-time enforcement for a `Vec` field).
+    /// Equivalent to: BasicMIDI.timeline (TS 4.3.0)
+    pub timeline: Vec<TimelineEvent>,
     /// MIDI ticks per beat (time division).
     pub time_division: u32,
     /// Total duration of the sequence in seconds.
@@ -109,7 +142,9 @@ impl BasicMidi {
     pub fn new() -> Self {
         Self {
             tracks: Vec::new(),
-            time_division: 0,
+            timeline: Vec::new(),
+            // TS 4.3.0 changed the default from 0 to 480.
+            time_division: 480,
             duration: 0.0,
             tempo_changes: vec![TempoChange {
                 ticks: 0,
@@ -146,10 +181,33 @@ impl BasicMidi {
     // ─────────────────────────────────────────────────────────────────────
 
     /// Creates a BasicMidi from raw MIDI file bytes.
+    ///
+    /// Reads the MIDI file format, extracts the header and track chunks, and populates the
+    /// BasicMidi instance with the parsed data. Supports Standard MIDI Files (SMF) and RIFF MIDI
+    /// (RMIDI); Extensible Music Format (XMF) is not supported (out of scope for this port; the
+    /// XMF branch below panics via `unimplemented!`). RMIDI files' embedded sound bank is stored
+    /// in `embedded_sound_bank`.
+    ///
     /// Equivalent to: BasicMIDI.fromArrayBuffer(arrayBuffer, fileName)
     pub fn from_array_buffer(data: &[u8], file_name: &str) -> Result<Self, String> {
         let mut midi = BasicMidi::new();
-        load_midi_from_array_buffer_internal(&mut midi, data, file_name)?;
+        let mut binary_data = IndexedByteArray::from_slice(data);
+        // Peek at the first 4 bytes without advancing the cursor.
+        let initial_string = read_binary_string(&binary_data, 4, 0);
+        match initial_string.as_str() {
+            "RIFF" => {
+                // Possibly an RMID file (https://github.com/spessasus/sf2-rmidi-specification#readme)
+                parse_rmidi_internal(&mut midi, &mut binary_data, file_name)?;
+            }
+            "XMF_" => {
+                // Extensible Music Format — not supported (XMF out of scope for this port).
+                unimplemented!("XMF not supported");
+            }
+            _ => {
+                // Assume Standard MIDI File.
+                parse_smf_internal(&mut midi, &mut binary_data, file_name)?;
+            }
+        }
         Ok(midi)
     }
 
@@ -171,11 +229,18 @@ impl BasicMidi {
     }
 
     /// Iterates over all MIDI events in chronological (tick) order.
-    /// `callback(event, track_index)` is called for each event.
+    /// `callback(event, track_index, event_indexes)` is called for each event, where
+    /// `event_indexes` is the full per-track cursor array at the time of the call (so
+    /// `event_indexes[track_index]` is this event's index within its track — useful for
+    /// in-place replacement, see `write/rmidi.rs`).
+    ///
+    /// You probably should use the `timeline` field instead if you're not mutating the MIDI
+    /// during the iteration loop.
+    ///
     /// Equivalent to: iterate(callback)
     pub fn iterate<F>(&self, mut callback: F)
     where
-        F: FnMut(&MidiMessage, usize),
+        F: FnMut(&MidiMessage, usize, &[usize]),
     {
         let n = self.tracks.len();
         if n == 0 {
@@ -206,7 +271,7 @@ impl BasicMidi {
             }
 
             let event = &self.tracks[track_num].events[event_indexes[track_num]];
-            callback(event, track_num);
+            callback(event, track_num, &event_indexes);
             event_indexes[track_num] += 1;
         }
     }
@@ -219,7 +284,7 @@ impl BasicMidi {
     /// MIDI name, karaoke state, key range, etc.
     /// Equivalent to: parseInternal()
     fn parse_internal(&mut self) {
-        spessa_synth_group("Interpreting MIDI events...");
+        SpessaLog::group("Interpreting MIDI events...");
 
         // --- Local accumulators (assigned to self at the end) ---
         let mut karaoke_has_title = false;
@@ -280,18 +345,32 @@ impl BasicMidi {
                         x if x == midi_message_types::CONTROLLER_CHANGE => {
                             if !data.is_empty() {
                                 match data[0] {
-                                    // Touhou / RPG Maker / EMIDI loop start
-                                    2 | 111 | 116 => {
+                                    // Touhou / RPG Maker loop start.
+                                    // For Touhou and RPG Maker, the data value must be 0.
+                                    2 | 111 => {
+                                        if data.get(1).copied().unwrap_or(0) == 0 {
+                                            loop_start = Some(ticks);
+                                        }
+                                    }
+                                    // EMIDI/XMI loop start (unconditional).
+                                    116 => {
                                         loop_start = Some(ticks);
                                     }
-                                    // Touhou / EMIDI loop end
+                                    // Touhou (cc4) / EMIDI (cc117) loop end.
+                                    // For Touhou loops, the data value must be 0.
                                     4 | 117 => {
-                                        if loop_end.is_none() {
+                                        let cc_num = data[0];
+                                        let value = data.get(1).copied().unwrap_or(0);
+                                        if loop_end.is_none()
+                                            && (cc_num != 4 || value == 0)
+                                        {
                                             loop_type = MidiLoopType::Soft;
                                             loop_end = Some(ticks);
                                         } else {
-                                            // Appeared more than once → not a real loop marker
+                                            // Appeared more than once (or a CC4 with a nonzero
+                                            // value) → not a real loop marker.
                                             loop_end = Some(0);
+                                            loop_type = MidiLoopType::Hard;
                                         }
                                     }
                                     // Bank select MSB – DLS RMIDI bank offset detection
@@ -301,7 +380,7 @@ impl BasicMidi {
                                             && data[1] != 0
                                             && data[1] != 127
                                         {
-                                            spessa_synth_info(
+                                            SpessaLog::info(
                                                 "DLS RMIDI with offset 1 detected!",
                                             );
                                             self.bank_offset = 1;
@@ -333,7 +412,7 @@ impl BasicMidi {
                     x if x == midi_message_types::END_OF_TRACK => {
                         if i != events.len() - 1 {
                             events.remove(i);
-                            spessa_synth_warn("Unexpected EndOfTrack. Removing!");
+                            SpessaLog::warn("Unexpected EndOfTrack. Removing!");
                             continue; // don't increment i
                         }
                     }
@@ -371,7 +450,7 @@ impl BasicMidi {
                     x if x == midi_message_types::LYRIC => {
                         if event_text.trim().starts_with("@KMIDI KARAOKE FILE") {
                             is_karaoke_file = true;
-                            spessa_synth_info("Karaoke MIDI detected!");
+                            SpessaLog::info("Karaoke MIDI detected!");
                         }
                         if is_karaoke_file {
                             // Replace status byte so downstream consumers see TEXT
@@ -404,7 +483,7 @@ impl BasicMidi {
                         let checked = event_text.trim();
                         if checked.starts_with("@KMIDI KARAOKE FILE") {
                             is_karaoke_file = true;
-                            spessa_synth_info("Karaoke MIDI detected!");
+                            SpessaLog::info("Karaoke MIDI detected!");
                         } else if is_karaoke_file {
                             if checked.starts_with("@T") || checked.starts_with("@A") {
                                 if karaoke_has_title {
@@ -457,7 +536,7 @@ impl BasicMidi {
         // Reverse tempo_changes: last change first, tick-0 always last.
         tempo_changes.reverse();
 
-        spessa_synth_info("Correcting loops, ports and detecting notes...");
+        SpessaLog::info("Correcting loops, ports and detecting notes...");
 
         // First note-on tick
         let first_note_on = self
@@ -472,7 +551,7 @@ impl BasicMidi {
             .min()
             .unwrap_or(0);
 
-        spessa_synth_info(&format!(
+        SpessaLog::info(&format!(
             "First note-on detected at: {} ticks!",
             first_note_on
         ));
@@ -491,7 +570,7 @@ impl BasicMidi {
         // Loop fix: if loop end extends past last voice event, update it.
         let last_voice_event_tick = last_voice_event_tick.max(midi_loop.end);
 
-        spessa_synth_info(&format!(
+        SpessaLog::info(&format!(
             "Loop points: start: {} end: {}",
             midi_loop.start, midi_loop.end
         ));
@@ -544,10 +623,10 @@ impl BasicMidi {
             port_channel_offset_map = vec![0];
         }
         if port_channel_offset_map.len() < 2 {
-            spessa_synth_info("No additional MIDI Ports detected.");
+            SpessaLog::info("No additional MIDI Ports detected.");
         } else {
             self.is_multi_port = true;
-            spessa_synth_info("MIDI Ports detected!");
+            SpessaLog::info("MIDI Ports detected!");
         }
 
         // ── MIDI name detection ───────────────────────────────────────
@@ -597,16 +676,28 @@ impl BasicMidi {
         let duration =
             compute_ticks_to_seconds(last_voice_event_tick, &tempo_changes, self.time_division);
 
+        // Get sorted events (timeline). `self.tracks` is already in its final state at this
+        // point (updated in-place per track above), so `self.iterate` can safely be called here
+        // even though the rest of `self`'s derived fields haven't been committed yet.
+        // Equivalent to: (this.timeline as TimelineEvent[]).length = 0; this.iterate(...)
+        let mut timeline: Vec<TimelineEvent> = Vec::new();
+        self.iterate(|_, tr, event_indexes| {
+            timeline.push(TimelineEvent {
+                tr,
+                ev: event_indexes[tr],
+            });
+        });
+
         // Invalidate empty binary_name
         if binary_name.as_ref().is_some_and(|n| n.is_empty()) {
             binary_name = None;
         }
 
-        spessa_synth_info(&format!(
+        SpessaLog::info(&format!(
             "MIDI file parsed. Total tick time: {}, total seconds time: {:.2}",
             last_voice_event_tick, duration
         ));
-        spessa_synth_group_end();
+        SpessaLog::group_end();
 
         // ── Commit to self ────────────────────────────────────────────
         self.tempo_changes = tempo_changes;
@@ -620,6 +711,7 @@ impl BasicMidi {
         self.is_karaoke_file = is_karaoke_file;
         self.binary_name = binary_name;
         self.duration = duration;
+        self.timeline = timeline;
     }
 }
 
@@ -650,8 +742,10 @@ mod tests {
     fn test_new_default_fields() {
         let m = BasicMidi::new();
         assert_eq!(m.tracks.len(), 0);
-        assert_eq!(m.time_division, 0);
+        // TS 4.3.0 changed the default from 0 to 480.
+        assert_eq!(m.time_division, 480);
         assert_eq!(m.duration, 0.0);
+        assert!(m.timeline.is_empty());
         assert_eq!(m.tempo_changes.len(), 1);
         assert_eq!(m.tempo_changes[0].ticks, 0);
         assert_eq!(m.tempo_changes[0].tempo, 120.0);
@@ -728,8 +822,22 @@ mod tests {
             make_msg(100, 0x80, vec![60, 0]),
         ]));
         let mut collected: Vec<(u32, usize)> = Vec::new();
-        m.iterate(|e, t| collected.push((e.ticks, t)));
+        m.iterate(|e, t, _event_indexes| collected.push((e.ticks, t)));
         assert_eq!(collected, vec![(0, 0), (100, 0)]);
+    }
+
+    #[test]
+    fn test_iterate_event_indexes_reflect_per_track_cursor() {
+        let mut m = BasicMidi::new();
+        m.tracks.push(make_track(vec![
+            make_msg(0, 0x90, vec![60, 100]),
+            make_msg(200, 0x80, vec![60, 0]),
+        ]));
+        m.tracks.push(make_track(vec![make_msg(100, 0x90, vec![64, 100])]));
+        let mut collected: Vec<(usize, usize)> = Vec::new();
+        m.iterate(|_, t, event_indexes| collected.push((t, event_indexes[t])));
+        // track 0 event 0 (tick 0), track 1 event 0 (tick 100), track 0 event 1 (tick 200)
+        assert_eq!(collected, vec![(0, 0), (1, 0), (0, 1)]);
     }
 
     #[test]
@@ -744,7 +852,7 @@ mod tests {
             make_msg(300, 0x80, vec![64, 0]),
         ]));
         let mut ticks: Vec<u32> = Vec::new();
-        m.iterate(|e, _t| ticks.push(e.ticks));
+        m.iterate(|e, _t, _event_indexes| ticks.push(e.ticks));
         assert_eq!(ticks, vec![0, 100, 200, 300]);
     }
 
@@ -752,7 +860,7 @@ mod tests {
     fn test_iterate_empty_midi() {
         let m = BasicMidi::new();
         let mut count = 0;
-        m.iterate(|_, _| count += 1);
+        m.iterate(|_, _, _| count += 1);
         assert_eq!(count, 0);
     }
 
@@ -874,6 +982,128 @@ mod tests {
         assert_eq!(m.midi_loop.start, 100);
         assert_eq!(m.midi_loop.end, 400);
         assert_eq!(m.midi_loop.loop_type, MidiLoopType::Soft);
+    }
+
+    // ── Touhou loop false-positive fix (4.3.0) ─────────────────────────
+
+    #[test]
+    fn test_flush_touhou_cc4_nonzero_value_is_not_a_loop_end() {
+        // CC4 (Touhou loop end marker) with a NONZERO value must NOT be treated as a loop
+        // end (this is the 4.3.0 false-positive fix — CC4 is also the legitimate "Foot
+        // Controller" controller, so a real foot-controller CC4 must not be misdetected).
+        let mut m = BasicMidi::new();
+        m.time_division = 480;
+        let mut t = MidiTrack::new();
+        t.push_event(make_msg(0, 0x90, vec![60, 100]));
+        // CC 4 with nonzero value: NOT a loop marker.
+        t.push_event(make_msg(200, 0xB0, vec![4, 64]));
+        t.push_event(make_msg(480, midi_message_types::END_OF_TRACK, vec![]));
+        m.tracks.push(t);
+        m.flush(false);
+        // No soft loop end detected → falls back to last voice event tick, loop type hard.
+        assert_eq!(m.midi_loop.loop_type, MidiLoopType::Hard);
+        assert_eq!(m.midi_loop.end, m.last_voice_event_tick);
+    }
+
+    #[test]
+    fn test_flush_touhou_cc4_zero_value_is_a_loop_end() {
+        // CC4 with value 0 IS a legitimate Touhou loop end marker.
+        let mut m = BasicMidi::new();
+        m.time_division = 480;
+        let mut t = MidiTrack::new();
+        t.push_event(make_msg(0, 0x90, vec![60, 100]));
+        t.push_event(make_msg(200, 0xB0, vec![4, 0]));
+        t.push_event(make_msg(480, midi_message_types::END_OF_TRACK, vec![]));
+        m.tracks.push(t);
+        m.flush(false);
+        assert_eq!(m.midi_loop.end, 200);
+        assert_eq!(m.midi_loop.loop_type, MidiLoopType::Soft);
+    }
+
+    #[test]
+    fn test_flush_touhou_cc2_requires_zero_value_for_loop_start() {
+        let mut m = BasicMidi::new();
+        m.time_division = 480;
+        let mut t = MidiTrack::new();
+        // CC2 with nonzero value: not a loop start; first note-on becomes loop start instead.
+        t.push_event(make_msg(50, 0xB0, vec![2, 5]));
+        t.push_event(make_msg(100, 0x90, vec![60, 100]));
+        t.push_event(make_msg(480, midi_message_types::END_OF_TRACK, vec![]));
+        m.tracks.push(t);
+        m.flush(false);
+        assert_eq!(m.midi_loop.start, 100); // firstNoteOn, not the CC2 tick
+    }
+
+    #[test]
+    fn test_flush_touhou_cc2_zero_value_sets_loop_start() {
+        let mut m = BasicMidi::new();
+        m.time_division = 480;
+        let mut t = MidiTrack::new();
+        t.push_event(make_msg(50, 0xB0, vec![2, 0]));
+        t.push_event(make_msg(100, 0x90, vec![60, 100]));
+        t.push_event(make_msg(480, midi_message_types::END_OF_TRACK, vec![]));
+        m.tracks.push(t);
+        m.flush(false);
+        assert_eq!(m.midi_loop.start, 50);
+    }
+
+    #[test]
+    fn test_flush_cc117_loop_end_unconditional_on_value() {
+        // CC117 (EMIDI/XMI) loop end is unconditional regardless of value.
+        let mut m = BasicMidi::new();
+        m.time_division = 480;
+        let mut t = MidiTrack::new();
+        t.push_event(make_msg(0, 0x90, vec![60, 100]));
+        t.push_event(make_msg(300, 0xB0, vec![117, 42]));
+        t.push_event(make_msg(480, midi_message_types::END_OF_TRACK, vec![]));
+        m.tracks.push(t);
+        m.flush(false);
+        assert_eq!(m.midi_loop.end, 300);
+        assert_eq!(m.midi_loop.loop_type, MidiLoopType::Soft);
+    }
+
+    #[test]
+    fn test_flush_duplicate_loop_end_resets_loop_type_to_hard() {
+        // A second loop-end marker resets loopType back to Hard (4.3.0 fix — previously
+        // only loopEnd was reset to 0, leaving a stale "soft" loop type).
+        let mut m = BasicMidi::new();
+        m.time_division = 480;
+        let mut t = MidiTrack::new();
+        t.push_event(make_msg(0, 0x90, vec![60, 100]));
+        t.push_event(make_msg(200, 0xB0, vec![117, 0]));
+        t.push_event(make_msg(300, 0xB0, vec![117, 0]));
+        t.push_event(make_msg(480, midi_message_types::END_OF_TRACK, vec![]));
+        m.tracks.push(t);
+        m.flush(false);
+        assert_eq!(m.midi_loop.loop_type, MidiLoopType::Hard);
+    }
+
+    // ── timeline (4.3.0) ────────────────────────────────────────────────
+
+    #[test]
+    fn test_flush_builds_timeline() {
+        let mut m = BasicMidi::new();
+        m.time_division = 480;
+        let mut t0 = MidiTrack::new();
+        t0.push_event(make_msg(0, 0x90, vec![60, 100]));
+        t0.push_event(make_msg(200, midi_message_types::END_OF_TRACK, vec![]));
+        let mut t1 = MidiTrack::new();
+        t1.push_event(make_msg(100, 0x90, vec![64, 100]));
+        t1.push_event(make_msg(150, midi_message_types::END_OF_TRACK, vec![]));
+        m.tracks.push(t0);
+        m.tracks.push(t1);
+        m.flush(false);
+
+        // Timeline should mirror `iterate`'s order exactly: total event count and tick order.
+        let total_events: usize = m.tracks.iter().map(|t| t.events.len()).sum();
+        assert_eq!(m.timeline.len(), total_events);
+        let mut ticks: Vec<u32> = Vec::new();
+        for te in &m.timeline {
+            ticks.push(m.tracks[te.tr].events[te.ev].ticks);
+        }
+        let mut sorted_ticks = ticks.clone();
+        sorted_ticks.sort();
+        assert_eq!(ticks, sorted_ticks, "timeline should be tick-ordered");
     }
 
     #[test]

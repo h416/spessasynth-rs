@@ -1,6 +1,16 @@
 /// midi_message.rs
 /// purpose: MIDI message struct and status byte parsing utilities.
-/// Ported from: src/midi/midi_message.ts
+/// Ported from: src/midi/midi_message.ts (spessasynth_core 4.3.0)
+///
+/// TS 4.3.0 removed `getChannel`, `getEvent`, and `dataBytesAmount` from this file entirely:
+/// `read/midi.ts`'s `parseSMFInternal` now inlines an equivalent range-check + a private
+/// `DataBytesAmount` const instead of calling `getChannel`, and `midi_message.ts` no longer
+/// exports any of the three. This Rust file's `read/midi.rs` counterpart has been updated to
+/// match (see `parse_smf_internal`), but `get_channel`/`get_event`/`data_bytes_amount` are kept
+/// here (not removed) because `sequencer/set_time_to.rs` and `sequencer/process_event.rs` (out
+/// of scope for this task; the `sequencer` module has not been ported to 4.3.0 yet) still call
+/// `get_event`. They will be removed once the sequencer module is ported and no longer needs
+/// them.
 /// A single MIDI message.
 /// Equivalent to: class MIDIMessage
 #[derive(Clone)]

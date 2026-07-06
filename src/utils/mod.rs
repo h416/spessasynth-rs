@@ -7,12 +7,14 @@
 ///
 /// Note: `SpessaSynthCoreUtils` (a JS-only utility aggregate object) is not ported.
 ///
-/// Note: `sysex_detector.rs` is scheduled for removal in 4.3.0 (its `isXGOn`/`isGSOn`/etc.
-/// detectors were replaced by a new abstraction in `midi/midi_tools/midi_utils.ts` /
-/// `parameter_tracker.ts`). Its 3 Rust call sites (`midi/write/rmidi.rs`,
-/// `midi/midi_tools/{modify_midi,used_programs_and_keys}.rs`) require that new abstraction to
-/// be ported first, so deletion is deferred to Task 17/18 per the task's own escape hatch; the
-/// module is kept as-is for now.
+/// Note: `sysex_detector.rs` was removed in TS 4.3.0 (its `isXGOn`/`isGSOn`/etc. detectors were
+/// replaced by `MIDIUtils.analyzeSysEx` in `midi/midi_tools/midi_utils.ts`). Task 17 migrated
+/// its one in-scope call site (`midi/write/rmidi.rs`) to the new `MidiUtils::analyze_sysex`
+/// abstraction (see `midi/midi_tools/midi_utils.rs`). Two call sites remain
+/// (`midi/midi_tools/{modify_midi,used_programs_and_keys}.rs`), both out of scope for Task 17 —
+/// their 4.2.0-shaped logic is bound up with the Task 18 `modify_midi.ts`/
+/// `used_programs_and_keys.ts` 4.3.0 restructuring (which also depends on the not-yet-ported
+/// `parameter_tracker.ts`), so this file's physical deletion is deferred to Task 18.
 pub mod byte_functions;
 pub mod date;
 pub mod fill_with_defaults;

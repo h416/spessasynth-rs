@@ -1,27 +1,52 @@
 /// rmidi_writer.rs
 /// purpose: Write RMIDI (RIFF + MIDI + SoundFont) files.
-/// Ported from: src/midi/midi_tools/rmidi_writer.ts
+/// Ported from: src/midi/write/rmidi.ts (spessasynth_core 4.3.0)
+///
+/// TS 4.3.0 replaced the direct `isXGOn`/`isGSOn`/`isGMOn`/`isGM2On`/`isGSDrumsOn`/`syxToChannel`
+/// SysEx-detector calls (from `utils/sysex_detector.ts`, deleted in 4.3.0) with a single
+/// `MIDIUtils.analyzeSysEx` call whose result is dispatched on `syx.type`. This also broadens
+/// SysEx support: GS/XG SysEx-encoded bank-select/program-change/mono-poly messages are now
+/// recognized and replaced with equivalent regular Controller Change / Program Change events
+/// in-place (see the `AnalyzedMidiMessage::ControllerChange`/`ProgramChange` arms below), so the
+/// downstream bank-select tracking logic picks them up too. `getGsOn` (from the now-removed
+/// `get_gs_on.ts`) became `MIDIUtils.gsReset`. `readRIFFChunk`/`writeRIFFChunkRaw`/
+/// `writeRIFFChunkParts` free functions became `RIFFChunk::read`/`write`/`write_parts` static
+/// methods (migrated below). `correctBankOffsetInternal` also gained a trailing `mid.flush()`
+/// call to keep derived state (loop points, timeline, etc.) consistent after in-place event
+/// mutation/removal.
+///
+/// Note: this Rust file uses its own manual tick-sorted `(ticks, track_idx, event_idx)` scan
+/// instead of `BasicMidi::iterate`'s callback (unlike the TS `mid.iterate((e, trackNum,
+/// eventIndexes) => {...})`), since it already provides equivalent (track_idx, event_idx)
+/// addressing for in-place event replacement without needing `iterate`'s `eventIndexes` plumbing.
+///
+/// Quirk faithfully preserved from upstream: TS captures `const status = e.statusByte & 0xf0;`
+/// *before* the SysEx branch, then reassigns the *local* `e` to the replacement event for the
+/// `"Controller Change"`/`"Program Change"` SysEx cases (`break`, falling through) — but leaves
+/// `status` unchanged. So the post-SysEx `if (status === MIDIMessageTypes.programChange)` block
+/// (proper patch/preset lookup) never runs for a SysEx-derived Program Change; it falls straight
+/// to the bank-select detector, which only inspects `e.data[0]` (the program number) against
+/// `bankSelect`/`bankSelectLSB`. This looks like an upstream oversight, but per this repo's port
+/// policy we replicate it exactly rather than "fixing" it. See `event_status` (kept stale, used
+/// for the PROGRAM_CHANGE check) vs the fresh `ch_num` computation (uses the *updated* status
+/// byte) below.
 use crate::midi::basic_midi::BasicMidi;
 use crate::midi::enums::{midi_controllers, midi_message_types};
 use crate::midi::midi_message::MidiMessage;
-use crate::midi::midi_tools::midi_utils::get_gs_on;
+use crate::midi::midi_tools::midi_utils::{AnalyzedMidiMessage, MidiUtils};
 use crate::midi::write::midi::write_midi_internal;
 use crate::midi::types::{RMIDInfoDataPartial, RMIDIWriteOptions};
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::soundbank::basic_soundbank::preset_resolver::PresetResolver;
 use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
 use crate::soundbank::types::MIDISystem;
+use crate::utils::loggin::SpessaLog;
 use crate::utils::midi_hacks::BankSelectHacks;
-use crate::utils::riff_chunk::{write_riff_chunk_parts, write_riff_chunk_raw};
-use crate::utils::sysex_detector::{is_gm2_on, is_gm_on, is_gs_drums_on, is_gs_on, is_xg_on};
+use crate::utils::riff_chunk::RIFFChunk;
 
 /// Default copyright notice embedded in RMIDI files.
 /// Equivalent to: DEFAULT_COPYRIGHT
 pub const DEFAULT_COPYRIGHT: &str = "Created using SpessaSynth";
-
-/// GS part-to-channel mapping (part index → 0-based MIDI channel).
-/// Equivalent to: [9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15]
-const GS_PART_TO_CHANNEL: [usize; 16] = [9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15];
 
 /// Per-channel state tracked while scanning events in `correct_bank_offset_internal`.
 struct ChannelInfo {
@@ -138,9 +163,13 @@ fn correct_bank_offset_internal(
 
     // ── Scan pass ────────────────────────────────────────────────────────────
     for &(_, track_idx, event_idx) in &event_list {
-        let event_status = mid.tracks[track_idx].events[event_idx].status_byte;
-        // Clone data to avoid borrow conflicts inside the loop body.
-        let event_data = mid.tracks[track_idx].events[event_idx].data.clone();
+        // `event_status` is mutable: it is updated in-place when a SysEx event is replaced with
+        // a regular Controller Change / Program Change below (mirrors TS reassigning its local
+        // `e` to `newEvent` so that `e.statusByte` reflects the replacement).
+        let mut event_status = mid.tracks[track_idx].events[event_idx].status_byte;
+        // Clone data to avoid borrow conflicts inside the loop body. Also updated in-place on
+        // SysEx replacement (mirrors TS's `e.data`).
+        let mut event_data = mid.tracks[track_idx].events[event_idx].data.clone();
 
         let port_offset = mid
             .port_channel_offset_map
@@ -156,6 +185,10 @@ fn correct_bank_offset_internal(
             continue;
         }
 
+        // `status` is captured once, from the *original* event, and is intentionally never
+        // updated after a SysEx→CC/PC in-place replacement below (see the module doc comment
+        // for the upstream quirk this faithfully preserves: this makes the `PROGRAM_CHANGE`
+        // branch below unreachable for SysEx-derived program changes).
         let status = event_status & 0xf0;
         if status != midi_message_types::CONTROLLER_CHANGE
             && status != midi_message_types::PROGRAM_CHANGE
@@ -166,33 +199,79 @@ fn correct_bank_offset_internal(
 
         // ── SysEx ────────────────────────────────────────────────────────────
         if event_status == midi_message_types::SYSTEM_EXCLUSIVE {
-            let event_ref = &mid.tracks[track_idx].events[event_idx];
-            if !is_gs_drums_on(event_ref) {
-                if is_xg_on(event_ref) {
+            match MidiUtils::analyze_sysex(&event_data) {
+                // Check for drum sysex
+                AnalyzedMidiMessage::DrumsOn { channel, is_drum } => {
+                    let sysex_channel = channel as usize + port_offset;
+                    if sysex_channel < channels_info.len() {
+                        channels_info[sysex_channel].drums = is_drum;
+                    }
+                    continue;
+                }
+                // Check for XG
+                AnalyzedMidiMessage::XgReset => {
                     system = MIDISystem::Xg;
-                } else if is_gs_on(event_ref) {
+                    continue;
+                }
+                AnalyzedMidiMessage::GsReset => {
                     system = MIDISystem::Gs;
-                } else if is_gm_on(event_ref) {
+                    continue;
+                }
+                AnalyzedMidiMessage::GmOn | AnalyzedMidiMessage::GmOff => {
+                    // We do not want GM1; this event is removed later if system stays GM.
                     system = MIDISystem::Gm;
-                    // This event will be removed if system stays Gm at the end.
-                } else if is_gm2_on(event_ref) {
+                    continue;
+                }
+                AnalyzedMidiMessage::Gm2On => {
                     system = MIDISystem::Gm2;
+                    continue;
                 }
-                continue;
-            }
-            // GS Drum mode sysex
-            if event_data.len() >= 8 {
-                let part_idx = (event_data[5] & 0x0f) as usize;
-                let sysex_channel = GS_PART_TO_CHANNEL[part_idx] + port_offset;
-                if sysex_channel < channels_info.len() {
-                    channels_info[sysex_channel].drums =
-                        event_data[7] > 0 && (event_data[5] >> 4) != 0;
+                AnalyzedMidiMessage::ControllerChange {
+                    channel,
+                    controller,
+                    value,
+                } => {
+                    // Replace the system exclusive with a regular controller change.
+                    let ticks = mid.tracks[track_idx].events[event_idx].ticks;
+                    let new_status = midi_message_types::CONTROLLER_CHANGE | channel;
+                    let new_data = vec![controller, value];
+                    mid.tracks[track_idx].events[event_idx] =
+                        MidiMessage::new(ticks, new_status, new_data.clone());
+                    event_status = new_status;
+                    event_data = new_data;
+                    SpessaLog::info("Replaced a system exclusive with controller change!");
+                    // Do not `continue`; keep parsing (matches upstream TS's `break`).
+                }
+                AnalyzedMidiMessage::ProgramChange { channel, value } => {
+                    // Replace the system exclusive with a regular program change.
+                    let ticks = mid.tracks[track_idx].events[event_idx].ticks;
+                    let new_status = midi_message_types::PROGRAM_CHANGE | channel;
+                    let new_data = vec![value];
+                    mid.tracks[track_idx].events[event_idx] =
+                        MidiMessage::new(ticks, new_status, new_data.clone());
+                    event_status = new_status;
+                    event_data = new_data;
+                    SpessaLog::info("Replaced a system exclusive with program change!");
+                    // Do not `continue`; keep parsing (matches upstream TS's `break`).
+                }
+                AnalyzedMidiMessage::Other
+                | AnalyzedMidiMessage::ReverbParam
+                | AnalyzedMidiMessage::ChorusParam
+                | AnalyzedMidiMessage::DelayParam
+                | AnalyzedMidiMessage::VariationParam
+                | AnalyzedMidiMessage::InsertionParam
+                | AnalyzedMidiMessage::DrumSetup
+                | AnalyzedMidiMessage::MasterKeyShift { .. }
+                | AnalyzedMidiMessage::KeyShift { .. }
+                | AnalyzedMidiMessage::MasterFineTune { .. }
+                | AnalyzedMidiMessage::FineTune { .. } => {
+                    continue;
                 }
             }
-            continue;
         }
 
         // ── Channel message ───────────────────────────────────────────────────
+        // Uses the (possibly just-replaced) fresh status byte, matching TS's `e.statusByte`.
         let ch_num = (event_status & 0xf) as usize + port_offset;
         if ch_num >= channels_info.len() {
             continue;
@@ -386,13 +465,17 @@ fn correct_bank_offset_internal(
     }
 
     // ── GM → GS switch ────────────────────────────────────────────────────────
-    // If no GS/XG/GM2 mode was detected, replace all GM ON sysex events with
+    // If no GS/XG/GM2 mode was detected, replace all GM ON/OFF sysex events with
     // a Roland GS ON message at the beginning of track 0.
     if system == MIDISystem::Gm {
         for track in mid.tracks.iter_mut() {
-            track
-                .events
-                .retain(|e| !(e.status_byte == midi_message_types::SYSTEM_EXCLUSIVE && is_gm_on(e)));
+            track.events.retain(|e| {
+                !(e.status_byte == midi_message_types::SYSTEM_EXCLUSIVE
+                    && matches!(
+                        MidiUtils::analyze_sysex(&e.data),
+                        AnalyzedMidiMessage::GmOn | AnalyzedMidiMessage::GmOff
+                    ))
+            });
         }
         if !mid.tracks.is_empty() {
             let index = if !mid.tracks[0].events.is_empty()
@@ -402,9 +485,10 @@ fn correct_bank_offset_internal(
             } else {
                 0
             };
-            mid.tracks[0].add_event(get_gs_on(0), index);
+            mid.tracks[0].add_event(MidiUtils::gs_reset(0), index);
         }
     }
+    mid.flush(true);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -538,44 +622,44 @@ pub fn write_rmidi_internal(
         let data = mid.rmidi_info[key].as_slice();
         match key.as_str() {
             "album" => {
-                info_content.push(write_riff_chunk_raw("IALB", data, false, false).to_vec());
-                info_content.push(write_riff_chunk_raw("IPRD", data, false, false).to_vec());
+                info_content.push(RIFFChunk::write("IALB", data, false, false).to_vec());
+                info_content.push(RIFFChunk::write("IPRD", data, false, false).to_vec());
             }
             "software" => {
-                info_content.push(write_riff_chunk_raw("ISFT", data, false, false).to_vec());
+                info_content.push(RIFFChunk::write("ISFT", data, false, false).to_vec());
             }
             "infoEncoding" => {
-                info_content.push(write_riff_chunk_raw("IENC", data, false, false).to_vec());
+                info_content.push(RIFFChunk::write("IENC", data, false, false).to_vec());
             }
             "creationDate" => {
-                info_content.push(write_riff_chunk_raw("ICRD", data, false, false).to_vec());
+                info_content.push(RIFFChunk::write("ICRD", data, false, false).to_vec());
             }
             "picture" => {
-                info_content.push(write_riff_chunk_raw("IPIC", data, false, false).to_vec());
+                info_content.push(RIFFChunk::write("IPIC", data, false, false).to_vec());
             }
             "name" => {
-                info_content.push(write_riff_chunk_raw("INAM", data, false, false).to_vec());
+                info_content.push(RIFFChunk::write("INAM", data, false, false).to_vec());
             }
             "artist" => {
-                info_content.push(write_riff_chunk_raw("IART", data, false, false).to_vec());
+                info_content.push(RIFFChunk::write("IART", data, false, false).to_vec());
             }
             "genre" => {
-                info_content.push(write_riff_chunk_raw("IGNR", data, false, false).to_vec());
+                info_content.push(RIFFChunk::write("IGNR", data, false, false).to_vec());
             }
             "copyright" => {
-                info_content.push(write_riff_chunk_raw("ICOP", data, false, false).to_vec());
+                info_content.push(RIFFChunk::write("ICOP", data, false, false).to_vec());
             }
             "comment" => {
-                info_content.push(write_riff_chunk_raw("ICMT", data, false, false).to_vec());
+                info_content.push(RIFFChunk::write("ICMT", data, false, false).to_vec());
             }
             "engineer" => {
-                info_content.push(write_riff_chunk_raw("IENG", data, false, false).to_vec());
+                info_content.push(RIFFChunk::write("IENG", data, false, false).to_vec());
             }
             "subject" => {
-                info_content.push(write_riff_chunk_raw("ISBJ", data, false, false).to_vec());
+                info_content.push(RIFFChunk::write("ISBJ", data, false, false).to_vec());
             }
             "midiEncoding" => {
-                info_content.push(write_riff_chunk_raw("MENC", data, false, false).to_vec());
+                info_content.push(RIFFChunk::write("MENC", data, false, false).to_vec());
             }
             _ => {}
         }
@@ -583,19 +667,19 @@ pub fn write_rmidi_internal(
 
     // DBNK chunk: bank offset as 2-byte little-endian value.
     let dbnk_bytes = (bank_offset as u16).to_le_bytes();
-    info_content.push(write_riff_chunk_raw("DBNK", &dbnk_bytes, false, false).to_vec());
+    info_content.push(RIFFChunk::write("DBNK", &dbnk_bytes, false, false).to_vec());
 
     // Assemble: RIFF { "RMID" + data_chunk + LIST/INFO_chunk + sound_bank_binary }
-    let data_chunk = write_riff_chunk_raw("data", &midi_bytes, false, false);
+    let data_chunk = RIFFChunk::write("data", &midi_bytes, false, false);
     let info_refs: Vec<&[u8]> = info_content.iter().map(|v| v.as_slice()).collect();
-    let info_chunk = write_riff_chunk_parts("INFO", &info_refs, true);
+    let info_chunk = RIFFChunk::write_parts("INFO", &info_refs, true);
     let parts: &[&[u8]] = &[
         b"RMID",
         &data_chunk,
         &info_chunk,
         sound_bank_binary,
     ];
-    let result = write_riff_chunk_parts("RIFF", parts, false);
+    let result = RIFFChunk::write_parts("RIFF", parts, false);
 
     Ok(result.to_vec())
 }
@@ -975,10 +1059,10 @@ mod tests {
         correct_bank_offset_internal(&mut mid, 0, &bank);
 
         // GM ON sysex should be gone
-        let has_gm_on = mid.tracks[0]
-            .events
-            .iter()
-            .any(|e| e.status_byte == midi_message_types::SYSTEM_EXCLUSIVE && is_gm_on(e));
+        let has_gm_on = mid.tracks[0].events.iter().any(|e| {
+            e.status_byte == midi_message_types::SYSTEM_EXCLUSIVE
+                && MidiUtils::analyze_sysex(&e.data) == AnalyzedMidiMessage::GmOn
+        });
         assert!(!has_gm_on, "GM ON sysex should have been removed");
 
         // GS ON sysex should be present
@@ -1118,5 +1202,171 @@ mod tests {
             .iter()
             .any(|e| e.status_byte == 0xB0 && e.data.first() == Some(&0x00));
         assert!(has_bank_select, "bank select should have been inserted");
+    }
+
+    // ── 4.3.0: SysEx→CC/PC replacement (MIDIUtils.analyzeSysEx) ─────────────
+
+    #[test]
+    fn test_correct_bank_offset_xg_sysex_bank_select_replaced_with_cc() {
+        // XG SysEx-encoded Bank Select MSB (a1=0x08 multi-part, channel 0, a3=0x01) should be
+        // replaced in-place with a regular Controller Change (bank select) event — new in 4.3.0.
+        let xg_bank_select = MidiMessage::new(
+            0,
+            midi_message_types::SYSTEM_EXCLUSIVE,
+            vec![0x43, 0x10, 0x4c, 0x08, 0x00, 0x01, 5], // channel 0, value 5
+        );
+        let mut mid = BasicMidi::new();
+        mid.time_division = 480;
+        let mut track = MidiTrack::new();
+        track.push_event(make_msg(0, midi_message_types::TRACK_NAME, b"".to_vec()));
+        track.push_event(xg_bank_select);
+        // Deliberately no other program change on this channel: a subsequent PC on the same
+        // channel would re-derive the bank MSB from the sound bank's preset and overwrite this
+        // event's value again, which isn't what this test is checking.
+        track.push_event(make_msg(0, 0x90, vec![60, 100]));
+        track.push_event(make_msg(480, midi_message_types::END_OF_TRACK, vec![]));
+        mid.tracks.push(track);
+        mid.flush(false);
+
+        let bank = MockBank::new();
+        correct_bank_offset_internal(&mut mid, 0, &bank);
+
+        // The XG bank-select SysEx should be gone (note: since no GS/XG/GM2 reset was seen, a
+        // GS Reset SysEx gets auto-inserted per the "GM → GS switch" logic below — that's an
+        // unrelated, separate SysEx, not the one we're replacing here).
+        let has_xg_cc_sysex = mid.tracks[0].events.iter().any(|e| {
+            e.status_byte == midi_message_types::SYSTEM_EXCLUSIVE
+                && matches!(
+                    MidiUtils::analyze_sysex(&e.data),
+                    AnalyzedMidiMessage::ControllerChange { .. }
+                )
+        });
+        assert!(!has_xg_cc_sysex, "XG SysEx should have been replaced");
+        let replaced = mid.tracks[0].events.iter().find(|e| {
+            e.status_byte == midi_message_types::CONTROLLER_CHANGE
+                && e.data.first() == Some(&midi_controllers::BANK_SELECT)
+        });
+        assert!(
+            replaced.is_some(),
+            "expected a bank-select CC in place of the XG SysEx"
+        );
+        assert_eq!(replaced.unwrap().data[1], 5);
+    }
+
+    #[test]
+    fn test_correct_bank_offset_gs_sysex_program_change_replaced_in_place() {
+        // GS SysEx-encoded tone number (program change) on part 1 (→ channel 0) should be
+        // replaced in-place with a regular Program Change event — new in 4.3.0.
+        let gs_program_change = MidiMessage::new(
+            0,
+            midi_message_types::SYSTEM_EXCLUSIVE,
+            vec![0x41, 0x10, 0x42, 0x12, 0x40, 0x11, 0x00, 42, 0x00, 0xf7],
+        );
+        let mut mid = BasicMidi::new();
+        mid.time_division = 480;
+        let mut track = MidiTrack::new();
+        track.push_event(make_msg(0, midi_message_types::TRACK_NAME, b"".to_vec()));
+        track.push_event(gs_program_change);
+        track.push_event(make_msg(0, 0x90, vec![60, 100]));
+        track.push_event(make_msg(480, midi_message_types::END_OF_TRACK, vec![]));
+        mid.tracks.push(track);
+        mid.flush(false);
+
+        let bank = MockBank::new();
+        correct_bank_offset_internal(&mut mid, 0, &bank);
+
+        // (A GS Reset SysEx gets auto-inserted separately since no GS/XG/GM2 reset was seen —
+        // see the "GM → GS switch" note in the XG test above.)
+        let has_gs_program_change_sysex = mid.tracks[0].events.iter().any(|e| {
+            e.status_byte == midi_message_types::SYSTEM_EXCLUSIVE
+                && matches!(
+                    MidiUtils::analyze_sysex(&e.data),
+                    AnalyzedMidiMessage::ProgramChange { .. }
+                )
+        });
+        assert!(
+            !has_gs_program_change_sysex,
+            "GS SysEx should have been replaced"
+        );
+        // Per the upstream quirk (see module doc comment), the replaced Program Change is NOT
+        // re-resolved through the sound bank's preset lookup — it keeps the raw value (42) since
+        // the post-SysEx `status === PROGRAM_CHANGE` branch never runs for it.
+        let replaced = mid.tracks[0]
+            .events
+            .iter()
+            .find(|e| e.status_byte == midi_message_types::PROGRAM_CHANGE);
+        assert!(replaced.is_some(), "expected a program change event");
+    }
+
+    #[test]
+    fn test_correct_bank_offset_gm_off_sysex_removed_when_system_stays_gm() {
+        // "GM Off" SysEx now also flags the system as GM and gets removed if it stays GM
+        // (previously only "GM On" was recognized at all; 4.3.0 added GM Off detection too).
+        let gm_off_sysex = MidiMessage::new(
+            0,
+            midi_message_types::SYSTEM_EXCLUSIVE,
+            vec![0x7e, 0x7f, 0x09, 0x02, 0xf7],
+        );
+        let mut mid = BasicMidi::new();
+        mid.time_division = 480;
+        let mut track = MidiTrack::new();
+        track.push_event(make_msg(0, midi_message_types::TRACK_NAME, b"".to_vec()));
+        track.push_event(gm_off_sysex);
+        track.push_event(make_msg(0, 0x90, vec![60, 100]));
+        track.push_event(make_msg(480, midi_message_types::END_OF_TRACK, vec![]));
+        mid.tracks.push(track);
+        mid.flush(false);
+
+        let bank = MockBank::new();
+        correct_bank_offset_internal(&mut mid, 0, &bank);
+
+        let has_gm_off = mid.tracks[0].events.iter().any(|e| {
+            e.status_byte == midi_message_types::SYSTEM_EXCLUSIVE
+                && MidiUtils::analyze_sysex(&e.data) == AnalyzedMidiMessage::GmOff
+        });
+        assert!(!has_gm_off, "GM Off sysex should have been removed");
+        // A GS ON should have been inserted since the system stayed GM.
+        let has_gs_on = mid.tracks[0].events.iter().any(|e| {
+            e.status_byte == midi_message_types::SYSTEM_EXCLUSIVE
+                && MidiUtils::analyze_sysex(&e.data) == AnalyzedMidiMessage::GsReset
+        });
+        assert!(has_gs_on, "GS ON sysex should have been added");
+    }
+
+    #[test]
+    fn test_correct_bank_offset_gs_drums_on_does_not_panic_and_is_left_in_place() {
+        // GS "Drums On" SysEx for part 0 (→ channel 9) marks that channel as a drum channel (an
+        // internal side effect used for subsequent program-change patch resolution) but — unlike
+        // the ControllerChange/ProgramChange SysEx cases — is neither replaced nor removed from
+        // the track; it is only inspected.
+        let gs_drums_on = MidiMessage::new(
+            0,
+            midi_message_types::SYSTEM_EXCLUSIVE,
+            vec![0x41, 0x10, 0x42, 0x12, 0x40, 0x10, 0x15, 0x01, 0x00, 0xf7],
+        );
+        let mut mid = BasicMidi::new();
+        mid.time_division = 480;
+        let mut track = MidiTrack::new();
+        track.push_event(make_msg(0, midi_message_types::TRACK_NAME, b"".to_vec()));
+        track.push_event(gs_drums_on);
+        track.push_event(make_msg(0, 0xC9, vec![5])); // Program change ch 9
+        track.push_event(make_msg(0, 0x99, vec![60, 100])); // Note-on ch 9
+        track.push_event(make_msg(480, midi_message_types::END_OF_TRACK, vec![]));
+        mid.tracks.push(track);
+        mid.flush(false);
+
+        let bank = MockBank::new();
+        correct_bank_offset_internal(&mut mid, 0, &bank);
+        let has_drums_on_sysex = mid.tracks[0].events.iter().any(|e| {
+            e.status_byte == midi_message_types::SYSTEM_EXCLUSIVE
+                && matches!(
+                    MidiUtils::analyze_sysex(&e.data),
+                    AnalyzedMidiMessage::DrumsOn { .. }
+                )
+        });
+        assert!(
+            has_drums_on_sysex,
+            "GS Drums On sysex should be left in the track untouched"
+        );
     }
 }

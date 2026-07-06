@@ -115,7 +115,7 @@ pub fn get_used_programs_and_keys(
     // without conflicting with the immutable &self borrow inside iterate.
     let port_map = &midi.port_channel_offset_map;
 
-    midi.iterate(|event, track_num| {
+    midi.iterate(|event, track_num, _event_indexes| {
         // ── MIDI Port meta event ─────────────────────────────────────────────
         if event.status_byte == midi_message_types::MIDI_PORT {
             if let Some(&port) = event.data.first() {

@@ -1,6 +1,14 @@
-/// midi_writer.rs
+/// midi.rs
 /// purpose: Serialize a BasicMidi into a standard MIDI file (SMF) byte sequence.
-/// Ported from: src/midi/midi_tools/midi_writer.ts
+/// Ported from: src/midi/write/midi.ts (spessasynth_core 4.3.0; was `midi_tools/midi_writer.ts`
+/// in 4.2.0 — moved, not otherwise changed)
+///
+/// Reviewed against the 4.3.0 diff: `MIDIMessageTypes` rename (no-op for Rust's already
+/// SCREAMING_SNAKE_CASE `midi_message_types`) and a couple of micro-optimizations (avoiding
+/// `Uint8Array`/spread-operator allocations per track in favor of plain `number[]`/`.concat`).
+/// Both are pure JS-performance refactors with no behavior change; this file's existing
+/// `Vec<u8>`-based implementation already has no equivalent overhead, so no functional edit was
+/// needed here.
 use crate::midi::basic_midi::BasicMidi;
 use crate::midi::enums::midi_message_types;
 use crate::utils::byte_functions::big_endian::write_big_endian;

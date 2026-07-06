@@ -1,23 +1,46 @@
-/// midi_loader.rs
-/// purpose: MIDI file (SMF, RMIDI) parser.
-/// XMF format is not supported (panics with unimplemented!).
-/// Ported from: src/midi/midi_loader.ts
+/// midi.rs
+/// purpose: Standard MIDI File (SMF) parser.
+/// Ported from: src/midi/read/midi.ts (spessasynth_core 4.3.0)
+///
+/// TS 4.3.0 split the monolithic `midi_loader.ts` (4.2.0) into `read/midi.ts`, `read/rmidi.ts`,
+/// and `read/xmf.ts`. This file is `read/midi.ts`'s `parseSMFInternal`, which now handles *only*
+/// SMF parsing: the RIFF (RMIDI) / "XMF_" / plain-SMF format dispatch that `loadMIDIFromArrayBufferInternal`
+/// used to do here moved to `BasicMIDI.fromArrayBuffer` (see `basic_midi.rs`), and `read/rmidi.ts`
+/// now calls `parseSMFInternal` (this file) at the end of its own parsing instead of the other
+/// way around — this Rust port's phase-1 structure had the call direction backwards (`read/midi.rs`
+/// called into `read/rmidi.rs`); it is corrected here to match the real TS 4.3.0 layout.
+///
+/// TS 4.3.0 also inlined the message-length dispatch: instead of calling the (now file-local, no
+/// longer exported) `getChannel` to classify the status byte into -1/-2/-3/voice, it does a
+/// direct range check against `MIDIMessageTypes` bounds, and moved `dataBytesAmount` into a
+/// private `DataBytesAmount` const local to this file (both ported below as `data_bytes_amount`,
+/// a private fn distinct from the crate-public `midi_message::data_bytes_amount` kept for the
+/// not-yet-ported `sequencer` module — see `midi_message.rs`'s header comment).
 use crate::midi::basic_midi::BasicMidi;
-use crate::midi::midi_message::{data_bytes_amount, get_channel, MidiMessage};
+use crate::midi::midi_message::MidiMessage;
 use crate::midi::midi_track::MidiTrack;
 use crate::midi::types::MidiFormat;
+use crate::midi::enums::midi_message_types;
 use crate::utils::byte_functions::big_endian::read_big_endian_indexed;
 use crate::utils::indexed_array::IndexedByteArray;
-use crate::utils::loggin::{
-    spessa_synth_group_collapsed, spessa_synth_group_end, spessa_synth_info, spessa_synth_warn,
-};
-use crate::utils::byte_functions::string::{read_binary_string, read_binary_string_indexed};
+use crate::utils::loggin::SpessaLog;
+use crate::utils::byte_functions::string::read_binary_string_indexed;
 use crate::utils::byte_functions::variable_length_quantity::read_variable_length_quantity;
-use super::rmidi::parse_rmidi_container_internal;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Returns the number of data bytes for a given MIDI event high nibble (0x8–0xE).
+/// Private to this file — TS 4.3.0's local `DataBytesAmount` const in `read/midi.ts`.
+/// Equivalent to: DataBytesAmount[highNibble]
+fn data_bytes_amount(high_nibble: u8) -> u8 {
+    match high_nibble {
+        0x8 | 0x9 | 0xA | 0xB | 0xE => 2,
+        0xC | 0xD => 1,
+        _ => 0,
+    }
+}
 
 /// Reads a MIDI chunk (MThd or MTrk) header and data from the stream.
 /// Returns `(chunk_type, data_size, data_as_IndexedByteArray)`.
@@ -46,16 +69,20 @@ fn read_midi_chunk(
 // Public entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Loads a MIDI file (SMF or RMIDI) from a raw byte slice into `output_midi`.
-/// XMF files are not supported and will panic via `unimplemented!`.
+/// Loads a Standard MIDI File (SMF) from given binary data into `output_midi`.
 ///
-/// Equivalent to: loadMIDIFromArrayBufferInternal(outputMIDI, arrayBuffer, fileName)
-pub fn load_midi_from_array_buffer_internal(
+/// `smf_file_binary` must already be positioned at the start of the `MThd` chunk (the
+/// RIFF/RMIDI/XMF format dispatch happens one level up, in `BasicMidi::from_array_buffer`; for
+/// an RMIDI input it is the raw SMF bytes extracted from the RIFF `data` chunk by
+/// `read::rmidi::parse_rmidi_internal`, which calls this function at the end of its own parsing).
+///
+/// Equivalent to: parseSMFInternal(outputMIDI, smfFileBinary, fileName)
+pub fn parse_smf_internal(
     output_midi: &mut BasicMidi,
-    data: &[u8],
+    smf_file_binary: &mut IndexedByteArray,
     file_name: &str,
 ) -> Result<(), String> {
-    spessa_synth_group_collapsed("Parsing MIDI File...");
+    SpessaLog::group_collapsed("Parsing MIDI File...");
 
     output_midi.file_name = if file_name.is_empty() {
         None
@@ -63,40 +90,20 @@ pub fn load_midi_from_array_buffer_internal(
         Some(file_name.to_string())
     };
 
-    let mut binary_data = IndexedByteArray::from_slice(data);
-    let mut smf_file_binary;
-
-    // Peek at the first 4 bytes without advancing the cursor.
-    let initial_string = read_binary_string(&binary_data, 4, 0);
-
-    if initial_string == "RIFF" {
-        // ── RMIDI (Resource-Interchangeable MIDI) ─────────────────────
-        smf_file_binary = parse_rmidi_container_internal(output_midi, &mut binary_data)?;
-    } else if initial_string == "XMF_" {
-        // XMF is not needed for midi→wav; stub it out.
-        spessa_synth_group_end();
-        unimplemented!("XMF not supported");
-    } else {
-        // Plain SMF file – use the whole buffer as the SMF data.
-        smf_file_binary = binary_data;
-    }
-
-    // ── Parse Standard MIDI File (SMF) ────────────────────────────────
-
     let (header_type, header_size, mut header_data) =
-        read_midi_chunk(&mut smf_file_binary).inspect_err(|_| {
-            spessa_synth_group_end();
+        read_midi_chunk(smf_file_binary).inspect_err(|_| {
+            SpessaLog::group_end();
         })?;
 
     if header_type != "MThd" {
-        spessa_synth_group_end();
+        SpessaLog::group_end();
         return Err(format!(
             "Invalid MIDI Header! Expected \"MThd\", got \"{}\"",
             header_type
         ));
     }
     if header_size != 6 {
-        spessa_synth_group_end();
+        SpessaLog::group_end();
         return Err(format!(
             "Invalid MIDI header chunk size! Expected 6, got {}",
             header_size
@@ -108,7 +115,7 @@ pub fn load_midi_from_array_buffer_internal(
         1 => MidiFormat::MultiTrack,
         2 => MidiFormat::MultiPattern,
         v => {
-            spessa_synth_warn(&format!("Unknown MIDI format: {}", v));
+            SpessaLog::warn(&format!("Unknown MIDI format: {}", v));
             MidiFormat::SingleTrack
         }
     };
@@ -120,12 +127,12 @@ pub fn load_midi_from_array_buffer_internal(
         let mut track = MidiTrack::new();
 
         let (track_type, track_size, mut track_data) =
-            read_midi_chunk(&mut smf_file_binary).inspect_err(|_| {
-                spessa_synth_group_end();
+            read_midi_chunk(smf_file_binary).inspect_err(|_| {
+                SpessaLog::group_end();
             })?;
 
         if track_type != "MTrk" {
-            spessa_synth_group_end();
+            SpessaLog::group_end();
             return Err(format!(
                 "Invalid track header! Expected \"MTrk\", got \"{}\"",
                 track_type
@@ -150,12 +157,12 @@ pub fn load_midi_from_array_buffer_internal(
             let status_byte_check = track_data[track_data.current_index];
 
             // Determine the actual status byte (handle running status).
-            let status_byte: u8;
+            let mut status_byte: u8;
             if let Some(rb) = running_byte && status_byte_check < 0x80 {
                 // Use the running status – do NOT advance the cursor.
                 status_byte = rb;
             } else if status_byte_check < 0x80 {
-                spessa_synth_group_end();
+                SpessaLog::group_end();
                 return Err(format!(
                     "Unexpected byte with no running byte. ({})",
                     status_byte_check
@@ -165,64 +172,56 @@ pub fn load_midi_from_array_buffer_internal(
                 track_data.current_index += 1;
             }
 
-            let channel = get_channel(status_byte);
-
-            // Determine event data length and final status byte.
+            // Determine the message's length.
+            // Equivalent to the inlined 4.3.0 dispatch (no more `getChannel` call): a direct
+            // range check against `MIDIMessageTypes` bounds instead of a -1/-2/-3/voice
+            // classification.
             let event_data_length: usize;
-            let final_status_byte: u8;
 
-            match channel {
-                -1 => {
-                    // System common / realtime – no data bytes.
-                    event_data_length = 0;
-                    final_status_byte = status_byte;
-                }
-                -2 => {
-                    // Meta event: read meta type, then VLQ length.
-                    final_status_byte = track_data[track_data.current_index];
-                    track_data.current_index += 1;
-                    event_data_length =
-                        read_variable_length_quantity(&mut track_data) as usize;
-                }
-                -3 => {
-                    // SysEx: VLQ length follows.
-                    event_data_length =
-                        read_variable_length_quantity(&mut track_data) as usize;
-                    final_status_byte = status_byte;
-                }
-                _ => {
-                    // Voice message: fixed length from high nibble.
-                    event_data_length =
-                        data_bytes_amount(status_byte >> 4) as usize;
-                    running_byte = Some(status_byte);
-                    final_status_byte = status_byte;
-                }
+            if status_byte >= midi_message_types::NOTE_OFF
+                && status_byte < midi_message_types::SYSTEM_EXCLUSIVE
+            {
+                // Voice message: fixed length from high nibble.
+                event_data_length = data_bytes_amount(status_byte >> 4) as usize;
+                // Save the status byte
+                running_byte = Some(status_byte);
+            } else if status_byte == midi_message_types::SYSTEM_EXCLUSIVE {
+                // Sysex: VLQ length follows.
+                event_data_length = read_variable_length_quantity(&mut track_data) as usize;
+            } else if status_byte == 0xff {
+                // Meta message (the next byte is the actual status byte).
+                status_byte = track_data[track_data.current_index];
+                track_data.current_index += 1;
+                event_data_length = read_variable_length_quantity(&mut track_data) as usize;
+            } else {
+                // System common/realtime (no length).
+                event_data_length = 0;
             }
 
-            // Read event data bytes.
+            // Put the event data into the array.
             let start = track_data.current_index;
             let end = start + event_data_length;
             let event_data = track_data.slice(start, end).to_vec();
 
-            let event = MidiMessage::new(total_ticks, final_status_byte, event_data);
-            track.push_event(event);
+            track.push_event(MidiMessage::new(total_ticks, status_byte, event_data));
 
+            // Advance the track chunk.
             track_data.current_index += event_data_length;
         }
 
         output_midi.tracks.push(track);
 
-        spessa_synth_info(&format!(
+        SpessaLog::info(&format!(
             "Parsed {} / {}",
             output_midi.tracks.len(),
             track_count
         ));
     }
 
-    spessa_synth_info("All tracks parsed correctly!");
+    SpessaLog::info("All tracks parsed correctly!");
     // Events from an SMF are already in sorted order per the spec; no need to re-sort.
     output_midi.flush(false);
-    spessa_synth_group_end();
+    SpessaLog::group_end();
     Ok(())
 }
 
@@ -233,9 +232,14 @@ pub fn load_midi_from_array_buffer_internal(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::midi::enums::midi_message_types;
     use crate::utils::byte_functions::big_endian::write_big_endian;
     use crate::utils::byte_functions::variable_length_quantity::write_variable_length_quantity;
+
+    /// Test helper: wraps `parse_smf_internal` with the `IndexedByteArray` construction that
+    /// `BasicMidi::from_array_buffer` now does one level up.
+    fn parse(midi: &mut BasicMidi, data: &[u8], file_name: &str) -> Result<(), String> {
+        parse_smf_internal(midi, &mut IndexedByteArray::from_slice(data), file_name)
+    }
 
     // ── Helpers to build minimal SMF binary ──────────────────────────
 
@@ -298,7 +302,7 @@ mod tests {
         smf.extend(mtrk(&events));
 
         let mut midi = BasicMidi::new();
-        load_midi_from_array_buffer_internal(&mut midi, &smf, "test.mid").unwrap();
+        parse(&mut midi, &smf, "test.mid").unwrap();
 
         assert_eq!(midi.format, MidiFormat::SingleTrack);
         assert_eq!(midi.time_division, 480);
@@ -327,7 +331,7 @@ mod tests {
         smf.extend(mtrk(&t1));
 
         let mut midi = BasicMidi::new();
-        load_midi_from_array_buffer_internal(&mut midi, &smf, "test.mid").unwrap();
+        parse(&mut midi, &smf, "test.mid").unwrap();
 
         assert_eq!(midi.format, MidiFormat::MultiTrack);
         assert_eq!(midi.tracks.len(), 2);
@@ -350,7 +354,7 @@ mod tests {
         smf.extend(mtrk(&events));
 
         let mut midi = BasicMidi::new();
-        load_midi_from_array_buffer_internal(&mut midi, &smf, "test.mid").unwrap();
+        parse(&mut midi, &smf, "test.mid").unwrap();
 
         // Both events should be note-ons
         let note_ons: Vec<_> = midi.tracks[0]
@@ -378,7 +382,7 @@ mod tests {
         smf.extend(mtrk(&events));
 
         let mut midi = BasicMidi::new();
-        load_midi_from_array_buffer_internal(&mut midi, &smf, "test.mid").unwrap();
+        parse(&mut midi, &smf, "test.mid").unwrap();
 
         // There should be at least one TempoChange (the parsed one + default 120)
         // After reversal, the tick-0 entry is at the end.
@@ -401,7 +405,7 @@ mod tests {
         smf.extend(mtrk(&events));
 
         let mut midi = BasicMidi::new();
-        load_midi_from_array_buffer_internal(&mut midi, &smf, "test.mid").unwrap();
+        parse(&mut midi, &smf, "test.mid").unwrap();
 
         let sysex_events: Vec<_> = midi.tracks[0]
             .events
@@ -416,7 +420,7 @@ mod tests {
     fn test_parse_bad_header_returns_err() {
         let bad: Vec<u8> = b"BADH\x00\x00\x00\x06\x00\x00\x00\x01\x01\xe0".to_vec();
         let mut midi = BasicMidi::new();
-        let result = load_midi_from_array_buffer_internal(&mut midi, &bad, "bad.mid");
+        let result = parse(&mut midi, &bad, "bad.mid");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("MThd"));
     }
@@ -429,7 +433,7 @@ mod tests {
         smf.extend(be32(0));
 
         let mut midi = BasicMidi::new();
-        let result = load_midi_from_array_buffer_internal(&mut midi, &smf, "bad.mid");
+        let result = parse(&mut midi, &smf, "bad.mid");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("MTrk"));
     }
@@ -442,7 +446,7 @@ mod tests {
         smf.extend(mtrk(&events));
 
         let mut midi = BasicMidi::new();
-        load_midi_from_array_buffer_internal(&mut midi, &smf, "song.mid").unwrap();
+        parse(&mut midi, &smf, "song.mid").unwrap();
         assert_eq!(midi.file_name, Some("song.mid".to_string()));
     }
 
@@ -454,7 +458,7 @@ mod tests {
         smf.extend(mtrk(&events));
 
         let mut midi = BasicMidi::new();
-        load_midi_from_array_buffer_internal(&mut midi, &smf, "").unwrap();
+        parse(&mut midi, &smf, "").unwrap();
         assert!(midi.file_name.is_none());
     }
 
@@ -472,7 +476,7 @@ mod tests {
         smf.extend(mtrk(&events));
 
         let mut midi = BasicMidi::new();
-        load_midi_from_array_buffer_internal(&mut midi, &smf, "test.mid").unwrap();
+        parse(&mut midi, &smf, "test.mid").unwrap();
 
         // Port events are parsed; track will have port assigned.
         assert!(!midi.tracks.is_empty());
@@ -492,7 +496,7 @@ mod tests {
         smf.extend(mtrk(&events));
 
         let mut midi = BasicMidi::new();
-        load_midi_from_array_buffer_internal(&mut midi, &smf, "test.mid").unwrap();
+        parse(&mut midi, &smf, "test.mid").unwrap();
 
         let pc: Vec<_> = midi.tracks[0]
             .events
@@ -519,7 +523,7 @@ mod tests {
         smf.extend(mtrk(&events));
 
         let mut midi = BasicMidi::new();
-        load_midi_from_array_buffer_internal(&mut midi, &smf, "test.mid").unwrap();
+        parse(&mut midi, &smf, "test.mid").unwrap();
         assert!(!midi.tracks.is_empty());
     }
 }

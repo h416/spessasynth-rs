@@ -1,6 +1,17 @@
 /// types.rs
 /// purpose: Common data types for MIDI and RMIDI files.
-/// Ported from: src/midi/types.ts
+/// Ported from: src/midi/types.ts (spessasynth_core 4.3.0)
+///
+/// TS 4.3.0 added `TimelineEvent` (see `TimelineEvent` below, used by `BasicMIDI.timeline`) and
+/// `SysExAcceptedArray` (a union of `number[] | Uint8Array | Int8Array | Uint8ClampedArray`; in
+/// Rust this is simply `&[u8]`, so no type alias is needed).
+///
+/// TS 4.3.0 also *removed* `DesiredProgramChange`, `DesiredControllerChange`, and
+/// `DesiredChannelTranspose` from this file (folded into `midi_tools/modify_midi.ts`'s
+/// restructured `ModifyMIDIOptions`, which is not yet ported — Task 18). They are kept below
+/// (not removed) because `midi_tools/modify_midi.rs` (out of scope for this task) still uses
+/// them; removing them now would break that file. They should be removed/restructured together
+/// with the `modify_midi.rs` 4.3.0 port.
 use chrono::NaiveDateTime;
 
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
@@ -302,6 +313,21 @@ impl RMIDInfoFourCC {
             _ => None,
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TimelineEvent
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// An entry in `BasicMIDI::timeline`: identifies one event by its track number and its index
+/// within that track's event list.
+/// Equivalent to: TimelineEvent (TS 4.3.0)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TimelineEvent {
+    /// The track number of this event.
+    pub tr: usize,
+    /// The index of this event within the track.
+    pub ev: usize,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -661,6 +687,22 @@ mod tests {
         for v in all {
             assert_eq!(RMIDInfoFourCC::from_str(v.as_str()), Some(v));
         }
+    }
+
+    // ── TimelineEvent ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_timeline_event_fields() {
+        let te = TimelineEvent { tr: 2, ev: 5 };
+        assert_eq!(te.tr, 2);
+        assert_eq!(te.ev, 5);
+    }
+
+    #[test]
+    fn test_timeline_event_equality() {
+        let a = TimelineEvent { tr: 0, ev: 0 };
+        let b = TimelineEvent { tr: 0, ev: 0 };
+        assert_eq!(a, b);
     }
 
     #[test]
