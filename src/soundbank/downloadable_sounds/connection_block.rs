@@ -20,7 +20,7 @@ use crate::soundbank::enums::modulator_curve_types;
 use crate::utils::byte_functions::bit_mask::bit_mask_to_bool;
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, write_dword, write_word};
-use crate::utils::loggin::{spessa_synth_info, spessa_synth_warn};
+use crate::utils::loggin::SpessaLog;
 
 // ---------------------------------------------------------------------------
 // Private enums for union return types
@@ -330,7 +330,7 @@ impl ConnectionBlock {
     /// Equivalent to: static fromSFModulator(m, articulation)
     pub fn from_sf_modulator(m: &Modulator, articulation: &mut DownloadableSoundsArticulation) {
         let failed = |msg: &str| {
-            spessa_synth_warn(&format!(
+            SpessaLog::warn(&format!(
                 "Failed converting SF modulator into DLS:\n {} \n({msg})",
                 m
             ));
@@ -426,7 +426,7 @@ impl ConnectionBlock {
         let dls_destination = match from_sf_destination(generator.generator_type, amount_i32) {
             Some(d) => d,
             None => {
-                spessa_synth_warn(&format!(
+                SpessaLog::warn(&format!(
                     "Failed converting SF2 generator into DLS:\n {generator} \n(Invalid type)"
                 ));
                 return;
@@ -560,7 +560,7 @@ impl ConnectionBlock {
                 zone.set_fine_tuning(current + value);
             }
             _ => {
-                spessa_synth_info(&format!(
+                SpessaLog::info(&format!(
                     "Failed converting DLS articulator into SF generator: {self}\n(invalid destination)"
                 ));
             }
@@ -691,7 +691,7 @@ impl ConnectionBlock {
     // -----------------------------------------------------------------------
 
     fn failed_conversion(&self, msg: &str) {
-        spessa_synth_info(&format!(
+        SpessaLog::info(&format!(
             "Failed converting DLS articulator into SF2:\n {self}\n({msg})"
         ));
     }

@@ -5,15 +5,15 @@
 /// TypeScript uses an abstract class with protected static methods.
 /// Rust has no abstract classes; equivalent logic is expressed as module-level pub functions.
 /// TypeScript's `throw new Error(...)` maps to `Err(String)` in Rust.
-use crate::utils::loggin::spessa_synth_group_end;
-use crate::utils::riff_chunk::{RIFFChunk, read_riff_chunk};
+use crate::utils::loggin::SpessaLog;
+use crate::utils::riff_chunk::RIFFChunk;
 use crate::utils::byte_functions::string::read_binary_string_indexed;
 
 /// Assembles a DLS parse error message and closes the group log.
 /// The caller should return the error as `Err(parsing_error(...))`.
 /// Equivalent to: `DLSVerifier.parsingError(error)`
 pub fn parsing_error(error: &str) -> String {
-    spessa_synth_group_end();
+    SpessaLog::group_end();
     format!("DLS parse error: {error} The file may be corrupted.")
 }
 
@@ -61,7 +61,7 @@ pub fn verify_and_read_list(
     verify_text(&list_type, types)?;
     let mut chunks: Vec<RIFFChunk> = Vec::new();
     while chunk.data.len() > chunk.data.current_index {
-        chunks.push(read_riff_chunk(&mut chunk.data, true, false));
+        chunks.push(RIFFChunk::read(&mut chunk.data, true, false));
     }
     Ok(chunks)
 }

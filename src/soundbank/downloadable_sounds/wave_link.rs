@@ -6,7 +6,7 @@ use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
 use crate::soundbank::enums::sample_types;
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, write_dword, write_word};
-use crate::utils::riff_chunk::{RIFFChunk, write_riff_chunk_raw};
+use crate::utils::riff_chunk::RIFFChunk;
 
 /// DLS WaveLink parameters parsed from or written to a `wlnk` chunk.
 ///
@@ -117,7 +117,7 @@ impl WaveLink {
         write_word(&mut wlnk_data, self.phase_group); // UsPhaseGroup (WORD)
         write_dword(&mut wlnk_data, self.channel); // UlChannel (DWORD)
         write_dword(&mut wlnk_data, self.table_index); // UlTableIndex (DWORD)
-        write_riff_chunk_raw("wlnk", &wlnk_data, false, false)
+        RIFFChunk::write("wlnk", &wlnk_data, false, false)
     }
 }
 
@@ -132,7 +132,7 @@ mod tests {
     use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
     use crate::soundbank::enums::sample_types;
     use crate::utils::indexed_array::IndexedByteArray;
-    use crate::utils::riff_chunk::{RIFFChunk, read_riff_chunk};
+    use crate::utils::riff_chunk::RIFFChunk;
 
     // -----------------------------------------------------------------------
     // Helpers
@@ -437,7 +437,7 @@ mod tests {
 
         let written = wl_orig.write();
         let mut buf = IndexedByteArray::from_vec(written.to_vec());
-        let mut chunk = read_riff_chunk(&mut buf, true, false);
+        let mut chunk = RIFFChunk::read(&mut buf, true, false);
         let wl_read = WaveLink::read(&mut chunk);
 
         assert_eq!(wl_read.table_index, 5);
@@ -455,7 +455,7 @@ mod tests {
 
         let written = wl_orig.write();
         let mut buf = IndexedByteArray::from_vec(written.to_vec());
-        let mut chunk = read_riff_chunk(&mut buf, true, false);
+        let mut chunk = RIFFChunk::read(&mut buf, true, false);
         let wl_read = WaveLink::read(&mut chunk);
 
         assert_eq!(wl_read.table_index, 42);
@@ -475,7 +475,7 @@ mod tests {
 
         let written = wl_orig.write();
         let mut buf = IndexedByteArray::from_vec(written.to_vec());
-        let mut chunk = read_riff_chunk(&mut buf, true, false);
+        let mut chunk = RIFFChunk::read(&mut buf, true, false);
         let wl_read = WaveLink::read(&mut chunk);
 
         assert_eq!(wl_read.table_index, 1);

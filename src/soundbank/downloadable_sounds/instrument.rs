@@ -17,12 +17,8 @@ use crate::soundbank::downloadable_sounds::region::DownloadableSoundsRegion;
 use crate::soundbank::downloadable_sounds::sample::DownloadableSoundsSample;
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, write_dword};
-use crate::utils::loggin::{
-    spessa_synth_group, spessa_synth_group_collapsed, spessa_synth_group_end,
-};
-use crate::utils::riff_chunk::{
-    RIFFChunk, find_riff_list_type, read_riff_chunk, write_riff_chunk_parts, write_riff_chunk_raw,
-};
+use crate::utils::loggin::SpessaLog;
+use crate::utils::riff_chunk::RIFFChunk;
 use crate::utils::byte_functions::string::{get_string_bytes, read_binary_string, read_binary_string_indexed};
 
 // ---------------------------------------------------------------------------
@@ -139,10 +135,10 @@ impl DownloadableSoundsInstrument {
         // The INFO block borrow is released at the end of this block.
         let instrument_name: String = {
             let mut name = String::new();
-            if let Some(info_chunk) = find_riff_list_type(&mut chunks, "INFO") {
-                // find_riff_list_type sets current_index = 4 (past the "INFO" list type FourCC).
+            if let Some(info_chunk) = RIFFChunk::find_list_type(&mut chunks, "INFO") {
+                // RIFFChunk::find_list_type sets current_index = 4 (past the "INFO" list type FourCC).
                 while info_chunk.data.current_index < info_chunk.data.len() {
-                    let mut sub = read_riff_chunk(&mut info_chunk.data, true, false);
+                    let mut sub = RIFFChunk::read(&mut info_chunk.data, true, false);
                     if sub.header == "INAM" {
                         let len = sub.data.len();
                         name = read_binary_string_indexed(&mut sub.data, len)
@@ -168,7 +164,7 @@ impl DownloadableSoundsInstrument {
         instrument.bank_lsb = (ul_bank & 127) as u8;
         instrument.is_gm_gs_drum = (ul_bank >> 31) > 0;
 
-        spessa_synth_group_collapsed(&format!("Parsing \"{}\"...", instrument_name));
+        SpessaLog::group_collapsed(&format!("Parsing \"{}\"...", instrument_name));
 
         // Find the lrgn (region list) position as a plain index before calling
         // articulation.read, which also requires &mut chunks.
@@ -180,7 +176,7 @@ impl DownloadableSoundsInstrument {
                     && read_binary_string(&c.data, 4, 0) == "lrgn"
             })
             .ok_or_else(|| {
-                spessa_synth_group_end();
+                SpessaLog::group_end();
                 parsing_error("No region list!")
             })?;
 
@@ -190,20 +186,20 @@ impl DownloadableSoundsInstrument {
         // Read regions from the lrgn list.
         {
             let lrgn = &mut chunks[lrgn_pos];
-            // Skip past the "lrgn" list type FourCC (same as find_riff_list_type).
+            // Skip past the "lrgn" list type FourCC (same as RIFFChunk::find_list_type).
             lrgn.data.current_index = 4;
             for _ in 0..regions_count {
                 if lrgn.data.current_index >= lrgn.data.len() {
                     break;
                 }
-                let mut region_chunk = read_riff_chunk(&mut lrgn.data, true, false);
+                let mut region_chunk = RIFFChunk::read(&mut lrgn.data, true, false);
                 if let Some(region) = DownloadableSoundsRegion::read(samples, &mut region_chunk) {
                     instrument.regions.push(region);
                 }
             }
         }
 
-        spessa_synth_group_end();
+        SpessaLog::group_end();
         Ok(instrument)
     }
 
@@ -232,7 +228,7 @@ impl DownloadableSoundsInstrument {
         instrument.program = preset.program;
         instrument.is_gm_gs_drum = preset.is_gm_gs_drum;
 
-        spessa_synth_group(&format!("Converting {} to DLS...", preset.name));
+        SpessaLog::group(&format!("Converting {} to DLS...", preset.name));
 
         // Flatten the preset+instrument zones into a single instrument, then convert each zone
         // to a DLS region.
@@ -246,7 +242,7 @@ impl DownloadableSoundsInstrument {
             }
         }
 
-        spessa_synth_group_end();
+        SpessaLog::group_end();
         instrument
     }
 
@@ -260,7 +256,7 @@ impl DownloadableSoundsInstrument {
     ///
     /// Equivalent to: write(): IndexedByteArray
     pub fn write(&self) -> IndexedByteArray {
-        spessa_synth_group_collapsed(&format!("Writing {}...", self.name));
+        SpessaLog::group_collapsed(&format!("Writing {}...", self.name));
 
         // insh chunk
         let header = self.write_header();
@@ -268,7 +264,7 @@ impl DownloadableSoundsInstrument {
         // lrgn LIST (region list)
         let region_parts: Vec<IndexedByteArray> = self.regions.iter().map(|r| r.write()).collect();
         let region_slices: Vec<&[u8]> = region_parts.iter().map(|a| &**a).collect();
-        let lrgn = write_riff_chunk_parts("lrgn", &region_slices, true);
+        let lrgn = RIFFChunk::write_parts("lrgn", &region_slices, true);
 
         let mut parts: Vec<IndexedByteArray> = vec![header, lrgn];
 
@@ -280,14 +276,14 @@ impl DownloadableSoundsInstrument {
 
         // INFO LIST containing INAM (instrument name)
         let inam_bytes = get_string_bytes(&self.name, true, false);
-        let inam = write_riff_chunk_raw("INAM", &inam_bytes, false, false);
-        let info = write_riff_chunk_raw("INFO", &inam, false, true);
+        let inam = RIFFChunk::write("INAM", &inam_bytes, false, false);
+        let info = RIFFChunk::write("INFO", &inam, false, true);
         parts.push(info);
 
         let slices: Vec<&[u8]> = parts.iter().map(|a| &**a).collect();
-        let result = write_riff_chunk_parts("ins ", &slices, true);
+        let result = RIFFChunk::write_parts("ins ", &slices, true);
 
-        spessa_synth_group_end();
+        SpessaLog::group_end();
         result
     }
 
@@ -411,7 +407,7 @@ impl DownloadableSoundsInstrument {
         }
         write_dword(&mut insh_data, ul_bank);
         write_dword(&mut insh_data, self.program as u32 & 127);
-        write_riff_chunk_raw("insh", &insh_data, false, false)
+        RIFFChunk::write("insh", &insh_data, false, false)
     }
 }
 

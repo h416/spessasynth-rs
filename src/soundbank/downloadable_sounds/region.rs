@@ -13,8 +13,8 @@ use crate::soundbank::downloadable_sounds::wave_sample::WaveSample;
 use crate::soundbank::types::GenericRange;
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, write_word};
-use crate::utils::loggin::spessa_synth_warn;
-use crate::utils::riff_chunk::{RIFFChunk, write_riff_chunk_parts, write_riff_chunk_raw};
+use crate::utils::loggin::SpessaLog;
+use crate::utils::riff_chunk::RIFFChunk;
 
 // ---------------------------------------------------------------------------
 // DownloadableSoundsRegion
@@ -106,7 +106,7 @@ impl DownloadableSoundsRegion {
         let mut region_chunks = match verify_and_read_list(chunk, &["rgn ", "rgn2"]) {
             Ok(chunks) => chunks,
             Err(e) => {
-                spessa_synth_warn(&format!("Failed to read DLS region chunk: {e}"));
+                SpessaLog::warn(&format!("Failed to read DLS region chunk: {e}"));
                 return None;
             }
         };
@@ -122,7 +122,7 @@ impl DownloadableSoundsRegion {
             Some(pos) => pos,
             None => {
                 // No wave link means no sample – nothing useful in this region.
-                spessa_synth_warn("Invalid DLS region: missing 'wlnk' chunk! Discarding...");
+                SpessaLog::warn("Invalid DLS region: missing 'wlnk' chunk! Discarding...");
                 return None;
             }
         };
@@ -133,7 +133,7 @@ impl DownloadableSoundsRegion {
         let rgnh_pos = match rgnh_pos {
             Some(pos) => pos,
             None => {
-                spessa_synth_warn("Invalid DLS region: missing 'rgnh' chunk! Discarding...");
+                SpessaLog::warn("Invalid DLS region: missing 'rgnh' chunk! Discarding...");
                 return None;
             }
         };
@@ -143,7 +143,7 @@ impl DownloadableSoundsRegion {
         let sample = match samples.get(sample_idx) {
             Some(s) => s,
             None => {
-                spessa_synth_warn(&parsing_error(&format!(
+                SpessaLog::warn(&parsing_error(&format!(
                     "Invalid sample index: {}. Samples available: {}",
                     wave_link.table_index,
                     samples.len()
@@ -246,7 +246,7 @@ impl DownloadableSoundsRegion {
         let wsmp = self.wave_sample.write();
         let wlnk = self.wave_link.write();
         let art = self.articulation.write();
-        write_riff_chunk_parts("rgn2", &[&*header, &*wsmp, &*wlnk, &*art], true)
+        RIFFChunk::write_parts("rgn2", &[&*header, &*wsmp, &*wlnk, &*art], true)
     }
 
     /// Converts this DLS region into an SF2 instrument zone appended to `instrument`.
@@ -338,7 +338,7 @@ impl DownloadableSoundsRegion {
         write_word(&mut rgnh_data, self.fus_options as u32);
         write_word(&mut rgnh_data, self.key_group as u32);
         write_word(&mut rgnh_data, self.us_layer as u32);
-        write_riff_chunk_raw("rgnh", &rgnh_data, false, false)
+        RIFFChunk::write("rgnh", &rgnh_data, false, false)
     }
 }
 

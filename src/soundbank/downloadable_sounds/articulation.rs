@@ -3,19 +3,25 @@
 /// Ported from: src/soundbank/downloadable_sounds/articulation.ts
 use crate::soundbank::basic_soundbank::basic_zone::BasicZone;
 use crate::soundbank::basic_soundbank::generator_types::{GeneratorType, generator_types as gt};
-use crate::soundbank::basic_soundbank::modulator::Modulator;
 use crate::soundbank::downloadable_sounds::connection_block::ConnectionBlock;
-use crate::soundbank::downloadable_sounds::default_dls_modulators::{
-    DLS_1_NO_VIBRATO_MOD, DLS_1_NO_VIBRATO_PRESSURE,
-};
-use crate::soundbank::downloadable_sounds::dls_verifier::verify_header;
 use crate::soundbank::downloadable_sounds::enums::{dls_destinations, dls_sources};
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, write_dword};
-use crate::utils::loggin::spessa_synth_warn;
-use crate::utils::riff_chunk::{
-    RIFFChunk, find_riff_list_type, read_riff_chunk, write_riff_chunk_parts, write_riff_chunk_raw,
-};
+use crate::utils::loggin::SpessaLog;
+use crate::utils::riff_chunk::RIFFChunk;
+
+// ---------------------------------------------------------------------------
+// Private helper: Option-returning generator lookup
+// ---------------------------------------------------------------------------
+
+/// Returns `Some(value)` if `gen_type` exists in the zone, `None` otherwise.
+/// Equivalent to: zone.getGenerator(type, null)
+fn zone_get_generator_opt(zone: &BasicZone, gen_type: GeneratorType) -> Option<i32> {
+    zone.generators
+        .iter()
+        .find(|g| g.generator_type == gen_type)
+        .map(|g| g.generator_value as i32)
+}
 
 // ---------------------------------------------------------------------------
 // DlsMode
@@ -136,23 +142,20 @@ impl DownloadableSoundsArticulation {
     /// Reads DLS articulation data from a chunk list (lart or lar2 LIST).
     /// Equivalent to: read(chunks: RIFFChunk[])
     pub fn read(&mut self, chunks: &mut [RIFFChunk]) {
-        if let Some(lart) = find_riff_list_type(chunks, "lart") {
+        if let Some(lart) = RIFFChunk::find_list_type(chunks, "lart") {
             self.mode = DlsMode::Dls1;
             while lart.data.current_index < lart.data.len() {
-                let art1 = read_riff_chunk(&mut lart.data, true, false);
+                let chunk = RIFFChunk::read(&mut lart.data, true, false);
                 // Note: DLS spec says lart should only have art1, but DirectMusic Producer
-                // "FarmGame.dls" has art1 in lar2. We allow both.
-                if verify_header(&art1, &["art1", "art2"]).is_err() {
-                    spessa_synth_warn(&format!(
-                        "Unexpected chunk header in lart: \"{}\"",
-                        art1.header
-                    ));
-                    break;
+                // "FarmGame.dls" has art2 in lart. We allow both art1 and art2 here.
+                if chunk.header != "art1" && chunk.header != "art2" {
+                    // There may be a cdl chunk, testcase romania_main.dls
+                    continue;
                 }
-                let mut art_data = art1.data;
+                let mut art_data = chunk.data;
                 let cb_size = read_little_endian_indexed(&mut art_data, 4);
                 if cb_size != 8 {
-                    spessa_synth_warn(&format!(
+                    SpessaLog::warn(&format!(
                         "CbSize in articulation mismatch. Expected 8, got {cb_size}"
                     ));
                 }
@@ -162,22 +165,19 @@ impl DownloadableSoundsArticulation {
                         .push(ConnectionBlock::read(&mut art_data));
                 }
             }
-        } else if let Some(lar2) = find_riff_list_type(chunks, "lar2") {
+        } else if let Some(lar2) = RIFFChunk::find_list_type(chunks, "lar2") {
             self.mode = DlsMode::Dls2;
             while lar2.data.current_index < lar2.data.len() {
-                let art2 = read_riff_chunk(&mut lar2.data, true, false);
+                let chunk = RIFFChunk::read(&mut lar2.data, true, false);
                 // Note: same as above – allow both art2 and art1 in lar2.
-                if verify_header(&art2, &["art2", "art1"]).is_err() {
-                    spessa_synth_warn(&format!(
-                        "Unexpected chunk header in lar2: \"{}\"",
-                        art2.header
-                    ));
-                    break;
+                if chunk.header != "art1" && chunk.header != "art2" {
+                    // There may be a cdl chunk, testcase romania_main.dls
+                    continue;
                 }
-                let mut art_data = art2.data;
+                let mut art_data = chunk.data;
                 let cb_size = read_little_endian_indexed(&mut art_data, 4);
                 if cb_size != 8 {
-                    spessa_synth_warn(&format!(
+                    SpessaLog::warn(&format!(
                         "CbSize in articulation mismatch. Expected 8, got {cb_size}"
                     ));
                 }
@@ -214,8 +214,8 @@ impl DownloadableSoundsArticulation {
             parts.push(arr);
         }
 
-        let art2 = write_riff_chunk_parts(chunk_name, &parts, false);
-        write_riff_chunk_raw(list_name, &art2, false, true)
+        let art2 = RIFFChunk::write_parts(chunk_name, &parts, false);
+        RIFFChunk::write(list_name, &art2, false, true)
     }
 
     /// Converts DLS articulation into an SF zone (applying generators and modulators).
@@ -259,29 +259,6 @@ impl DownloadableSoundsArticulation {
 
             // General modulator
             connection.to_sf_modulator(zone);
-        }
-
-        // DLS 1 does not have vibrato LFO: disable it with zero-amount modulators
-        if self.mode == DlsMode::Dls1 {
-            let no_vib_mod = Modulator::new(
-                DLS_1_NO_VIBRATO_MOD.primary_source(),
-                DLS_1_NO_VIBRATO_MOD.secondary_source(),
-                DLS_1_NO_VIBRATO_MOD.destination,
-                DLS_1_NO_VIBRATO_MOD.transform_amount,
-                DLS_1_NO_VIBRATO_MOD.transform_type,
-                DLS_1_NO_VIBRATO_MOD.is_effect_modulator,
-                DLS_1_NO_VIBRATO_MOD.is_default_resonant_modulator,
-            );
-            let no_vib_pressure = Modulator::new(
-                DLS_1_NO_VIBRATO_PRESSURE.primary_source(),
-                DLS_1_NO_VIBRATO_PRESSURE.secondary_source(),
-                DLS_1_NO_VIBRATO_PRESSURE.destination,
-                DLS_1_NO_VIBRATO_PRESSURE.transform_amount,
-                DLS_1_NO_VIBRATO_PRESSURE.transform_type,
-                DLS_1_NO_VIBRATO_PRESSURE.is_effect_modulator,
-                DLS_1_NO_VIBRATO_PRESSURE.is_default_resonant_modulator,
-            );
-            zone.add_modulators(&[no_vib_mod, no_vib_pressure]);
         }
 
         // Perform correction for key-to-envelope generators.
@@ -340,6 +317,38 @@ impl DownloadableSoundsArticulation {
                 }
             }
         }
+
+        // Perform DLS1 corrections.
+        // DLS1 only has a modulation LFO. Copy its parameters to the vibrato LFO and convert
+        // all pitch values to the vibrato LFO (including the mod wheel modulator). This
+        // ensures it stays in sync when using things like the GS controller matrix.
+        if self.mode == DlsMode::Dls1 {
+            // Copy over delay and rate to vibrato LFO
+            zone.set_generator(
+                gt::DELAY_VIB_LFO,
+                zone_get_generator_opt(zone, gt::DELAY_MOD_LFO).map(|v| v as f64),
+                true,
+            );
+            zone.set_generator(
+                gt::FREQ_VIB_LFO,
+                zone_get_generator_opt(zone, gt::FREQ_MOD_LFO).map(|v| v as f64),
+                true,
+            );
+
+            // Convert pitch excursion to vibrato LFO
+            zone.set_generator(
+                gt::VIB_LFO_TO_PITCH,
+                zone_get_generator_opt(zone, gt::MOD_LFO_TO_PITCH).map(|v| v as f64),
+                true,
+            );
+            zone.set_generator(gt::MOD_LFO_TO_PITCH, None, true);
+
+            for m in zone.modulators.iter_mut() {
+                if m.destination == gt::MOD_LFO_TO_PITCH {
+                    m.destination = gt::VIB_LFO_TO_PITCH;
+                }
+            }
+        }
     }
 }
 
@@ -355,7 +364,6 @@ mod tests {
     use crate::soundbank::downloadable_sounds::connection_source::ConnectionSource;
     use crate::soundbank::downloadable_sounds::enums::{dls_destinations as dd, dls_sources as ds};
     use crate::utils::byte_functions::little_endian::write_word;
-    use crate::utils::riff_chunk::write_riff_chunk_raw;
     use crate::utils::byte_functions::string::write_binary_string_indexed;
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -389,7 +397,7 @@ mod tests {
         let list_name = if art_type == "art2" { "lar2" } else { "lart" };
 
         // Build inner art chunk: [art_type(4)][size(4)][body]
-        let inner_chunk = write_riff_chunk_raw(art_type, &art_body, false, false);
+        let inner_chunk = RIFFChunk::write(art_type, &art_body, false, false);
         make_list_chunk(list_name, &inner_chunk)
     }
 
@@ -467,7 +475,7 @@ mod tests {
         let out = art.write();
         // Convert to &[u8] for slice comparisons (IndexedByteArray has no Range<usize> index)
         let s: &[u8] = &out;
-        // Output starts with "LIST" (is_list=true in write_riff_chunk_raw)
+        // Output starts with "LIST" (is_list=true in RIFFChunk::write)
         assert_eq!(&s[0..4], b"LIST");
         // LIST type should be "lar2"
         assert_eq!(&s[8..12], b"lar2");
@@ -492,7 +500,7 @@ mod tests {
 
         let written = art.write();
         // `written` is a complete serialised LIST chunk.
-        // Build a RIFFChunk for find_riff_list_type: header="LIST", data=written[8..]
+        // Build a RIFFChunk for RIFFChunk::find_list_type: header="LIST", data=written[8..]
         let written_len = written.len();
         let s: &[u8] = &written;
         let size = u32::from_le_bytes([s[4], s[5], s[6], s[7]]);
@@ -593,13 +601,14 @@ mod tests {
     }
 
     #[test]
-    fn test_to_sf_zone_dls1_adds_vibrato_modulators() {
+    fn test_to_sf_zone_dls1_no_modulators_added_when_empty() {
+        // TS 4.3.0 no longer injects "no-vibrato" cancellation modulators for DLS1;
+        // with no connection blocks and no mod-LFO-to-pitch modulator, nothing is added.
         let mut art = DownloadableSoundsArticulation::new();
         art.mode = DlsMode::Dls1;
         let mut zone = BasicZone::new();
         art.to_sf_zone(&mut zone);
-        // Two no-vibrato modulators should have been added
-        assert_eq!(zone.modulators.len(), 2);
+        assert_eq!(zone.modulators.len(), 0);
     }
 
     #[test]
@@ -609,6 +618,88 @@ mod tests {
         let mut zone = BasicZone::new();
         art.to_sf_zone(&mut zone);
         assert_eq!(zone.modulators.len(), 0);
+    }
+
+    #[test]
+    fn test_to_sf_zone_dls1_converts_mod_lfo_to_pitch_generator_to_vib_lfo() {
+        // A modLFO -> pitch connection is folded into the modLfoToPitch generator by the
+        // main loop (compound SF destination); DLS1 correction should then move it onto
+        // vibLfoToPitch and clear modLfoToPitch.
+        let mut art = DownloadableSoundsArticulation::new();
+        art.mode = DlsMode::Dls1;
+        let block = ConnectionBlock::new(
+            ConnectionSource::new(ds::MOD_LFO, 0, false, false),
+            ConnectionSource::default(),
+            dd::PITCH,
+            0,
+            50 << 16,
+        );
+        art.connection_blocks.push(block);
+        let mut zone = BasicZone::new();
+        art.to_sf_zone(&mut zone);
+        assert_eq!(zone.get_generator(gt::MOD_LFO_TO_PITCH, -999), -999);
+        assert_eq!(zone.get_generator(gt::VIB_LFO_TO_PITCH, -999), 50);
+    }
+
+    #[test]
+    fn test_to_sf_zone_dls1_copies_delay_and_freq_mod_lfo_to_vib_lfo() {
+        let mut art = DownloadableSoundsArticulation::new();
+        art.mode = DlsMode::Dls1;
+        let mut zone = BasicZone::new();
+        zone.set_generator(gt::DELAY_MOD_LFO, Some(100.0), true);
+        zone.set_generator(gt::FREQ_MOD_LFO, Some(200.0), true);
+        art.to_sf_zone(&mut zone);
+        assert_eq!(zone.get_generator(gt::DELAY_VIB_LFO, -999), 100);
+        assert_eq!(zone.get_generator(gt::FREQ_VIB_LFO, -999), 200);
+    }
+
+    #[test]
+    fn test_to_sf_zone_dls1_moves_mod_lfo_to_pitch_modulator_destination() {
+        // A modulator whose destination is modLfoToPitch should be repointed to
+        // vibLfoToPitch under DLS1 mode.
+        use crate::soundbank::basic_soundbank::modulator::Modulator;
+        let mut art = DownloadableSoundsArticulation::new();
+        art.mode = DlsMode::Dls1;
+        let mut zone = BasicZone::new();
+        zone.add_modulators(&[Modulator::new(
+            crate::soundbank::basic_soundbank::modulator_source::ModulatorSource::default(),
+            crate::soundbank::basic_soundbank::modulator_source::ModulatorSource::default(),
+            gt::MOD_LFO_TO_PITCH,
+            50.0,
+            0,
+            false,
+            false,
+        )]);
+        art.to_sf_zone(&mut zone);
+        assert!(
+            zone.modulators
+                .iter()
+                .all(|m| m.destination != gt::MOD_LFO_TO_PITCH)
+        );
+        assert!(
+            zone.modulators
+                .iter()
+                .any(|m| m.destination == gt::VIB_LFO_TO_PITCH)
+        );
+    }
+
+    #[test]
+    fn test_to_sf_zone_dls2_mode_skips_dls1_correction() {
+        // In DLS2 mode, modLfoToPitch should NOT be converted to vibLfoToPitch.
+        let mut art = DownloadableSoundsArticulation::new();
+        art.mode = DlsMode::Dls2;
+        let block = ConnectionBlock::new(
+            ConnectionSource::new(ds::MOD_LFO, 0, false, false),
+            ConnectionSource::default(),
+            dd::PITCH,
+            0,
+            50 << 16,
+        );
+        art.connection_blocks.push(block);
+        let mut zone = BasicZone::new();
+        art.to_sf_zone(&mut zone);
+        assert_eq!(zone.get_generator(gt::MOD_LFO_TO_PITCH, -999), 50);
+        assert_eq!(zone.get_generator(gt::VIB_LFO_TO_PITCH, -999), -999);
     }
 
     #[test]

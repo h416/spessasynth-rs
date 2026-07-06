@@ -24,14 +24,9 @@ use crate::soundbank::downloadable_sounds::sample::DownloadableSoundsSample;
 use crate::soundbank::types::{SF2VersionTag, SoundBankInfoData};
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, write_dword};
-use crate::utils::loggin::{
-    spessa_synth_group, spessa_synth_group_collapsed, spessa_synth_group_end, spessa_synth_info,
-    spessa_synth_warn,
-};
+use crate::utils::loggin::SpessaLog;
 use crate::utils::midi_hacks::BankSelectHacks;
-use crate::utils::riff_chunk::{
-    RIFFChunk, find_riff_list_type, read_riff_chunk, write_riff_chunk_parts, write_riff_chunk_raw,
-};
+use crate::utils::riff_chunk::RIFFChunk;
 use crate::utils::byte_functions::string::{get_string_bytes, read_binary_string, read_binary_string_indexed};
 
 // ---------------------------------------------------------------------------
@@ -62,12 +57,12 @@ impl DownloadableSounds {
             samples: Vec::new(),
             instruments: Vec::new(),
             sound_bank_info: SoundBankInfoData {
-                name: "Unnamed".to_string(),
+                name: "Unnamed DLS sound bank".to_string(),
                 version: SF2VersionTag { major: 2, minor: 4 },
                 creation_date: String::new(),
                 sound_engine: "DLS Level 2.2".to_string(),
                 engineer: None,
-                product: None,
+                product: Some("SpessaSynth DLS".to_string()),
                 copyright: None,
                 comment: None,
                 subject: None,
@@ -92,10 +87,10 @@ impl DownloadableSounds {
             return Err("No data provided!".to_string());
         }
         let mut data_array = IndexedByteArray::from_slice(data);
-        spessa_synth_group("Parsing DLS file...");
+        SpessaLog::group("Parsing DLS file...");
 
         // Read the main RIFF chunk header.
-        let first_chunk = read_riff_chunk(&mut data_array, false, false);
+        let first_chunk = RIFFChunk::read(&mut data_array, false, false);
         verify_header(&first_chunk, &["RIFF"])?;
         verify_text(
             &read_binary_string_indexed(&mut data_array, 4).to_lowercase(),
@@ -105,20 +100,15 @@ impl DownloadableSounds {
         // Collect all top-level chunks.
         let mut chunks: Vec<RIFFChunk> = Vec::new();
         while data_array.current_index < data_array.len() {
-            chunks.push(read_riff_chunk(&mut data_array, true, false));
+            chunks.push(RIFFChunk::read(&mut data_array, true, false));
         }
 
         let mut dls = DownloadableSounds::new();
 
-        // Set defaults before reading INFO.
-        dls.sound_bank_info.name = "Unnamed DLS".to_string();
-        dls.sound_bank_info.product = Some("SpessaSynth DLS".to_string());
-        dls.sound_bank_info.comment = Some("(no description)".to_string());
-
         // Parse the INFO LIST chunk.
-        if let Some(info_chunk) = find_riff_list_type(&mut chunks, "INFO") {
+        if let Some(info_chunk) = RIFFChunk::find_list_type(&mut chunks, "INFO") {
             while info_chunk.data.current_index < info_chunk.data.len() {
-                let mut info_part = read_riff_chunk(&mut info_chunk.data, true, false);
+                let mut info_part = RIFFChunk::read(&mut info_chunk.data, true, false);
                 let size = info_part.size as usize;
                 let text = read_binary_string_indexed(&mut info_part.data, size);
                 match info_part.header.as_str() {
@@ -143,14 +133,14 @@ impl DownloadableSounds {
                 .iter()
                 .position(|c| c.header == "colh")
                 .ok_or_else(|| {
-                    spessa_synth_group_end();
+                    SpessaLog::group_end();
                     parsing_error("No colh chunk!")
                 })?;
             let colh = &mut chunks[colh_pos];
             colh.data.current_index = 0;
             read_little_endian_indexed(&mut colh.data, 4)
         };
-        spessa_synth_info(&format!("Instruments amount: {instrument_amount}"));
+        SpessaLog::info(&format!("Instruments amount: {instrument_amount}"));
 
         // Read the wvpl (wave pool) LIST chunk.
         let wave_chunks: Vec<RIFFChunk> = {
@@ -161,7 +151,7 @@ impl DownloadableSounds {
             });
             match wvpl_chunk {
                 None => {
-                    spessa_synth_group_end();
+                    SpessaLog::group_end();
                     return Err(parsing_error("No wvpl chunk!"));
                 }
                 Some(wvpl) => verify_and_read_list(wvpl, &["wvpl"])?,
@@ -170,7 +160,7 @@ impl DownloadableSounds {
         for mut wave in wave_chunks {
             match DownloadableSoundsSample::read(&mut wave) {
                 Ok(sample) => dls.samples.push(sample),
-                Err(e) => spessa_synth_warn(&format!("Skipping wave sample: {e}")),
+                Err(e) => SpessaLog::warn(&format!("Skipping wave sample: {e}")),
             }
         }
 
@@ -183,15 +173,15 @@ impl DownloadableSounds {
             });
             match lins_chunk {
                 None => {
-                    spessa_synth_group_end();
+                    SpessaLog::group_end();
                     return Err(parsing_error("No lins chunk!"));
                 }
                 Some(lins) => verify_and_read_list(lins, &["lins"])?,
             }
         };
-        spessa_synth_group_collapsed("Loading instruments...");
+        SpessaLog::group_collapsed("Loading instruments...");
         if instrument_chunks.len() as u32 != instrument_amount {
-            spessa_synth_warn(&format!(
+            SpessaLog::warn(&format!(
                 "Colh reported invalid amount of instruments. Detected {}, expected {instrument_amount}",
                 instrument_chunks.len()
             ));
@@ -199,16 +189,16 @@ impl DownloadableSounds {
         for mut ins_chunk in instrument_chunks {
             match DownloadableSoundsInstrument::read(&dls.samples, &mut ins_chunk) {
                 Ok(instrument) => dls.instruments.push(instrument),
-                Err(e) => spessa_synth_warn(&format!("Skipping instrument: {e}")),
+                Err(e) => SpessaLog::warn(&format!("Skipping instrument: {e}")),
             }
         }
-        spessa_synth_group_end();
+        SpessaLog::group_end();
 
         // MobileBAE instrument aliasing (pgal chunk).
         // https://github.com/spessasus/spessasynth_core/issues/14
         // https://lpcwiki.miraheze.org/wiki/MobileBAE#Proprietary_instrument_aliasing_chunk
         if let Some(pgal_pos) = chunks.iter().position(|c| c.header == "pgal") {
-            spessa_synth_info("Found the instrument aliasing chunk!");
+            SpessaLog::info("Found the instrument aliasing chunk!");
             // Copy the data to avoid borrow-checker issues with dls.instruments.
             let pgal_len = chunks[pgal_pos].data.len();
             let mut pgal_data = chunks[pgal_pos].data.slice(0, pgal_len);
@@ -230,16 +220,16 @@ impl DownloadableSounds {
                 .iter()
                 .position(|i| BankSelectHacks::is_xg_drum(i.bank_msb) || i.is_gm_gs_drum);
             if drum_idx.is_none() {
-                spessa_synth_warn("MobileBAE aliasing chunk without a drum preset. Aborting!");
-                spessa_synth_group_end();
+                SpessaLog::warn("MobileBAE aliasing chunk without a drum preset. Aborting!");
+                SpessaLog::group_end();
                 return Ok(dls);
             }
             let drum_idx = drum_idx.unwrap();
 
             // Read 128-byte drum alias table.
             if pgal_data.current_index + 128 > pgal_data.len() {
-                spessa_synth_warn("MobileBAE aliasing chunk too short for drum table. Aborting!");
-                spessa_synth_group_end();
+                SpessaLog::warn("MobileBAE aliasing chunk too short for drum table. Aborting!");
+                SpessaLog::group_end();
                 return Ok(dls);
             }
             let drum_aliases_start = pgal_data.current_index;
@@ -256,7 +246,7 @@ impl DownloadableSounds {
                     .find(|r| r.key_range.max as u8 == alias && r.key_range.min as u8 == alias);
                 match region_opt {
                     None => {
-                        spessa_synth_warn(&format!(
+                        SpessaLog::warn(&format!(
                             "Invalid drum alias {key_num} to {alias}: region does not exist."
                         ));
                     }
@@ -285,7 +275,7 @@ impl DownloadableSounds {
                 let null_byte = pgal_data[pgal_data.current_index];
                 pgal_data.current_index += 1;
                 if null_byte != 0 {
-                    spessa_synth_warn(&format!("Invalid alias byte. Expected 0, got {null_byte}"));
+                    SpessaLog::warn(&format!("Invalid alias byte. Expected 0, got {null_byte}"));
                 }
 
                 // Input source
@@ -297,7 +287,7 @@ impl DownloadableSounds {
                 let null_byte2 = pgal_data[pgal_data.current_index];
                 pgal_data.current_index += 1;
                 if null_byte2 != 0 {
-                    spessa_synth_warn(&format!(
+                    SpessaLog::warn(&format!(
                         "Invalid alias header. Expected 0, got {null_byte2}"
                     ));
                 }
@@ -311,7 +301,7 @@ impl DownloadableSounds {
                 });
                 match input_opt {
                     None => {
-                        spessa_synth_warn(&format!(
+                        SpessaLog::warn(&format!(
                             "Invalid alias. Missing instrument: {input_bank_lsb}:{input_bank_msb}:{input_program}"
                         ));
                     }
@@ -327,7 +317,7 @@ impl DownloadableSounds {
             }
         }
 
-        spessa_synth_info(&format!(
+        SpessaLog::info(&format!(
             "Parsing finished! \"{}\" has {} instruments and {} samples.",
             if dls.sound_bank_info.name.is_empty() {
                 "UNNAMED"
@@ -337,7 +327,7 @@ impl DownloadableSounds {
             dls.instruments.len(),
             dls.samples.len()
         ));
-        spessa_synth_group_end();
+        SpessaLog::group_end();
         Ok(dls)
     }
 
@@ -349,17 +339,9 @@ impl DownloadableSounds {
     ///
     /// Equivalent to: static fromSF(bank: BasicSoundBank): DownloadableSounds
     pub fn from_sf(bank: &mut BasicSoundBank) -> Self {
-        spessa_synth_group_collapsed("Saving SF2 to DLS level 2...");
+        SpessaLog::group_collapsed("Saving SF2 to DLS level 2...");
         let mut dls = DownloadableSounds::new();
         dls.sound_bank_info = bank.sound_bank_info.clone();
-        let original_comment = dls
-            .sound_bank_info
-            .comment
-            .clone()
-            .unwrap_or_else(|| "(No description)".to_string());
-        dls.sound_bank_info.comment = Some(format!(
-            "{original_comment}\nConverted from SF2 to DLS with SpessaSynth"
-        ));
 
         for sample in bank.samples.iter_mut() {
             dls.samples
@@ -374,8 +356,8 @@ impl DownloadableSounds {
                 ));
         }
 
-        spessa_synth_info("Conversion complete!");
-        spessa_synth_group_end();
+        SpessaLog::info("Conversion complete!");
+        SpessaLog::group_end();
         dls
     }
 
@@ -392,24 +374,24 @@ impl DownloadableSounds {
     ///
     /// Equivalent to: async write(options: DLSWriteOptions): Promise<ArrayBuffer>
     pub fn write(&self) -> Vec<u8> {
-        spessa_synth_group_collapsed("Saving DLS...");
+        SpessaLog::group_collapsed("Saving DLS...");
 
         // colh chunk: instrument count.
         let mut colh_data = IndexedByteArray::new(4);
         write_dword(&mut colh_data, self.instruments.len() as u32);
-        let colh = write_riff_chunk_raw("colh", &colh_data, false, false);
+        let colh = RIFFChunk::write("colh", &colh_data, false, false);
 
         // lins LIST: one ins  chunk per instrument.
-        spessa_synth_group_collapsed("Writing instruments...");
+        SpessaLog::group_collapsed("Writing instruments...");
         let instrument_parts: Vec<IndexedByteArray> =
             self.instruments.iter().map(|i| i.write()).collect();
         let instrument_slices: Vec<&[u8]> = instrument_parts.iter().map(|a| &**a).collect();
-        let lins = write_riff_chunk_parts("lins", &instrument_slices, true);
-        spessa_synth_info("Success!");
-        spessa_synth_group_end();
+        let lins = RIFFChunk::write_parts("lins", &instrument_slices, true);
+        SpessaLog::info("Success!");
+        SpessaLog::group_end();
 
         // wvpl LIST: one wave chunk per sample.
-        spessa_synth_group_collapsed("Writing WAVE samples...");
+        SpessaLog::group_collapsed("Writing WAVE samples...");
         let mut current_index: u32 = 0;
         let mut ptbl_offsets: Vec<u32> = Vec::new();
         let mut sample_parts: Vec<IndexedByteArray> = Vec::new();
@@ -420,9 +402,9 @@ impl DownloadableSounds {
             sample_parts.push(out);
         }
         let sample_slices: Vec<&[u8]> = sample_parts.iter().map(|a| &**a).collect();
-        let wvpl = write_riff_chunk_parts("wvpl", &sample_slices, true);
-        spessa_synth_info("Succeeded!");
-        spessa_synth_group_end();
+        let wvpl = RIFFChunk::write_parts("wvpl", &sample_slices, true);
+        SpessaLog::info("Succeeded!");
+        SpessaLog::group_end();
 
         // ptbl chunk: pool table with per-sample offsets.
         let ptbl_size = 8 + 4 * ptbl_offsets.len();
@@ -432,24 +414,24 @@ impl DownloadableSounds {
         for &offset in &ptbl_offsets {
             write_dword(&mut ptbl_data, offset);
         }
-        let ptbl = write_riff_chunk_raw("ptbl", &ptbl_data, false, false);
+        let ptbl = RIFFChunk::write("ptbl", &ptbl_data, false, false);
 
         // INFO LIST: metadata.
         let mut info_chunks: Vec<IndexedByteArray> = Vec::new();
         let mut write_dls_info = |type_: &str, text: &str| {
             let bytes = get_string_bytes(text, true, false);
-            info_chunks.push(write_riff_chunk_raw(type_, &bytes, false, false));
+            info_chunks.push(RIFFChunk::write(type_, &bytes, false, false));
         };
 
         write_dls_info("INAM", &self.sound_bank_info.name);
-        if !self.sound_bank_info.creation_date.is_empty() {
-            write_dls_info("ICRD", &self.sound_bank_info.creation_date);
-        }
         if let Some(ref comment) = self.sound_bank_info.comment {
             write_dls_info("ICMT", comment);
         }
         if let Some(ref copyright) = self.sound_bank_info.copyright {
             write_dls_info("ICOP", copyright);
+        }
+        if !self.sound_bank_info.creation_date.is_empty() {
+            write_dls_info("ICRD", &self.sound_bank_info.creation_date);
         }
         if let Some(ref engineer) = self.sound_bank_info.engineer {
             write_dls_info("IENG", engineer);
@@ -464,16 +446,16 @@ impl DownloadableSounds {
         }
 
         let info_slices: Vec<&[u8]> = info_chunks.iter().map(|a| &**a).collect();
-        let info = write_riff_chunk_parts("INFO", &info_slices, true);
+        let info = RIFFChunk::write_parts("INFO", &info_slices, true);
 
         // Combine: RIFF("DLS ") { DLS  | colh | lins | ptbl | wvpl | INFO }
-        spessa_synth_info("Combining everything...");
+        SpessaLog::info("Combining everything...");
         let dls_str_bytes = get_string_bytes("DLS ", false, false);
         let parts: Vec<&[u8]> = vec![&dls_str_bytes, &colh, &lins, &ptbl, &wvpl, &info];
-        let out = write_riff_chunk_parts("RIFF", &parts, false);
+        let out = RIFFChunk::write_parts("RIFF", &parts, false);
 
-        spessa_synth_info("Saved successfully!");
-        spessa_synth_group_end();
+        SpessaLog::info("Saved successfully!");
+        SpessaLog::group_end();
         out.to_vec()
     }
 
@@ -485,18 +467,10 @@ impl DownloadableSounds {
     ///
     /// Equivalent to: toSF(): BasicSoundBank
     pub fn to_sf(&self) -> BasicSoundBank {
-        spessa_synth_group("Converting DLS to SF2...");
+        SpessaLog::group("Converting DLS to SF2...");
         let mut sound_bank = BasicSoundBank::new();
 
         sound_bank.sound_bank_info = self.sound_bank_info.clone();
-        let original_comment = sound_bank
-            .sound_bank_info
-            .comment
-            .clone()
-            .unwrap_or_else(|| "(No description)".to_string());
-        sound_bank.sound_bank_info.comment = Some(format!(
-            "{original_comment}\nConverted from DLS to SF2 with SpessaSynth"
-        ));
         sound_bank.sound_bank_info.version = SF2VersionTag { major: 2, minor: 4 };
 
         for sample in &self.samples {
@@ -507,8 +481,8 @@ impl DownloadableSounds {
         }
         sound_bank.flush();
 
-        spessa_synth_info("Conversion complete!");
-        spessa_synth_group_end();
+        SpessaLog::info("Conversion complete!");
+        SpessaLog::group_end();
         sound_bank
     }
 
@@ -521,32 +495,32 @@ impl DownloadableSounds {
     /// Equivalent to: private static printInfo(dls: DownloadableSounds)
     fn print_info(dls: &DownloadableSounds) {
         let info = &dls.sound_bank_info;
-        spessa_synth_info(&format!("name: \"{}\"", info.name));
-        spessa_synth_info(&format!(
+        SpessaLog::info(&format!("name: \"{}\"", info.name));
+        SpessaLog::info(&format!(
             "version: \"{}.{}\"",
             info.version.major, info.version.minor
         ));
         if !info.creation_date.is_empty() {
-            spessa_synth_info(&format!("creation_date: \"{}\"", info.creation_date));
+            SpessaLog::info(&format!("creation_date: \"{}\"", info.creation_date));
         }
-        spessa_synth_info(&format!("sound_engine: \"{}\"", info.sound_engine));
+        SpessaLog::info(&format!("sound_engine: \"{}\"", info.sound_engine));
         if let Some(ref v) = info.engineer {
-            spessa_synth_info(&format!("engineer: \"{v}\""));
+            SpessaLog::info(&format!("engineer: \"{v}\""));
         }
         if let Some(ref v) = info.product {
-            spessa_synth_info(&format!("product: \"{v}\""));
+            SpessaLog::info(&format!("product: \"{v}\""));
         }
         if let Some(ref v) = info.copyright {
-            spessa_synth_info(&format!("copyright: \"{v}\""));
+            SpessaLog::info(&format!("copyright: \"{v}\""));
         }
         if let Some(ref v) = info.comment {
-            spessa_synth_info(&format!("comment: \"{v}\""));
+            SpessaLog::info(&format!("comment: \"{v}\""));
         }
         if let Some(ref v) = info.subject {
-            spessa_synth_info(&format!("subject: \"{v}\""));
+            SpessaLog::info(&format!("subject: \"{v}\""));
         }
         if let Some(ref v) = info.software {
-            spessa_synth_info(&format!("software: \"{v}\""));
+            SpessaLog::info(&format!("software: \"{v}\""));
         }
     }
 }
@@ -645,8 +619,27 @@ mod tests {
 
     #[test]
     fn test_new_default_name() {
+        // TS 4.3.0 changed the default bank name from "Unnamed" to "Unnamed DLS sound bank".
         let dls = DownloadableSounds::new();
-        assert_eq!(dls.sound_bank_info.name, "Unnamed");
+        assert_eq!(dls.sound_bank_info.name, "Unnamed DLS sound bank");
+    }
+
+    #[test]
+    fn test_new_default_product() {
+        // TS 4.3.0 moved this default from a read()-time override into the class field
+        // initializer itself.
+        let dls = DownloadableSounds::new();
+        assert_eq!(
+            dls.sound_bank_info.product.as_deref(),
+            Some("SpessaSynth DLS")
+        );
+    }
+
+    #[test]
+    fn test_new_default_comment_is_none() {
+        // TS 4.3.0 no longer defaults comment to "(no description)".
+        let dls = DownloadableSounds::new();
+        assert!(dls.sound_bank_info.comment.is_none());
     }
 
     #[test]
@@ -749,9 +742,11 @@ mod tests {
 
     #[test]
     fn test_read_sets_default_name() {
+        // TS 4.3.0 no longer overrides the name in read(); it uses the class default
+        // "Unnamed DLS sound bank" directly when no INAM chunk is present.
         let data = make_minimal_dls(0, &[]);
         let dls = DownloadableSounds::read(&data).unwrap();
-        assert_eq!(dls.sound_bank_info.name, "Unnamed DLS");
+        assert_eq!(dls.sound_bank_info.name, "Unnamed DLS sound bank");
     }
 
     #[test]
@@ -1002,19 +997,12 @@ mod tests {
     }
 
     #[test]
-    fn test_to_sf_comment_appended() {
+    fn test_to_sf_comment_not_modified() {
+        // TS 4.3.0 no longer appends a "Converted from DLS to SF2..." note to the comment.
         let mut dls = DownloadableSounds::new();
         dls.sound_bank_info.comment = Some("Original".to_string());
         let bank = dls.to_sf();
-        let comment = bank.sound_bank_info.comment.unwrap();
-        assert!(
-            comment.contains("Original"),
-            "original comment should be preserved"
-        );
-        assert!(
-            comment.contains("DLS to SF2"),
-            "conversion note should be appended"
-        );
+        assert_eq!(bank.sound_bank_info.comment.as_deref(), Some("Original"));
     }
 
     #[test]
@@ -1062,12 +1050,14 @@ mod tests {
     }
 
     #[test]
-    fn test_from_sf_comment_appended() {
+    fn test_from_sf_comment_not_modified() {
+        // TS 4.3.0 no longer appends a "Converted from SF2 to DLS..." note to the comment.
         let mut bank = BasicSoundBank::new();
         bank.sound_bank_info.comment = Some("Original SF2".to_string());
         let dls = DownloadableSounds::from_sf(&mut bank);
-        let comment = dls.sound_bank_info.comment.unwrap();
-        assert!(comment.contains("Original SF2"));
-        assert!(comment.contains("SF2 to DLS"));
+        assert_eq!(
+            dls.sound_bank_info.comment.as_deref(),
+            Some("Original SF2")
+        );
     }
 }

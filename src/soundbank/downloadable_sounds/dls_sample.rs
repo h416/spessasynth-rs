@@ -12,7 +12,7 @@
 /// The overridden `getAudioData` / `getRawData` methods are exposed on `DlsSample`.
 use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
 use crate::soundbank::enums::sample_types;
-use crate::utils::loggin::spessa_synth_warn;
+use crate::utils::loggin::SpessaLog;
 
 // ---------------------------------------------------------------------------
 // wFormatTag constants
@@ -77,7 +77,8 @@ fn read_pcm(data: &[u8], bytes_per_sample: usize) -> Vec<f32> {
 /// See: https://en.wikipedia.org/wiki/G.711#A-law
 /// Equivalent to: readALAW(data, bytesPerSample)
 ///
-/// Note: the divisor 32_678 is preserved from the original TypeScript source (typo for 32_768).
+/// Note: TS 4.2.0 divided by `32_678` (a typo for `32_768`). TS 4.3.0 fixed this typo, so
+/// the divisor below is `32_768.0` to match the corrected upstream behavior.
 fn read_alaw(data: &[u8], bytes_per_sample: usize) -> Vec<f32> {
     let sample_length = data.len() / bytes_per_sample;
     let mut sample_data = Vec::with_capacity(sample_length);
@@ -109,13 +110,12 @@ fn read_alaw(data: &[u8], bytes_per_sample: usize) -> Vec<f32> {
         }
 
         // Apply sign based on the original input's sign bit
-        // Note: divisor 32_678 is preserved from the original TypeScript (intentional typo)
         let s16sample: i32 = if input > 127 {
             mantissa as i32
         } else {
             -(mantissa as i32)
         };
-        sample_data.push((s16sample as f64 / 32_678.0) as f32);
+        sample_data.push((s16sample as f64 / 32_768.0) as f32);
     }
 
     sample_data
@@ -206,7 +206,7 @@ impl DlsSample {
                 w_format_tag::PCM => read_pcm(&self.raw_data, bps),
                 w_format_tag::ALAW => read_alaw(&self.raw_data, bps),
                 tag => {
-                    spessa_synth_warn(&format!(
+                    SpessaLog::warn(&format!(
                         "Failed to decode sample. Unknown wFormatTag: {}",
                         tag
                     ));
@@ -444,7 +444,7 @@ mod tests {
         // mantissa = (21<<4)+8 = 336+8 = 344; exponent>1 → 344<<4 = 5504
         // s16sample = input(0) > 127? no → -5504
         let result = read_alaw(&[0], 1);
-        let expected = -5504.0f32 / 32_678.0;
+        let expected = -5504.0f32 / 32_768.0;
         assert!((result[0] - expected).abs() < 1e-5);
     }
 
@@ -463,17 +463,15 @@ mod tests {
     }
 
     #[test]
-    fn test_read_alaw_uses_32678_divisor() {
-        // Verify divisor is 32_678 (preserved typo from TypeScript), not 32_768
+    fn test_read_alaw_uses_32768_divisor() {
+        // TS 4.3.0 fixed the 32_678 typo to 32_768; verify the corrected divisor is used.
         // For input = 0xD5 (213): xor 0x55 = 0x80, &0x7f = 0, exp=0, man=0
         // man = (0<<4)+8 = 8, exp not > 1
         // s16 = 8 (positive since 213 > 127)
-        // result = 8 / 32_678 ≈ 0.0002449...
+        // result = 8 / 32_768 = 0.000244140625
         let result = read_alaw(&[0xD5], 1);
-        let with_correct = 8.0f32 / 32_768.0;
-        let with_typo = 8.0f32 / 32_678.0;
-        // result should be closer to the typo divisor
-        assert!((result[0] - with_typo).abs() < (result[0] - with_correct).abs());
+        let expected = 8.0f32 / 32_768.0;
+        assert!((result[0] - expected).abs() < 1e-7);
     }
 
     // --- get_audio_data: PCM s16 ---

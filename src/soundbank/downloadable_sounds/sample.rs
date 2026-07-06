@@ -21,10 +21,8 @@ use crate::soundbank::downloadable_sounds::dls_verifier::verify_and_read_list;
 use crate::soundbank::downloadable_sounds::wave_sample::WaveSample;
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, write_dword, write_word};
-use crate::utils::loggin::spessa_synth_info;
-use crate::utils::riff_chunk::{
-    RIFFChunk, read_riff_chunk, write_riff_chunk_parts, write_riff_chunk_raw,
-};
+use crate::utils::loggin::SpessaLog;
+use crate::utils::riff_chunk::RIFFChunk;
 use crate::utils::byte_functions::string::{get_string_bytes, read_binary_string, read_binary_string_indexed};
 
 // ---------------------------------------------------------------------------
@@ -133,7 +131,7 @@ impl DownloadableSoundsSample {
             let info_chunk = &mut chunks[info_pos];
             info_chunk.data.current_index = 4; // skip "INFO" FourCC
             while info_chunk.data.current_index < info_chunk.data.len() {
-                let sub = read_riff_chunk(&mut info_chunk.data, true, false);
+                let sub = RIFFChunk::read(&mut info_chunk.data, true, false);
                 if sub.header == "INAM" {
                     let size = sub.size as usize;
                     let mut sub_data = sub.data;
@@ -216,14 +214,14 @@ impl DownloadableSoundsSample {
     pub fn write(&self) -> IndexedByteArray {
         let fmt = self.write_fmt();
         let wsmp = self.wave_sample.write();
-        let data_chunk = write_riff_chunk_raw("data", &self.data, false, false);
+        let data_chunk = RIFFChunk::write("data", &self.data, false, false);
         let inam_bytes = get_string_bytes(&self.name, true, false);
-        let inam = write_riff_chunk_raw("INAM", &inam_bytes, false, false);
-        let info = write_riff_chunk_raw("INFO", &inam, false, true);
+        let inam = RIFFChunk::write("INAM", &inam_bytes, false, false);
+        let info = RIFFChunk::write("INFO", &inam, false, true);
 
-        spessa_synth_info(&format!("Saved {} successfully!", self.name));
+        SpessaLog::info(&format!("Saved {} successfully!", self.name));
 
-        write_riff_chunk_parts("wave", &[&*fmt, &*wsmp, &*data_chunk, &*info], true)
+        RIFFChunk::write_parts("wave", &[&*fmt, &*wsmp, &*data_chunk, &*info], true)
     }
 
     /// Serializes the `fmt ` sub-chunk (18 bytes of WAV header fields).
@@ -237,7 +235,7 @@ impl DownloadableSoundsSample {
         write_dword(&mut fmt_data, self.sample_rate * 2); // dwAvgBytesPerSec (16-bit assumed)
         write_word(&mut fmt_data, 2); // wBlockAlign
         write_word(&mut fmt_data, self.bytes_per_sample as u32 * 8); // wBitsPerSample
-        write_riff_chunk_raw("fmt ", &fmt_data, false, false)
+        RIFFChunk::write("fmt ", &fmt_data, false, false)
     }
 }
 

@@ -13,8 +13,8 @@ use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::{
     read_little_endian_indexed, signed_int16, write_dword, write_word,
 };
-use crate::utils::loggin::spessa_synth_warn;
-use crate::utils::riff_chunk::{RIFFChunk, write_riff_chunk_raw};
+use crate::utils::loggin::SpessaLog;
+use crate::utils::riff_chunk::RIFFChunk;
 
 /// Fixed size of the wsmp header field (without loop records).
 /// Equivalent to: const WSMP_SIZE = 20
@@ -95,7 +95,7 @@ impl WaveSample {
         // CbSize: expected to be WSMP_SIZE (20)
         let cb_size = read_little_endian_indexed(&mut chunk.data, 4);
         if cb_size != WSMP_SIZE as u32 {
-            spessa_synth_warn(&format!(
+            SpessaLog::warn(&format!(
                 "Wsmp cbSize mismatch: got {}, expected {}.",
                 cb_size, WSMP_SIZE
             ));
@@ -121,11 +121,11 @@ impl WaveSample {
         if loops_amount > 0 {
             let loop_cb_size = read_little_endian_indexed(&mut chunk.data, 4);
             if loop_cb_size != WSMP_LOOP_SIZE as u32 {
-                // Note: the expected value in the message intentionally uses WSMP_SIZE,
-                // faithfully matching the TypeScript source.
-                spessa_synth_warn(&format!(
+                // TS 4.3.0 fixed this warning message to report WSMP_LOOP_SIZE (16) as the
+                // expected value, instead of the incorrect WSMP_SIZE (20) used in 4.2.0.
+                SpessaLog::warn(&format!(
                     "CbSize for loop in wsmp mismatch. Expected {}, got {}.",
-                    WSMP_SIZE, loop_cb_size
+                    WSMP_LOOP_SIZE, loop_cb_size
                 ));
             }
             // ulLoopType stored as DWORD (4 bytes) even though DLSLoopType is u16
@@ -321,7 +321,7 @@ impl WaveSample {
             write_dword(&mut wsmp_data, loop_data.loop_length);
         }
 
-        write_riff_chunk_raw("wsmp", &wsmp_data, false, false)
+        RIFFChunk::write("wsmp", &wsmp_data, false, false)
     }
 }
 
@@ -340,7 +340,7 @@ mod tests {
     use crate::soundbank::downloadable_sounds::enums::dls_loop_types;
     use crate::soundbank::enums::sample_types;
     use crate::utils::indexed_array::IndexedByteArray;
-    use crate::utils::riff_chunk::{RIFFChunk, read_riff_chunk};
+    use crate::utils::riff_chunk::RIFFChunk;
 
     // -----------------------------------------------------------------------
     // Helpers
@@ -1009,7 +1009,7 @@ mod tests {
         let written = ws_orig.write();
         let written_bytes = written.to_vec();
         let mut buf = IndexedByteArray::from_vec(written_bytes);
-        let mut chunk = read_riff_chunk(&mut buf, true, false);
+        let mut chunk = RIFFChunk::read(&mut buf, true, false);
         let ws_read = WaveSample::read(&mut chunk).unwrap();
 
         assert_eq!(ws_read.unity_note, 48);
@@ -1034,7 +1034,7 @@ mod tests {
         let written = ws_orig.write();
         let written_bytes = written.to_vec();
         let mut buf = IndexedByteArray::from_vec(written_bytes);
-        let mut chunk = read_riff_chunk(&mut buf, true, false);
+        let mut chunk = RIFFChunk::read(&mut buf, true, false);
         let ws_read = WaveSample::read(&mut chunk).unwrap();
 
         assert_eq!(ws_read.unity_note, 60);
@@ -1054,7 +1054,7 @@ mod tests {
         let written = ws_orig.write();
         let written_bytes = written.to_vec();
         let mut buf = IndexedByteArray::from_vec(written_bytes);
-        let mut chunk = read_riff_chunk(&mut buf, true, false);
+        let mut chunk = RIFFChunk::read(&mut buf, true, false);
         let ws_read = WaveSample::read(&mut chunk).unwrap();
 
         assert_eq!(ws_read.unity_note, 72);
