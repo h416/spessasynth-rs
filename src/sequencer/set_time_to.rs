@@ -47,14 +47,19 @@
 ///   (`resetRP15` in the new `channel/reset.ts`) does.
 ///
 /// TODO(Task 20-22, synthesizer restructuring): `DEFAULT_MIDI_CONTROLLERS` and
-/// `RP_15_RESET_CC_NUMS` are TS 4.3.0 exports of `synthesizer/audio_engine/channel/reset.ts`, a
-/// file belonging to the not-yet-ported 4.3.0 channel/voice architecture (out of scope for this
-/// sequencer-only task). Both are pure data (no behavior tied to the new architecture), so they
-/// are reproduced locally below rather than blocked on that port. Similarly, restoring portamento
-/// via `midiChannels[channel].setLastNote()` (bypassing the CC84 pipeline entirely) isn't
-/// available yet; this file keeps sending CC84 (portamentoControl) through
-/// `controller_change`, which the current (pre-4.3.0) `note_on.rs` still reads directly to
-/// determine the portamento source note, so behavior is equivalent for now. Revisit both once the
+/// `RP_15_RESET_CC_NUMS` are TS 4.3.0 exports of `synthesizer/audio_engine/channel/reset.ts`,
+/// and `CONTROLLER_TABLE_SIZE` (= 128) is a TS 4.3.0 export of
+/// `synthesizer/audio_engine/synth_constants.ts` — all three belong to the not-yet-ported 4.3.0
+/// channel/voice architecture (out of scope for this sequencer-only task). Note that the 4.3.0
+/// `CONTROLLER_TABLE_SIZE` is a *different* constant from the same-named 4.2.0-era one still in
+/// `channel/parameters/midi.rs` (147 = 128 CCs + the non-CC modulator-source extension slots);
+/// TS 4.3.0's controller table covers only the 128 real MIDI CCs. All three are pure data (no
+/// behavior tied to the new architecture), so they are reproduced locally below rather than
+/// blocked on that port; move them to their real homes once the channel restructuring lands.
+/// Similarly, restoring portamento via `midiChannels[channel].setLastNote()` (bypassing the CC84
+/// pipeline entirely) isn't available yet; this file keeps sending CC84 (portamentoControl)
+/// through `controller_change`, which the current (pre-4.3.0) `note_on.rs` still reads directly
+/// to determine the portamento source note, so behavior is equivalent for now. Revisit once the
 /// channel restructuring lands.
 use crate::midi::enums::{
     midi_controllers, midi_message_types, MidiController, MidiMessageType,
@@ -64,9 +69,15 @@ use crate::midi::midi_tools::midi_utils::{AnalyzedMidiMessage, MidiUtils};
 use crate::midi::midi_tools::parameter_tracker::ParameterTracker;
 use crate::sequencer::sequencer::SpessaSynthSequencer;
 use crate::sequencer::types::{MetaEventEventData, SequencerEvent};
-use crate::synthesizer::audio_engine::channel::parameters::midi::CONTROLLER_TABLE_SIZE;
 use crate::synthesizer::audio_engine::synth_constants::{DEFAULT_NRPN, DEFAULT_RPN};
 use crate::utils::byte_functions::big_endian::read_big_endian;
+
+/// The size of the MIDI controller table (the 128 real MIDI CCs).
+/// Equivalent to (locally reproduced, see the TODO above): `CONTROLLER_TABLE_SIZE` in TS 4.3.0's
+/// `synthesizer/audio_engine/synth_constants.ts`. NOT the same constant as the 4.2.0-era
+/// `channel/parameters/midi.rs::CONTROLLER_TABLE_SIZE` (147, which appends non-CC
+/// modulator-source slots that this seek bookkeeping never touches).
+const CONTROLLER_TABLE_SIZE: usize = 128;
 
 /// CCs that must not be skipped during seek.
 /// Equivalent to: nonSkippableCCs (unchanged between 4.2.0 and 4.3.0, aside from the TS
