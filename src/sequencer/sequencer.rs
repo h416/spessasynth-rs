@@ -1,6 +1,44 @@
 /// sequencer.rs
 /// purpose: SpessaSynthSequencer struct and core methods.
-/// Ported from: src/sequencer/sequencer.ts
+/// Ported from: src/sequencer/sequencer.ts (spessasynth_core 4.3.0)
+///
+/// Changes from 4.2.0 (reviewed against the 4.3.0 diff):
+/// - `eventIndexes: number[]` (one cursor per track, resolved via `findFirstEventIndex()`) was
+///   replaced by a single `index: number` cursor into `BasicMIDI.timeline` (a flattened,
+///   time-sorted `{tr, ev}` list computed once when the MIDI is flushed — ported in Task 18).
+///   `findFirstEventIndex()`/`find_first_event_index()` no longer exists.
+/// - `playingNotes: {midiNote, channel, velocity}[]` (a flat array, linearly scanned by
+///   `findIndex`/`splice` on every note on/off) became `playingNotes: Map<number, number>[]`
+///   (one `Map<midiNote, velocity>` per channel). Ported here as `Vec<Vec<(u8, u8)>>` (one
+///   `(note, velocity)` list per channel) since Rust has no ordered-map in std and channels never
+///   hold more than a handful of simultaneously-playing notes; `playing_notes_set`/
+///   `playing_notes_delete` below reproduce `Map.set`/`Map.delete` insertion-order semantics
+///   (update-in-place does not reorder; delete-then-reinsert moves an entry to the end).
+/// - `shuffleMode` setter no longer reshuffles/reloads as a side effect of being set; it is now a
+///   plain field write (shuffling only happens on `loadNewSongList`). Ported below.
+/// - `this.synth.currentSynthTime` was renamed to `this.synth.currentTime` (pure rename, same
+///   `synthCore.currentTime` value — see `processor.ts`'s `get currentTime()` /
+///   `get currentSynthTime()` in 4.3.0 / 4.2.0 respectively). This Rust file keeps calling the
+///   existing `SpessaSynthProcessor::current_synth_time()` (out of scope: `processor.rs` is not
+///   part of this task's file list), which returns the identical value.
+/// - `sendMIDIReset()`'s internal-playback path calls `this.synth.reset()` instead of
+///   `this.synth.resetAllControllers()`; `synthCore.reset(system = DEFAULT_SYNTH_MODE)` in 4.3.0
+///   is a rename of `synthCore.resetAllControllers(system)` with the same default and behavior
+///   (see `synthesizer_core.ts`). This Rust file keeps calling the existing
+///   `SpessaSynthProcessor::reset_all_controllers(DEFAULT_SYNTH_MODE)` (out of scope:
+///   `processor.rs`), which is functionally identical.
+/// - `sendMIDIReset()`'s external-playback path now sends a real GS-reset SysEx via
+///   `sendMIDISysEx(MIDIUtils.gsData(...))` instead of a raw `[midiMessageTypes.reset]` byte.
+///   Not reachable from this port: `externalMIDIPlayback` (used only by host apps forwarding MIDI
+///   to real/virtual hardware) is out of scope for this offline-WAV-rendering project and was
+///   never implemented — every `sendMIDI*` wrapper below only has the internal-synth branch.
+/// - `SpessaSynthWarn`/`SpessaSynthGroup`/`SpessaSynthGroupEnd` calls became
+///   `SpessaLog::warn`/`SpessaLog::group`/`SpessaLog::group_end` (Task 18 API; behavior-identical
+///   thin wrappers, see `utils/loggin.rs`).
+/// - Cosmetic-only: doc comment wording ("shuffleMode" → "shuffle mode"), `midiControllers` /
+///   `midiMessageTypes` → `MIDIControllers` / `MIDIMessageTypes` (TS casing convention change;
+///   Rust's `midi_controllers`/`midi_message_types` modules were already using
+///   SCREAMING_SNAKE_CASE consts and need no change).
 use std::collections::HashMap;
 
 use crate::midi::basic_midi::BasicMidi;
@@ -8,19 +46,7 @@ use crate::midi::enums::midi_controllers;
 use crate::sequencer::types::SequencerEvent;
 use crate::synthesizer::audio_engine::synth_constants::DEFAULT_SYNTH_MODE;
 use crate::synthesizer::processor::SpessaSynthProcessor;
-use crate::utils::loggin::spessa_synth_warn;
-
-// ---------------------------------------------------------------------------
-// PlayingNote
-// ---------------------------------------------------------------------------
-
-/// A note currently being played (for pause/resume).
-#[derive(Clone, Debug)]
-pub struct PlayingNote {
-    pub midi_note: u8,
-    pub channel: usize,
-    pub velocity: u8,
-}
+use crate::utils::loggin::SpessaLog;
 
 // ---------------------------------------------------------------------------
 // SpessaSynthSequencer
@@ -74,9 +100,10 @@ pub struct SpessaSynthSequencer {
     /// Equivalent to: oneTickToSeconds
     pub(crate) one_tick_to_seconds: f64,
 
-    /// Current event index per track.
-    /// Equivalent to: eventIndexes
-    pub(crate) event_indexes: Vec<usize>,
+    /// The current event index in the sorted `timeline` list.
+    /// This is used to track which event is currently being processed.
+    /// Equivalent to: index (TS 4.3.0; replaced `eventIndexes: number[]`)
+    pub(crate) index: usize,
 
     /// Time that has been played in the current song.
     /// Equivalent to: playedTime
@@ -90,9 +117,9 @@ pub struct SpessaSynthSequencer {
     /// Equivalent to: absoluteStartTime
     pub(crate) absolute_start_time: f64,
 
-    /// Currently playing notes (for pause/resume).
-    /// Equivalent to: playingNotes
-    pub(crate) playing_notes: Vec<PlayingNote>,
+    /// Currently playing notes (for pause/resume), one `(note, velocity)` list per channel.
+    /// Equivalent to: playingNotes (Map<number, number>[] in TS 4.3.0)
+    pub(crate) playing_notes: Vec<Vec<(u8, u8)>>,
 
     /// MIDI port number for each track.
     /// Equivalent to: currentMIDIPorts
@@ -128,6 +155,10 @@ impl SpessaSynthSequencer {
     /// Equivalent to: constructor(spessasynthProcessor)
     pub fn new(synth: SpessaSynthProcessor) -> Self {
         let absolute_start_time = synth.current_synth_time();
+        let mut playing_notes = Vec::with_capacity(16);
+        for _ in 0..16 {
+            playing_notes.push(Vec::new());
+        }
         Self {
             songs: Vec::new(),
             synth,
@@ -140,11 +171,11 @@ impl SpessaSynthSequencer {
             current_song_index: None,
             first_note_time: 0.0,
             one_tick_to_seconds: 0.0,
-            event_indexes: Vec::new(),
+            index: 0,
             played_time: 0.0,
             paused_time: Some(0.0),
             absolute_start_time,
-            playing_notes: Vec::new(),
+            playing_notes,
             current_midi_ports: Vec::new(),
             midi_port_channel_offset: 0,
             midi_port_channel_offsets: HashMap::new(),
@@ -194,16 +225,11 @@ impl SpessaSynthSequencer {
     }
 
     /// Sets shuffle mode.
+    /// TS 4.3.0: no longer reshuffles/reloads as a side effect — shuffling only happens on
+    /// `loadNewSongList`. This is a plain field write now.
     /// Equivalent to: set shuffleMode(on)
     pub fn set_shuffle_mode(&mut self, on: bool) {
         self.shuffle_mode = on;
-        if on {
-            self.shuffle_song_indexes();
-            self.song_index = 0;
-            self.load_current_song();
-        } else if !self.shuffled_song_indexes.is_empty() {
-            self.song_index = self.shuffled_song_indexes[self.song_index];
-        }
     }
 
     /// Returns the playback rate.
@@ -250,7 +276,9 @@ impl SpessaSynthSequencer {
         } else if self.skip_to_first_note_on && time < self.first_note_time {
             self.set_time_ticks(first_note_on.saturating_sub(1));
         } else {
-            self.playing_notes.clear();
+            for ch in self.playing_notes.iter_mut() {
+                ch.clear();
+            }
             self.call_event(SequencerEvent::TimeChange(
                 crate::sequencer::types::TimeChangeEventData { new_time: time },
             ));
@@ -273,7 +301,7 @@ impl SpessaSynthSequencer {
     /// Equivalent to: play()
     pub fn play(&mut self) {
         if self.current_song_index.is_none() {
-            spessa_synth_warn("No songs loaded in the sequencer. Ignoring the play call.");
+            SpessaLog::warn("No songs loaded in the sequencer. Ignoring the play call.");
             return;
         }
         // Reset the time if at end
@@ -284,10 +312,13 @@ impl SpessaSynthSequencer {
         if self.paused() {
             self.recalculate_start_time(self.paused_time.unwrap_or(0.0));
         }
+        // (externalMIDIPlayback is never true in this port — see module doc comment)
         if self.retrigger_paused_notes {
-            let notes: Vec<PlayingNote> = self.playing_notes.clone();
-            for n in &notes {
-                self.synth.note_on(n.channel, n.midi_note, n.velocity);
+            for channel in 0..self.playing_notes.len() {
+                let notes = self.playing_notes[channel].clone();
+                for (midi_note, velocity) in notes {
+                    self.synth.note_on(channel, midi_note, velocity);
+                }
             }
         }
         self.paused_time = None;
@@ -360,39 +391,17 @@ impl SpessaSynthSequencer {
         self.send_midi_all_off();
     }
 
-    /// Returns the track number of the next closest event.
-    /// Equivalent to: findFirstEventIndex()
-    pub(crate) fn find_first_event_index(&self) -> usize {
-        let song_idx = match self.current_song_index {
-            Some(i) => i,
-            None => return 0,
-        };
-        let tracks = &self.songs[song_idx].tracks;
-        let mut index = 0;
-        let mut ticks = u32::MAX;
-        for (i, track) in tracks.iter().enumerate() {
-            if self.event_indexes[i] >= track.events.len() {
-                continue;
-            }
-            let event = &track.events[self.event_indexes[i]];
-            if event.ticks < ticks {
-                index = i;
-                ticks = event.ticks;
-            }
-        }
-        index
-    }
-
     /// Adds a new MIDI port (16 channels) to the synth.
     /// Equivalent to: addNewMIDIPort()
     pub(crate) fn add_new_midi_port(&mut self) {
         for _ in 0..16 {
             self.synth.create_midi_channel();
+            self.playing_notes.push(Vec::new());
         }
     }
 
     /// Sends all-off to all channels.
-    /// Equivalent to: sendMIDIAllOff() (non-external path only)
+    /// Equivalent to: sendMIDIAllOff() (internal-synth branch only; see module doc comment)
     pub(crate) fn send_midi_all_off(&mut self) {
         // Disable sustain on first 16 channels
         for i in 0..16 {
@@ -403,7 +412,7 @@ impl SpessaSynthSequencer {
     }
 
     /// Resets all controllers.
-    /// Equivalent to: sendMIDIReset() (non-external path only)
+    /// Equivalent to: sendMIDIReset() (internal-synth branch only; see module doc comment)
     pub(crate) fn send_midi_reset(&mut self) {
         self.send_midi_all_off();
         self.synth.reset_all_controllers(DEFAULT_SYNTH_MODE);
@@ -440,7 +449,9 @@ impl SpessaSynthSequencer {
         if self.current_song_index.is_none() {
             return;
         }
-        self.playing_notes.clear();
+        for ch in self.playing_notes.iter_mut() {
+            ch.clear();
+        }
         let song_idx = self.current_song_index.unwrap();
         let seconds = self.songs[song_idx].midi_ticks_to_seconds(ticks);
         self.call_event(SequencerEvent::TimeChange(
@@ -470,20 +481,21 @@ impl SpessaSynthSequencer {
             crate::sequencer::types::TimeChangeEventData { new_time: seconds },
         ));
 
-        // Recalculate time and reset indexes
+        // Recalculate time and reset the timeline cursor
         self.recalculate_start_time(seconds);
         self.played_time = seconds;
-        self.event_indexes.clear();
-        for track in &self.songs[song_idx].tracks {
-            let idx = track
-                .events
+        {
+            let song = &self.songs[song_idx];
+            let idx = song
+                .timeline
                 .iter()
-                .position(|e| e.ticks >= target_ticks)
-                .unwrap_or(track.events.len());
-            self.event_indexes.push(idx);
+                .position(|e| song.tracks[e.tr].events[e.ev].ticks >= target_ticks);
+            // Not length - 1 since we want to mark the track as finished
+            self.index = idx.unwrap_or(song.timeline.len());
         }
 
         // Correct tempo
+        // Some softly-looped files (example: th06_06.mid) have slightly mismatched tempos
         let time_division = self.songs[song_idx].time_division;
         let target_tempo = self.songs[song_idx]
             .tempo_changes
@@ -492,6 +504,28 @@ impl SpessaSynthSequencer {
         if let Some(tc) = target_tempo {
             self.one_tick_to_seconds = 60.0 / (tc.tempo * time_division as f64);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // playingNotes helpers (Map<number, number> per-channel equivalent)
+    // -----------------------------------------------------------------------
+
+    /// Records that `midi_note` started playing on `channel` with `velocity` (or updates the
+    /// velocity in place if it was already playing), for retriggering after a pause.
+    /// Equivalent to: this.playingNotes[channel].set(midiNote, velocity)
+    pub(crate) fn playing_notes_set(&mut self, channel: usize, midi_note: u8, velocity: u8) {
+        let ch = &mut self.playing_notes[channel];
+        if let Some(entry) = ch.iter_mut().find(|(n, _)| *n == midi_note) {
+            entry.1 = velocity;
+        } else {
+            ch.push((midi_note, velocity));
+        }
+    }
+
+    /// Removes `midi_note` from the set of currently-playing notes on `channel`, if present.
+    /// Equivalent to: this.playingNotes[channel].delete(midiNote)
+    pub(crate) fn playing_notes_delete(&mut self, channel: usize, midi_note: u8) {
+        self.playing_notes[channel].retain(|(n, _)| *n != midi_note);
     }
 }
 
@@ -516,6 +550,23 @@ mod tests {
         SpessaSynthSequencer::new(make_processor())
     }
 
+    /// Rebuilds only `timeline` from the current tracks (tick-sorted), without recomputing
+    /// `duration`/`tempo_changes`/`last_voice_event_tick`/etc. like `BasicMidi::flush()` would.
+    /// Test fixtures below set those derived fields by hand, so a full `flush()` call would
+    /// clobber them; the sequencer (post-Task-19) relies on `timeline` for playback, so it must
+    /// be populated manually instead.
+    fn build_timeline(midi: &mut BasicMidi) {
+        use crate::midi::types::TimelineEvent;
+        let mut timeline = Vec::new();
+        for (tr, track) in midi.tracks.iter().enumerate() {
+            for ev in 0..track.events.len() {
+                timeline.push(TimelineEvent { tr, ev });
+            }
+        }
+        timeline.sort_by_key(|e| midi.tracks[e.tr].events[e.ev].ticks);
+        midi.timeline = timeline;
+    }
+
     fn make_simple_midi() -> BasicMidi {
         let mut midi = BasicMidi::new();
         midi.time_division = 480;
@@ -532,6 +583,7 @@ mod tests {
         track.push_event(MidiMessage::new(480, 0x80, vec![60, 0]));
         track.push_event(MidiMessage::new(960, 0x2F, vec![]));
         midi.tracks.push(track);
+        build_timeline(&mut midi);
         midi
     }
 
@@ -547,6 +599,13 @@ mod tests {
         assert!(seq.retrigger_paused_notes);
         assert!(seq.skip_to_first_note_on);
         assert_eq!(seq.loop_count, 0);
+    }
+
+    #[test]
+    fn test_new_playing_notes_has_16_channels() {
+        let seq = make_sequencer();
+        assert_eq!(seq.playing_notes.len(), 16);
+        assert!(seq.playing_notes.iter().all(|ch| ch.is_empty()));
     }
 
     // -- midi_data --
@@ -604,6 +663,19 @@ mod tests {
         assert!(seq.paused());
     }
 
+    // -- shuffle_mode setter (4.3.0: plain field write, no side effects) --
+
+    #[test]
+    fn test_set_shuffle_mode_no_side_effects() {
+        let mut seq = make_sequencer();
+        seq.load_new_song_list(vec![make_simple_midi(), make_simple_midi()]);
+        let song_index_before = seq.song_index;
+        seq.set_shuffle_mode(true);
+        assert!(seq.get_shuffle_mode());
+        // No longer reshuffles/reloads as a side effect.
+        assert_eq!(seq.song_index, song_index_before);
+    }
+
     // -- playback_rate --
 
     #[test]
@@ -619,42 +691,40 @@ mod tests {
         assert_eq!(seq.get_playback_rate(), 2.0);
     }
 
-    // -- find_first_event_index --
+    // -- playing_notes_set / playing_notes_delete --
 
     #[test]
-    fn test_find_first_event_index_single_track() {
+    fn test_playing_notes_set_adds_note() {
         let mut seq = make_sequencer();
-        seq.load_new_song_list(vec![make_simple_midi()]);
-        seq.play();
-        assert_eq!(seq.find_first_event_index(), 0);
+        seq.playing_notes_set(0, 60, 100);
+        assert_eq!(seq.playing_notes[0], vec![(60, 100)]);
     }
 
     #[test]
-    fn test_find_first_event_index_multi_track() {
+    fn test_playing_notes_set_updates_in_place() {
         let mut seq = make_sequencer();
-        let mut midi = BasicMidi::new();
-        midi.time_division = 480;
-        midi.duration = 2.0;
-        midi.first_note_on = 0;
-        midi.last_voice_event_tick = 960;
-        midi.tempo_changes = vec![TempoChange { ticks: 0, tempo: 120.0 }];
+        seq.playing_notes_set(0, 60, 100);
+        seq.playing_notes_set(0, 61, 80);
+        seq.playing_notes_set(0, 60, 50);
+        // Updating note 60's velocity must not move it to the end (Map.set semantics).
+        assert_eq!(seq.playing_notes[0], vec![(60, 50), (61, 80)]);
+    }
 
-        // Track 0: first event at tick 100
-        let mut t0 = MidiTrack::new();
-        t0.channels.insert(0);
-        t0.push_event(MidiMessage::new(100, 0x90, vec![60, 100]));
-        midi.tracks.push(t0);
+    #[test]
+    fn test_playing_notes_delete_removes_note() {
+        let mut seq = make_sequencer();
+        seq.playing_notes_set(0, 60, 100);
+        seq.playing_notes_set(0, 61, 80);
+        seq.playing_notes_delete(0, 60);
+        assert_eq!(seq.playing_notes[0], vec![(61, 80)]);
+    }
 
-        // Track 1: first event at tick 50
-        let mut t1 = MidiTrack::new();
-        t1.channels.insert(1);
-        t1.push_event(MidiMessage::new(50, 0x90, vec![62, 80]));
-        midi.tracks.push(t1);
-
-        seq.load_new_song_list(vec![midi]);
-        seq.play();
-        // Track 1 has the earlier event
-        assert_eq!(seq.find_first_event_index(), 1);
+    #[test]
+    fn test_playing_notes_delete_missing_is_noop() {
+        let mut seq = make_sequencer();
+        seq.playing_notes_set(0, 60, 100);
+        seq.playing_notes_delete(0, 99);
+        assert_eq!(seq.playing_notes[0], vec![(60, 100)]);
     }
 
     // -- load_new_song_list --
@@ -730,5 +800,19 @@ mod tests {
         let mut sorted = seq.shuffled_song_indexes.clone();
         sorted.sort();
         assert_eq!(sorted, vec![0, 1, 2]);
+    }
+
+    // -- jump_to_tick uses the timeline cursor --
+
+    #[test]
+    fn test_jump_to_tick_sets_index() {
+        let mut seq = make_sequencer();
+        seq.load_new_song_list(vec![make_simple_midi()]);
+        seq.play();
+        seq.jump_to_tick(480);
+        // The timeline event at tick 480 (note off) should now be next.
+        let song_idx = seq.current_song_index.unwrap();
+        let e = seq.songs[song_idx].timeline[seq.index];
+        assert!(seq.songs[song_idx].tracks[e.tr].events[e.ev].ticks >= 480);
     }
 }

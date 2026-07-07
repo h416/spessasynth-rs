@@ -1,14 +1,34 @@
 /// process_event.rs
 /// purpose: Processes a single MIDI event from the sequencer.
-/// Ported from: src/sequencer/process_event.ts
+/// Ported from: src/sequencer/process_event.ts (spessasynth_core 4.3.0)
+///
+/// Changes from 4.2.0 (reviewed against the 4.3.0 diff):
+/// - `getEvent(event.statusByte)` (the free function from `midi_message.ts`, removed in 4.3.0) is
+///   replaced by inlining the same channel/status split directly in this function, matching TS.
+///   `get_event`/`get_channel`/`data_bytes_amount`/`MidiEventInfo` were removed from
+///   `midi/midi_message.rs` in this same task (this function was their last caller).
+/// - `noteOn`/`noteOff` update `this.playingNotes[channel]` (now a `Map<number, number>`) via
+///   `.set`/`.delete` instead of a flat array `push`/`findIndex`+`splice`. Ported here via
+///   `playing_notes_set`/`playing_notes_delete` on the sequencer (see `sequencer.rs`).
+/// - `midiMessageTypes.reset` case: `this.synth.resetAllControllers()` → `this.synth.reset()`
+///   (pure rename with an identical default system parameter — see `sequencer.rs`'s module doc
+///   comment for details). This Rust file keeps calling the existing
+///   `reset_all_controllers(DEFAULT_SYNTH_MODE)` (out of scope: `processor.rs`).
+/// - `SpessaSynthInfo` → `SpessaLog::info` (Task 18 API; behavior-identical).
+/// - The 4.3.0 top-of-function `if (this.externalMIDIPlayback && event.statusByte >= 0x80) { ...
+///   return; }` early-out is not reachable in this port: `externalMIDIPlayback` is out of scope
+///   for this offline-WAV-rendering project and was never implemented (see `sequencer.rs`'s
+///   module doc comment), so it is intentionally omitted here, matching the pre-existing Rust
+///   convention.
+/// - Cosmetic-only: `midiMessageTypes`/`midiControllers` → `MIDIMessageTypes`/`MIDIController`
+///   (TS casing convention change only; Rust's `midi_message_types` module already uses
+///   SCREAMING_SNAKE_CASE consts and needs no change).
 use crate::midi::enums::midi_message_types;
-use crate::midi::midi_message::{get_event, MidiMessage};
+use crate::midi::midi_message::MidiMessage;
 use crate::sequencer::sequencer::SpessaSynthSequencer;
 use crate::sequencer::types::{MetaEventEventData, SequencerEvent};
 use crate::utils::byte_functions::big_endian::read_big_endian;
-use crate::utils::loggin::spessa_synth_info;
-
-use super::sequencer::PlayingNote;
+use crate::utils::loggin::SpessaLog;
 
 impl SpessaSynthSequencer {
     /// Processes a MIDI event.
@@ -20,42 +40,33 @@ impl SpessaSynthSequencer {
             None => return,
         };
 
-        let status_byte_data = get_event(event.status_byte);
+        // Inlined equivalent of the removed `getEvent(statusByte)`: voice messages
+        // (0x80..0xF0) split into (status = high nibble, channel = low nibble); everything
+        // else (system/meta) keeps the full status byte with channel 0.
+        let (status, mut channel) = if (0x80..0xf0).contains(&event.status_byte) {
+            (event.status_byte & 0xf0, (event.status_byte & 0x0f) as usize)
+        } else {
+            (event.status_byte, 0)
+        };
         let port = self.current_midi_ports[track_index];
         let offset = self.midi_port_channel_offsets.get(&port).copied().unwrap_or(0);
-        let channel = if status_byte_data.channel >= 0 {
-            status_byte_data.channel as usize + offset
-        } else {
-            0
-        };
+        channel += offset;
 
-        match status_byte_data.status {
+        match status {
             midi_message_types::NOTE_ON => {
                 let velocity = event.data[1];
                 if velocity > 0 {
                     self.synth.note_on(channel, event.data[0], velocity);
-                    self.playing_notes.push(PlayingNote {
-                        midi_note: event.data[0],
-                        channel,
-                        velocity,
-                    });
+                    self.playing_notes_set(channel, event.data[0], velocity);
                 } else {
                     self.synth.note_off(channel, event.data[0]);
-                    if let Some(pos) = self.playing_notes.iter().position(|n| {
-                        n.midi_note == event.data[0] && n.channel == channel
-                    }) {
-                        self.playing_notes.remove(pos);
-                    }
+                    self.playing_notes_delete(channel, event.data[0]);
                 }
             }
 
             midi_message_types::NOTE_OFF => {
                 self.synth.note_off(channel, event.data[0]);
-                if let Some(pos) = self.playing_notes.iter().position(|n| {
-                    n.midi_note == event.data[0] && n.channel == channel
-                }) {
-                    self.playing_notes.remove(pos);
-                }
+                self.playing_notes_delete(channel, event.data[0]);
             }
 
             midi_message_types::PITCH_WHEEL => {
@@ -108,7 +119,7 @@ impl SpessaSynthSequencer {
                 self.one_tick_to_seconds = 60.0 / (tempo_bpm * time_division as f64);
                 if self.one_tick_to_seconds == 0.0 {
                     self.one_tick_to_seconds = 60.0 / (120.0 * time_division as f64);
-                    spessa_synth_info("invalid tempo! falling back to 120 BPM");
+                    SpessaLog::info("invalid tempo! falling back to 120 BPM");
                 }
             }
 
@@ -141,7 +152,7 @@ impl SpessaSynthSequencer {
             | midi_message_types::PROGRAM_NAME => {}
 
             _ => {
-                spessa_synth_info(&format!(
+                SpessaLog::info(&format!(
                     "Unrecognized Event: 0x{:02X}",
                     event.status_byte
                 ));
@@ -149,7 +160,7 @@ impl SpessaSynthSequencer {
         }
 
         // Fire meta event for status bytes < 0x80
-        if status_byte_data.status < 0x80 {
+        if status < 0x80 {
             self.call_event(SequencerEvent::MetaEvent(MetaEventEventData {
                 event,
                 track_index,
@@ -168,7 +179,7 @@ mod tests {
     use crate::midi::basic_midi::BasicMidi;
     use crate::midi::midi_message::MidiMessage;
     use crate::midi::midi_track::MidiTrack;
-    use crate::midi::types::TempoChange;
+    use crate::midi::types::{TempoChange, TimelineEvent};
     use crate::synthesizer::processor::SpessaSynthProcessor;
     use crate::synthesizer::types::{SynthProcessorEvent, SynthProcessorOptions};
 
@@ -178,6 +189,18 @@ mod tests {
             |_: SynthProcessorEvent| {},
             SynthProcessorOptions::default(),
         )
+    }
+
+    /// See `sequencer.rs`'s test module for why this doesn't just call `BasicMidi::flush()`.
+    fn build_timeline(midi: &mut BasicMidi) {
+        let mut timeline = Vec::new();
+        for (tr, track) in midi.tracks.iter().enumerate() {
+            for ev in 0..track.events.len() {
+                timeline.push(TimelineEvent { tr, ev });
+            }
+        }
+        timeline.sort_by_key(|e| midi.tracks[e.tr].events[e.ev].ticks);
+        midi.timeline = timeline;
     }
 
     fn make_loaded_sequencer() -> SpessaSynthSequencer {
@@ -196,6 +219,7 @@ mod tests {
         track.push_event(MidiMessage::new(0, 0x90, vec![60, 100]));
         track.push_event(MidiMessage::new(960, 0x2F, vec![]));
         midi.tracks.push(track);
+        build_timeline(&mut midi);
         seq.load_new_song_list(vec![midi]);
         seq.play();
         seq
@@ -208,24 +232,17 @@ mod tests {
         let mut seq = make_loaded_sequencer();
         let event = MidiMessage::new(0, 0x90, vec![60, 100]);
         seq.process_event(event, 0);
-        assert!(seq
-            .playing_notes
-            .iter()
-            .any(|n| n.midi_note == 60 && n.velocity == 100));
+        assert!(seq.playing_notes[0].iter().any(|&(n, v)| n == 60 && v == 100));
     }
 
     #[test]
     fn test_process_event_note_on_velocity_zero_is_note_off() {
         let mut seq = make_loaded_sequencer();
         // Add a playing note first
-        seq.playing_notes.push(PlayingNote {
-            midi_note: 60,
-            channel: 0,
-            velocity: 100,
-        });
+        seq.playing_notes_set(0, 60, 100);
         let event = MidiMessage::new(480, 0x90, vec![60, 0]);
         seq.process_event(event, 0);
-        assert!(!seq.playing_notes.iter().any(|n| n.midi_note == 60));
+        assert!(!seq.playing_notes[0].iter().any(|&(n, _)| n == 60));
     }
 
     // -- note off --
@@ -233,14 +250,10 @@ mod tests {
     #[test]
     fn test_process_event_note_off_removes_playing_note() {
         let mut seq = make_loaded_sequencer();
-        seq.playing_notes.push(PlayingNote {
-            midi_note: 60,
-            channel: 0,
-            velocity: 100,
-        });
+        seq.playing_notes_set(0, 60, 100);
         let event = MidiMessage::new(480, 0x80, vec![60, 0]);
         seq.process_event(event, 0);
-        assert!(!seq.playing_notes.iter().any(|n| n.midi_note == 60));
+        assert!(!seq.playing_notes[0].iter().any(|&(n, _)| n == 60));
     }
 
     // -- tempo change --
@@ -250,7 +263,6 @@ mod tests {
         let mut seq = make_loaded_sequencer();
         // Tempo 120 BPM = 500000 microseconds per beat = [0x07, 0xA1, 0x20]
         let event = MidiMessage::new(0, midi_message_types::SET_TEMPO, vec![0x07, 0xA1, 0x20]);
-        let old_tick = seq.one_tick_to_seconds;
         seq.process_event(event, 0);
         // oneTickToSeconds should have been updated
         let expected = 60.0 / (120.0 * 480.0);

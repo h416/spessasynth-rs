@@ -1,6 +1,16 @@
 /// process_tick.rs
 /// purpose: Main playback loop — processes MIDI events up to the current time.
-/// Ported from: src/sequencer/process_tick.ts
+/// Ported from: src/sequencer/process_tick.ts (spessasynth_core 4.3.0)
+///
+/// Changes from 4.2.0 (reviewed against the 4.3.0 diff):
+/// - `findFirstEventIndex()` (called twice per loop iteration: once to find the event to
+///   process, once more to find the *next* event to process) is gone entirely. The single
+///   `index` cursor into `BasicMIDI.timeline` (ported in Task 18) replaces the per-track
+///   `eventIndexes` array: `timeline[index++]` directly gives the event to process, and
+///   `timeline[index]` (no further increment) gives the next one — same two-event-lookahead
+///   shape as before, just without the linear track scan.
+/// - The end-of-track check now reads `this.index >= timeline.length` instead of comparing the
+///   next track's per-track cursor against its event count.
 use crate::midi::types::MidiLoopType;
 use crate::sequencer::sequencer::SpessaSynthSequencer;
 use crate::sequencer::types::{LoopCountChangeEventData, SequencerEvent};
@@ -18,16 +28,12 @@ impl SpessaSynthSequencer {
 
         while self.played_time < current_time {
             // Find the next event and process it
-            let track_index = self.find_first_event_index();
-            let ei = self.event_indexes[track_index];
-            let event = self.songs[song_idx].tracks[track_index].events[ei].clone();
-            self.event_indexes[track_index] += 1;
+            let timeline_len = self.songs[song_idx].timeline.len();
+            let e = self.songs[song_idx].timeline[self.index];
+            self.index += 1;
+            let event = self.songs[song_idx].tracks[e.tr].events[e.ev].clone();
             let event_ticks = event.ticks;
-            self.process_event(event, track_index);
-
-            // Find the next event
-            let next_track_index = self.find_first_event_index();
-            let next_ei = self.event_indexes[next_track_index];
+            self.process_event(event, e.tr);
 
             // Check for loop
             let loop_end = self.songs[song_idx].midi_loop.end;
@@ -51,15 +57,14 @@ impl SpessaSynthSequencer {
             }
 
             // Check for end of track
-            let next_track_len = self.songs[song_idx].tracks[next_track_index].events.len();
             let last_voice_tick = self.songs[song_idx].last_voice_event_tick;
-            if next_track_len <= next_ei || event_ticks >= last_voice_tick {
+            if self.index >= timeline_len || event_ticks >= last_voice_tick {
                 self.song_is_finished();
                 return;
             }
 
-            let next_event_ticks =
-                self.songs[song_idx].tracks[next_track_index].events[next_ei].ticks;
+            let n_e = self.songs[song_idx].timeline[self.index];
+            let next_event_ticks = self.songs[song_idx].tracks[n_e.tr].events[n_e.ev].ticks;
             self.played_time +=
                 self.one_tick_to_seconds * (next_event_ticks - event_ticks) as f64;
         }
@@ -74,10 +79,9 @@ impl SpessaSynthSequencer {
 mod tests {
     use super::*;
     use crate::midi::basic_midi::BasicMidi;
-    use crate::midi::enums::midi_message_types;
     use crate::midi::midi_message::MidiMessage;
     use crate::midi::midi_track::MidiTrack;
-    use crate::midi::types::{MidiLoop, MidiLoopType, TempoChange};
+    use crate::midi::types::{MidiLoop, MidiLoopType, TempoChange, TimelineEvent};
     use crate::synthesizer::processor::SpessaSynthProcessor;
     use crate::synthesizer::types::{SynthProcessorEvent, SynthProcessorOptions};
 
@@ -87,6 +91,18 @@ mod tests {
             |_: SynthProcessorEvent| {},
             SynthProcessorOptions::default(),
         )
+    }
+
+    /// See `sequencer.rs`'s test module for why this doesn't just call `BasicMidi::flush()`.
+    fn build_timeline(midi: &mut BasicMidi) {
+        let mut timeline = Vec::new();
+        for (tr, track) in midi.tracks.iter().enumerate() {
+            for ev in 0..track.events.len() {
+                timeline.push(TimelineEvent { tr, ev });
+            }
+        }
+        timeline.sort_by_key(|e| midi.tracks[e.tr].events[e.ev].ticks);
+        midi.timeline = timeline;
     }
 
     fn make_midi_with_events(events: Vec<MidiMessage>, duration: f64) -> BasicMidi {
@@ -105,6 +121,7 @@ mod tests {
             track.push_event(e);
         }
         midi.tracks.push(track);
+        build_timeline(&mut midi);
         midi
     }
 
@@ -123,7 +140,7 @@ mod tests {
         seq.load_new_song_list(vec![midi]);
         // Don't call play() — stays paused
         seq.process_tick();
-        // Event indexes should remain at their reset position (set by set_time_to during load)
+        // The timeline cursor should remain at its reset position (set by set_time_to during load)
     }
 
     // -- process_tick when no midi --
@@ -162,7 +179,7 @@ mod tests {
         seq.process_tick();
 
         // The song should have finished (all events processed within 1 second at 120 BPM, 480 tpq → 960 ticks = 1 second)
-        assert!(seq.is_finished || seq.event_indexes[0] > 0);
+        assert!(seq.is_finished || seq.index > 0);
     }
 
     // -- process_tick finishes song --

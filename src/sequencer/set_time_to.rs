@@ -1,17 +1,77 @@
-/// play.rs
+/// set_time_to.rs
 /// purpose: Seek (set time to) implementation for the sequencer.
-/// Ported from: src/sequencer/play.ts
-use crate::midi::enums::{midi_controllers, midi_message_types};
-use crate::midi::midi_message::{get_event, MidiMessage};
+/// Ported from: src/sequencer/set_time_to.ts (spessasynth_core 4.3.0; renamed from
+/// `src/sequencer/play.ts` in the upstream 4.3.0 restructuring — see `mod.rs`/phase-1 notes).
+///
+/// Changes from 4.2.0's `play.ts` (reviewed against the 4.3.0 diff):
+/// - `eventIndexes: number[]` (one cursor per track) → single `index: number` cursor into
+///   `BasicMIDI.timeline` (ported in Task 18), same as `sequencer.rs`/`process_tick.rs`.
+///   `findFirstEventIndex()` is gone.
+/// - `getEvent(statusByte)` (removed from `midi_message.ts` in 4.3.0) is replaced by inlining the
+///   channel/status split, matching `process_event.ts`/`process_event.rs`.
+/// - The controller-restore bookkeeping was rewritten around a new local `ChannelStatus` struct
+///   (`{ param, controllers, portamentoNote, pitchWheel }`) per channel instead of three parallel
+///   arrays (`pitchWheels`, `savedControllers`, and portamento piggy-backed into
+///   `savedControllers[channel][portamentoControl]`):
+///   - `controllers` is now a `CONTROLLER_TABLE_SIZE`-sized 14-bit array seeded from a new
+///     `DEFAULT_MIDI_CONTROLLERS` table (all 147 entries), instead of the old 128-entry
+///     "`defaultMIDIControllerValues.slice(0, 128)`" (7-bit-scale-vs-14-bit-scale mismatch and
+///     all — see below).
+///   - `param: ParameterTracker` (Task 18 API) tracks RPN/NRPN selection so that Data Entry
+///     MSB/LSB during a seek can resolve to the RPN/NRPN it targets (fine tuning, coarse tuning,
+///     and the handful of GS/XG "NRPN part parameters") via `MidiUtils::analyze_rpn`/
+///     `analyze_nrpn`, and — if that resolves to a plain Controller Change (the NRPN case) — the
+///     resulting CC is itself skip-tracked (sent immediately if non-skippable, else stashed into
+///     `controllers[]`) exactly like a literal Controller Change event would be.
+///   - `portamentoNote` (new): always records the last Note On's key (`-1` = none), regardless of
+///     whether portamento is active, restored at the end via CC84 (portamentoControl) — see the
+///     `TODO` below for why the TS 4.3.0 `setLastNote()` fast path isn't used here.
+///   - System Exclusive events are now analyzed via `MIDIUtils::analyzeSysEx` (Task 18 API): a
+///     recognized "Controller Change" (GS/XG bank-select / mono-poly-mode / etc. encoded as
+///     SysEx) is skip-tracked exactly like a literal Controller Change event instead of being
+///     processed immediately; anything else (including Program Change, which cannot be skipped —
+///     see the code comment) is processed immediately via `processEvent`, same as before.
+/// - The controller-restore comparison at the end changed scale but kept an existing quirk:
+///   `value = ch.controllers[i] >> 7` (7-bit) is still compared against `DEFAULT_MIDI_CONTROLLERS[i]`
+///   (14-bit, NOT shifted down) — i.e. for every CC whose default is nonzero (mainVolume, pan,
+///   filterResonance, ...) the comparison is always unequal, so those CCs are unconditionally
+///   resent on every seek regardless of whether they actually changed. This looks like an
+///   upstream oversight (missing a second `>> 7`), but it's harmless: the resent value is always
+///   the channel's actual current value (default or overridden), so it doesn't change synth state
+///   or WAV output — just adds redundant (idempotent) `controllerChange` calls. Ported literally
+///   (bug-for-bug) rather than "fixed", per this project's fidelity-over-cleanup policy.
+/// - `resetAllControllers(chan)` (the local seek-time emulation of receiving CC 121 "Reset All
+///   Controllers" mid-seek) now performs the narrow RP-15 reset (`RP_15_RESET_CC_NUMS`, 8 CCs)
+///   instead of the old "reset everything except `nonResettableCCs`" broad reset. This is a real
+///   behavior change (ported below), matching what the actual runtime CC121 handler
+///   (`resetRP15` in the new `channel/reset.ts`) does.
+///
+/// TODO(Task 20-22, synthesizer restructuring): `DEFAULT_MIDI_CONTROLLERS` and
+/// `RP_15_RESET_CC_NUMS` are TS 4.3.0 exports of `synthesizer/audio_engine/channel/reset.ts`, a
+/// file belonging to the not-yet-ported 4.3.0 channel/voice architecture (out of scope for this
+/// sequencer-only task). Both are pure data (no behavior tied to the new architecture), so they
+/// are reproduced locally below rather than blocked on that port. Similarly, restoring portamento
+/// via `midiChannels[channel].setLastNote()` (bypassing the CC84 pipeline entirely) isn't
+/// available yet; this file keeps sending CC84 (portamentoControl) through
+/// `controller_change`, which the current (pre-4.3.0) `note_on.rs` still reads directly to
+/// determine the portamento source note, so behavior is equivalent for now. Revisit both once the
+/// channel restructuring lands.
+use crate::midi::enums::{
+    midi_controllers, midi_message_types, MidiController, MidiMessageType,
+};
+use crate::midi::midi_message::MidiMessage;
+use crate::midi::midi_tools::midi_utils::{AnalyzedMidiMessage, MidiUtils};
+use crate::midi::midi_tools::parameter_tracker::ParameterTracker;
 use crate::sequencer::sequencer::SpessaSynthSequencer;
 use crate::sequencer::types::{MetaEventEventData, SequencerEvent};
-use crate::synthesizer::audio_engine::channel::parameters::midi::DEFAULT_MIDI_CONTROLLER_VALUES;
-use crate::synthesizer::audio_engine::channel::reset::is_non_resettable;
+use crate::synthesizer::audio_engine::channel::parameters::midi::CONTROLLER_TABLE_SIZE;
+use crate::synthesizer::audio_engine::synth_constants::{DEFAULT_NRPN, DEFAULT_RPN};
 use crate::utils::byte_functions::big_endian::read_big_endian;
 
 /// CCs that must not be skipped during seek.
-/// Equivalent to: nonSkippableCCs
-fn is_cc_non_skippable(cc: u8) -> bool {
+/// Equivalent to: nonSkippableCCs (unchanged between 4.2.0 and 4.3.0, aside from the TS
+/// `midiControllers` → `MIDIControllers` casing rename)
+fn is_cc_non_skippable(cc: MidiController) -> bool {
     matches!(
         cc,
         midi_controllers::DATA_DECREMENT
@@ -30,6 +90,98 @@ fn is_cc_non_skippable(cc: u8) -> bool {
     )
 }
 
+/// An array with the default MIDI controller values used by the sequencer's own seek-time
+/// controller-restore bookkeeping. Note that these are 14-bit (a 7-bit shift to the right for
+/// 7-bit values), matching only 18 of the `CONTROLLER_TABLE_SIZE` entries — the rest default to 0.
+///
+/// Equivalent to (locally reproduced, see the TODO above): `DEFAULT_MIDI_CONTROLLERS` in TS
+/// 4.3.0's `synthesizer/audio_engine/channel/reset.ts`.
+const fn build_default_midi_controllers() -> [i16; CONTROLLER_TABLE_SIZE] {
+    let mut arr = [0i16; CONTROLLER_TABLE_SIZE];
+    // Values come from Falcosoft MIDI Player
+    arr[midi_controllers::MAIN_VOLUME as usize] = 100 << 7;
+    arr[midi_controllers::BALANCE as usize] = 64 << 7;
+    arr[midi_controllers::EXPRESSION as usize] = 127 << 7;
+    arr[midi_controllers::PAN as usize] = 64 << 7;
+
+    arr[midi_controllers::FILTER_RESONANCE as usize] = 64 << 7;
+    arr[midi_controllers::RELEASE_TIME as usize] = 64 << 7;
+    arr[midi_controllers::ATTACK_TIME as usize] = 64 << 7;
+    arr[midi_controllers::BRIGHTNESS as usize] = 64 << 7;
+
+    arr[midi_controllers::DECAY_TIME as usize] = 64 << 7;
+    arr[midi_controllers::VIBRATO_RATE as usize] = 64 << 7;
+    arr[midi_controllers::VIBRATO_DEPTH as usize] = 64 << 7;
+    arr[midi_controllers::VIBRATO_DELAY as usize] = 64 << 7;
+    arr[midi_controllers::GENERAL_PURPOSE_CONTROLLER6 as usize] = 64 << 7;
+    arr[midi_controllers::GENERAL_PURPOSE_CONTROLLER8 as usize] = 64 << 7;
+
+    arr[midi_controllers::REGISTERED_PARAMETER_LSB as usize] = (DEFAULT_RPN as i16) << 7;
+    arr[midi_controllers::REGISTERED_PARAMETER_MSB as usize] = (DEFAULT_RPN as i16) << 7;
+    arr[midi_controllers::NON_REGISTERED_PARAMETER_LSB as usize] = (DEFAULT_NRPN as i16) << 7;
+    arr[midi_controllers::NON_REGISTERED_PARAMETER_MSB as usize] = (DEFAULT_NRPN as i16) << 7;
+
+    arr
+}
+
+const DEFAULT_MIDI_CONTROLLERS: [i16; CONTROLLER_TABLE_SIZE] = build_default_midi_controllers();
+
+/// The 8 CCs reset by the RP-15 Recommended Practice.
+/// Equivalent to (locally reproduced, see the TODO above): `RP_15_RESET_CC_NUMS` in TS 4.3.0's
+/// `synthesizer/audio_engine/channel/reset.ts`.
+const RP_15_RESET_CC_NUMS: [MidiController; 8] = [
+    midi_controllers::MODULATION_WHEEL,
+    midi_controllers::EXPRESSION,
+    midi_controllers::SUSTAIN_PEDAL,
+    midi_controllers::PORTAMENTO_ON_OFF,
+    midi_controllers::SOSTENUTO_PEDAL,
+    midi_controllers::SOFT_PEDAL,
+    midi_controllers::REGISTERED_PARAMETER_MSB,
+    midi_controllers::REGISTERED_PARAMETER_LSB,
+];
+
+/// Per-channel controller/pitch-wheel/portamento bookkeeping accumulated while skipping events
+/// during a seek, sent to the synth only once at the end (or immediately for `nonSkippableCCs`).
+/// Equivalent to: interface ChannelStatus
+struct ChannelStatus {
+    /// NRPN tracking for controller changes.
+    /// Equivalent to: param
+    param: ParameterTracker,
+    /// Saved controllers, sent only after (14-bit values).
+    /// Equivalent to: controllers
+    controllers: [i16; CONTROLLER_TABLE_SIZE],
+    /// Saved portamento note, sent only after (-1 means no portamento note).
+    /// Equivalent to: portamentoNote
+    portamento_note: i32,
+    /// Saved pitch wheel, sent only after.
+    /// Equivalent to: pitchWheel
+    pitch_wheel: i16,
+}
+
+impl ChannelStatus {
+    fn new(channel: MidiController) -> Self {
+        Self {
+            pitch_wheel: 8192,
+            controllers: DEFAULT_MIDI_CONTROLLERS,
+            param: ParameterTracker::new(channel),
+            portamento_note: -1,
+        }
+    }
+}
+
+/// RP-15 compliant reset of the local seek-time channel status.
+/// <https://amei.or.jp/midistandardcommittee/Recommended_Practice/e/rp15.pdf>
+/// Equivalent to: function resetAllControllers(chan) (local to setTimeToInternal)
+fn reset_all_controllers(channels: &mut [ChannelStatus], chan: usize) {
+    let ch = &mut channels[chan];
+    // Reset pitch wheel
+    ch.pitch_wheel = 8192;
+    ch.param.reset();
+    for &reset_cc in RP_15_RESET_CC_NUMS.iter() {
+        ch.controllers[reset_cc as usize] = DEFAULT_MIDI_CONTROLLERS[reset_cc as usize];
+    }
+}
+
 impl SpessaSynthSequencer {
     /// Seeks to a specific time or tick position.
     /// Returns true if the MIDI file is not finished.
@@ -46,57 +198,36 @@ impl SpessaSynthSequencer {
         // Reset everything
         self.send_midi_reset();
         self.played_time = 0.0;
-        let track_count = self.songs[song_idx].tracks.len();
-        self.event_indexes = vec![0; track_count];
+        self.index = 0;
 
         // We save the pitch wheels, programs and controllers here
         // to only send them once after going through the events
         let channels_to_save = self.synth.synth_core.midi_channels.len();
 
-        let mut pitch_wheels: Vec<i16> = vec![8192; channels_to_save];
-
-        // An array with preset default values (first 128 entries)
-        let default_controller_array: Vec<i16> =
-            DEFAULT_MIDI_CONTROLLER_VALUES[..128].to_vec();
-
-        let mut saved_controllers: Vec<Vec<i16>> =
-            vec![default_controller_array.clone(); channels_to_save];
+        let mut channels: Vec<ChannelStatus> = (0..channels_to_save)
+            .map(|i| ChannelStatus::new(i as MidiController))
+            .collect();
 
         // Save tempo changes
+        // Testcase:
+        // Piano Concerto No. 2 in G minor, Op 16 - I. Cadenza (Ky6000).mid
+        // With 46k changes!
         let mut saved_tempo: Option<MidiMessage> = None;
         let mut saved_tempo_track: usize = 0;
 
-        /// RP-15 compliant reset
-        fn reset_all_controllers(
-            chan: usize,
-            pitch_wheels: &mut [i16],
-            saved_controllers: &mut [Vec<i16>],
-            default_controller_array: &[i16],
-        ) {
-            pitch_wheels[chan] = 8192;
-            if chan >= saved_controllers.len() {
-                return;
-            }
-            for (i, &element) in default_controller_array.iter().enumerate() {
-                if !is_non_resettable(i as u8) {
-                    saved_controllers[chan][i] = element;
-                }
-            }
-        }
-
         loop {
             // Find the next event
-            let track_index = self.find_first_event_index();
-            let ei = self.event_indexes[track_index];
-            let track_events_len = self.songs[song_idx].tracks[track_index].events.len();
-            if ei >= track_events_len {
+            let timeline_len = self.songs[song_idx].timeline.len();
+            if self.index >= timeline_len {
+                // Ran out of events before reaching the requested time/ticks. Not reachable via
+                // the public API (currentTime setter clamps to duration first), kept as a
+                // Rust-safety net (TS would dereference `undefined` here and throw).
                 self.stop();
                 return false;
             }
-
-            let event = self.songs[song_idx].tracks[track_index].events[ei].clone();
-
-            // Check termination condition
+            let e = self.songs[song_idx].timeline[self.index];
+            let track_index = e.tr;
+            let event = self.songs[song_idx].tracks[track_index].events[e.ev].clone();
             match ticks {
                 None => {
                     if self.played_time >= time {
@@ -110,7 +241,15 @@ impl SpessaSynthSequencer {
                 }
             }
 
-            let info = get_event(event.status_byte);
+            // Skip note ons. Inlined equivalent of the removed `getEvent(statusByte)`, matching
+            // `process_event.rs`.
+            let (status, status_channel): (MidiMessageType, usize) =
+                if (0x80..0xf0).contains(&event.status_byte) {
+                    (event.status_byte & 0xf0, (event.status_byte & 0x0f) as usize)
+                } else {
+                    (event.status_byte, 0)
+                };
+
             // Keep in mind midi ports to determine the channel!
             let track_port = self.songs[song_idx].tracks[track_index].port;
             let offset = self
@@ -118,28 +257,63 @@ impl SpessaSynthSequencer {
                 .get(&track_port)
                 .copied()
                 .unwrap_or(0);
-            let channel = if info.channel >= 0 {
-                info.channel as usize + offset
-            } else {
-                0
-            };
+            let channel = status_channel + offset;
 
-            match info.status {
-                // Skip note messages but track portamento control
+            // Ensure that the channel is always there (safety precaution)
+            while channels.len() <= channel {
+                let idx = channels.len();
+                channels.push(ChannelStatus::new(idx as MidiController));
+            }
+
+            match status {
+                // Skip note messages
                 midi_message_types::NOTE_ON => {
-                    if channel < saved_controllers.len() {
-                        saved_controllers[channel]
-                            [midi_controllers::PORTAMENTO_CONTROL as usize] =
-                            event.data[0] as i16;
-                    }
+                    // Always track the last note, even if portamento isn't applied.
+                    // See: https://github.com/spessasus/spessasynth_core/issues/77
+                    channels[channel].portamento_note = event.data[0] as i32;
                 }
 
                 midi_message_types::NOTE_OFF => {}
 
+                // Skip pitch wheel
                 midi_message_types::PITCH_WHEEL => {
-                    if channel < pitch_wheels.len() {
-                        pitch_wheels[channel] =
-                            ((event.data[1] as i16) << 7) | event.data[0] as i16;
+                    channels[channel].pitch_wheel =
+                        ((event.data[1] as i16) << 7) | event.data[0] as i16;
+                }
+
+                midi_message_types::SYSTEM_EXCLUSIVE => {
+                    let analyzed = MidiUtils::analyze_sysex(&event.data);
+                    // Sysex may change controllers
+                    if let AnalyzedMidiMessage::ControllerChange {
+                        channel: sysex_channel,
+                        controller,
+                        value,
+                    } = analyzed
+                    {
+                        let sysex_channel = sysex_channel as usize;
+                        // Empty tracks cannot controller change
+                        if self.songs[song_idx].is_multi_port
+                            && self.songs[song_idx].tracks[track_index]
+                                .channels
+                                .is_empty()
+                        {
+                            // Break (do nothing further for this event)
+                        } else if controller == midi_controllers::RESET_ALL_CONTROLLERS {
+                            reset_all_controllers(&mut channels, sysex_channel);
+                        } else if is_cc_non_skippable(controller) {
+                            self.synth
+                                .controller_change(sysex_channel, controller, value);
+                        } else {
+                            channels[sysex_channel].controllers[controller as usize] =
+                                (value as i16) << 7;
+                        }
+                    } else {
+                        /*
+                        Program change cannot be skipped.
+                        Some MIDIs edit drums via sysEx and skipping program changes causes them to be sent after, resetting the params.
+                        Testcase: (GS88Pro)Th19_1S(KR.Palto47)
+                         */
+                        self.process_event(event.clone(), track_index);
                     }
                 }
 
@@ -150,81 +324,117 @@ impl SpessaSynthSequencer {
                             .channels
                             .is_empty()
                     {
-                        // skip
+                        // Skip
                     } else {
-                        let controller_number = event.data[0];
-                        if is_cc_non_skippable(controller_number) {
-                            let cc_v = event.data[1];
-                            if controller_number
-                                == midi_controllers::RESET_ALL_CONTROLLERS
-                            {
-                                reset_all_controllers(
-                                    channel,
-                                    &mut pitch_wheels,
-                                    &mut saved_controllers,
-                                    &default_controller_array,
-                                );
+                        let controller = event.data[0];
+                        let value = event.data[1];
+
+                        match controller {
+                            // Parameter tracking
+                            midi_controllers::REGISTERED_PARAMETER_MSB
+                            | midi_controllers::REGISTERED_PARAMETER_LSB
+                            | midi_controllers::NON_REGISTERED_PARAMETER_LSB
+                            | midi_controllers::NON_REGISTERED_PARAMETER_MSB => {
+                                // Track and event indexes are irrelevant here
+                                channels[channel]
+                                    .param
+                                    .controller_change(controller, value, 0, 0);
+                                // Always send regardless
+                                self.synth.controller_change(channel, controller, value);
                             }
-                            self.synth.controller_change(
-                                channel,
-                                controller_number,
-                                cc_v,
-                            );
-                        } else if channel < saved_controllers.len() {
-                            saved_controllers[channel][controller_number as usize] =
-                                event.data[1] as i16;
+
+                            midi_controllers::DATA_ENTRY_MSB
+                            | midi_controllers::DATA_ENTRY_LSB => {
+                                let analyzed = channels[channel]
+                                    .param
+                                    .controller_change(controller, value, 0, 0)
+                                    .expect("data entry CC always yields Some(..)");
+                                // Always send regardless
+                                self.synth.controller_change(channel, controller, value);
+
+                                // NRPN may change controllers
+                                if let AnalyzedMidiMessage::ControllerChange {
+                                    controller: ac,
+                                    value: av,
+                                    ..
+                                } = analyzed
+                                {
+                                    if is_cc_non_skippable(ac) {
+                                        self.synth.controller_change(channel, ac, av);
+                                    } else {
+                                        channels[channel].controllers[ac as usize] =
+                                            (av as i16) << 7;
+                                    }
+                                }
+                            }
+
+                            _ => {
+                                if controller == midi_controllers::RESET_ALL_CONTROLLERS {
+                                    reset_all_controllers(&mut channels, channel);
+                                } else if is_cc_non_skippable(controller) {
+                                    self.synth.controller_change(channel, controller, value);
+                                } else {
+                                    channels[channel].controllers[controller as usize] =
+                                        (value as i16) << 7;
+                                }
+                            }
                         }
                     }
                 }
 
                 midi_message_types::SET_TEMPO => {
-                    let tempo_bpm =
-                        60_000_000.0 / read_big_endian(&event.data, 3, 0) as f64;
-                    self.one_tick_to_seconds =
-                        60.0 / (tempo_bpm * time_division as f64);
+                    let tempo_bpm = 60_000_000.0 / read_big_endian(&event.data, 3, 0) as f64;
+                    self.one_tick_to_seconds = 60.0 / (tempo_bpm * time_division as f64);
                     saved_tempo = Some(event.clone());
                     saved_tempo_track = track_index;
                 }
 
+                /*
+                Program change cannot be skipped.
+                Some MIDIs edit drums via sysEx and skipping program changes causes them to be sent after, resetting the params.
+                Testcase: (GS88Pro)Th19_1S(KR.Palto47)
+                 */
                 _ => {
-                    // Process all other events normally
                     self.process_event(event.clone(), track_index);
                 }
             }
 
-            self.event_indexes[track_index] += 1;
-
             // Find the next event
-            let next_track_index = self.find_first_event_index();
-            let next_ei = self.event_indexes[next_track_index];
-            let next_track_events_len =
-                self.songs[song_idx].tracks[next_track_index].events.len();
-            if next_ei >= next_track_events_len {
+            self.index += 1;
+            if self.index >= self.songs[song_idx].timeline.len() {
                 self.stop();
                 return false;
             }
-            let next_event_ticks =
-                self.songs[song_idx].tracks[next_track_index].events[next_ei].ticks;
-            self.played_time +=
-                self.one_tick_to_seconds * (next_event_ticks - event.ticks) as f64;
+            let n_e = self.songs[song_idx].timeline[self.index];
+            let next_event_ticks = self.songs[song_idx].tracks[n_e.tr].events[n_e.ev].ticks;
+            self.played_time += self.one_tick_to_seconds * (next_event_ticks - event.ticks) as f64;
         }
 
-        // Restoring saved controllers
+        // For all synth channels
         for channel in 0..channels_to_save {
-            // Restore pitch wheels
-            if channel < pitch_wheels.len() {
-                self.synth
-                    .pitch_wheel(channel, pitch_wheels[channel], -1);
+            let ch = &channels[channel];
+            // Restoring pitch wheels
+            self.synth.pitch_wheel(channel, ch.pitch_wheel, -1);
+
+            // Restoring portamento (only if currently active)
+            // Note: we do it before controllers as portamento control may want to override it
+            if ch.portamento_note >= 0 {
+                // See the TODO in this file's module doc comment: TS 4.3.0 uses a dedicated
+                // `midiChannels[channel].setLastNote()` here; this port still routes through
+                // CC84, which `note_on.rs` reads the same way.
+                self.synth.controller_change(
+                    channel,
+                    midi_controllers::PORTAMENTO_CONTROL,
+                    ch.portamento_note as u8,
+                );
             }
+
+            // Restoring saved controllers
             // Every controller that has changed
-            if channel < saved_controllers.len() {
-                for (index, &value) in saved_controllers[channel].iter().enumerate() {
-                    if value != default_controller_array[index]
-                        && !is_cc_non_skippable(index as u8)
-                    {
-                        self.synth
-                            .controller_change(channel, index as u8, value as u8);
-                    }
+            for i in 0..CONTROLLER_TABLE_SIZE {
+                let value = ch.controllers[i] >> 7;
+                if value != DEFAULT_MIDI_CONTROLLERS[i] && !is_cc_non_skippable(i as MidiController) {
+                    self.synth.controller_change(channel, i as MidiController, value as u8);
                 }
             }
         }
@@ -256,7 +466,7 @@ mod tests {
     use crate::midi::basic_midi::BasicMidi;
     use crate::midi::midi_message::MidiMessage;
     use crate::midi::midi_track::MidiTrack;
-    use crate::midi::types::TempoChange;
+    use crate::midi::types::{TempoChange, TimelineEvent};
     use crate::synthesizer::processor::SpessaSynthProcessor;
     use crate::synthesizer::types::{SynthProcessorEvent, SynthProcessorOptions};
 
@@ -266,6 +476,18 @@ mod tests {
             |_: SynthProcessorEvent| {},
             SynthProcessorOptions::default(),
         )
+    }
+
+    /// See `sequencer.rs`'s test module for why this doesn't just call `BasicMidi::flush()`.
+    fn build_timeline(midi: &mut BasicMidi) {
+        let mut timeline = Vec::new();
+        for (tr, track) in midi.tracks.iter().enumerate() {
+            for ev in 0..track.events.len() {
+                timeline.push(TimelineEvent { tr, ev });
+            }
+        }
+        timeline.sort_by_key(|e| midi.tracks[e.tr].events[e.ev].ticks);
+        midi.timeline = timeline;
     }
 
     fn make_midi_with_cc() -> BasicMidi {
@@ -303,6 +525,7 @@ mod tests {
         track.push_event(MidiMessage::new(1920, 0x80, vec![64, 0]));
         track.push_event(MidiMessage::new(1920, 0x2F, vec![]));
         midi.tracks.push(track);
+        build_timeline(&mut midi);
         midi
     }
 
@@ -338,6 +561,44 @@ mod tests {
     #[test]
     fn test_is_cc_non_skippable_pan_is_skippable() {
         assert!(!is_cc_non_skippable(midi_controllers::PAN));
+    }
+
+    // -- DEFAULT_MIDI_CONTROLLERS / RP_15_RESET_CC_NUMS --
+
+    #[test]
+    fn test_default_midi_controllers_main_volume() {
+        assert_eq!(
+            DEFAULT_MIDI_CONTROLLERS[midi_controllers::MAIN_VOLUME as usize],
+            100 << 7
+        );
+    }
+
+    #[test]
+    fn test_default_midi_controllers_nrpn_is_zero() {
+        // Unlike the old 4.2.0 `defaultMIDIControllerValues` (127), TS 4.3.0's
+        // `DEFAULT_MIDI_CONTROLLERS` resets NRPN MSB/LSB to `DEFAULT_NRPN` (0).
+        assert_eq!(
+            DEFAULT_MIDI_CONTROLLERS[midi_controllers::NON_REGISTERED_PARAMETER_MSB as usize],
+            0
+        );
+        assert_eq!(
+            DEFAULT_MIDI_CONTROLLERS[midi_controllers::NON_REGISTERED_PARAMETER_LSB as usize],
+            0
+        );
+    }
+
+    #[test]
+    fn test_default_midi_controllers_rpn_default() {
+        assert_eq!(
+            DEFAULT_MIDI_CONTROLLERS[midi_controllers::REGISTERED_PARAMETER_MSB as usize],
+            (DEFAULT_RPN as i16) << 7
+        );
+    }
+
+    #[test]
+    fn test_rp15_reset_cc_nums_contains_sustain_pedal() {
+        assert!(RP_15_RESET_CC_NUMS.contains(&midi_controllers::SUSTAIN_PEDAL));
+        assert_eq!(RP_15_RESET_CC_NUMS.len(), 8);
     }
 
     // -- set_time_to --
@@ -412,8 +673,8 @@ mod tests {
         seq.play();
         let result = seq.set_time_to(0.0, Some(0));
         assert!(result);
-        // All event indexes should be 0
-        assert!(seq.event_indexes.iter().all(|&i| i == 0));
+        // The timeline cursor should be at the very start.
+        assert_eq!(seq.index, 0);
     }
 
     // -- edge: seek past end --
@@ -426,5 +687,28 @@ mod tests {
         let result = seq.set_time_to(100.0, None);
         // Should return false since song ends before 100 seconds
         assert!(!result);
+    }
+
+    // -- reset_all_controllers (RP-15 local seek-time emulation) --
+
+    #[test]
+    fn test_reset_all_controllers_only_touches_rp15_ccs() {
+        let mut channels: Vec<ChannelStatus> = (0..1u8).map(ChannelStatus::new).collect();
+        // Simulate main volume having been changed by a preceding skipped CC.
+        channels[0].controllers[midi_controllers::MAIN_VOLUME as usize] = 42 << 7;
+        channels[0].pitch_wheel = 1234;
+        reset_all_controllers(&mut channels, 0);
+        // RP-15 reset touches pitch wheel...
+        assert_eq!(channels[0].pitch_wheel, 8192);
+        // ...and the 8 RP_15_RESET_CC_NUMS...
+        assert_eq!(
+            channels[0].controllers[midi_controllers::SUSTAIN_PEDAL as usize],
+            DEFAULT_MIDI_CONTROLLERS[midi_controllers::SUSTAIN_PEDAL as usize]
+        );
+        // ...but NOT main volume (unlike the old 4.2.0 broad reset).
+        assert_eq!(
+            channels[0].controllers[midi_controllers::MAIN_VOLUME as usize],
+            42 << 7
+        );
     }
 }

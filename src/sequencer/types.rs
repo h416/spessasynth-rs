@@ -1,6 +1,9 @@
 /// types.rs
 /// purpose: Sequencer event data types and discriminated union.
-/// Ported from: src/sequencer/types.ts
+/// Ported from: src/sequencer/types.ts (spessasynth_core 4.3.0)
+///
+/// Reviewed against the 4.3.0 diff: `types.ts` is byte-for-byte identical between 4.2.0 and
+/// 4.3.0 (no diff). No functional edits needed.
 use crate::midi::basic_midi::BasicMidi;
 use crate::midi::midi_message::MidiMessage;
 

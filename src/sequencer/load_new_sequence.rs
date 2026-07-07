@@ -1,9 +1,24 @@
-/// song_control.rs
+/// load_new_sequence.rs
 /// purpose: MIDI port assignment and sequence loading.
-/// Ported from: src/sequencer/song_control.ts
+/// Ported from: src/sequencer/load_new_sequence.ts (spessasynth_core 4.3.0; renamed from
+/// `src/sequencer/song_control.ts` in the upstream 4.3.0 restructuring — see `mod.rs`/phase-1
+/// notes).
+///
+/// Changes from 4.2.0's `song_control.ts` (reviewed against the 4.3.0 diff):
+/// - `assignMIDIPortInternal` is byte-for-byte identical (aside from the `formatTime`/
+///   `ConsoleColors` import casing, which doesn't touch this function). No functional edits
+///   needed.
+/// - `loadNewSequenceInternal`: only parameter rename (`parsedMidi` → `parsedMIDI`, a JS-only
+///   identifier rename with no Rust-side equivalent) and `SpessaSynthInfo`/`SpessaSynthWarn` →
+///   `SpessaLog.info`/`SpessaLog.warn` (Task 18 API; behavior-identical thin wrappers, see
+///   `utils/loggin.rs`). No other logic changes.
+/// - `this.synth.clearEmbeddedBank()` → `this.synth.clearEmbeddedSoundBank()` (pure rename on
+///   `SpessaSynthProcessor`, out of scope: `processor.rs` is not part of this task's file list).
+///   This Rust file keeps calling the existing `SpessaSynthProcessor::clear_embedded_bank()`,
+///   which is unchanged in behavior.
 use crate::sequencer::sequencer::SpessaSynthSequencer;
 use crate::sequencer::types::{SequencerEvent, SongChangeEventData};
-use crate::utils::loggin::{spessa_synth_info, spessa_synth_warn};
+use crate::utils::loggin::SpessaLog;
 use crate::utils::other::format_time;
 
 impl SpessaSynthSequencer {
@@ -39,19 +54,19 @@ impl SpessaSynthSequencer {
     }
 
     /// Loads a new sequence internally.
-    /// Equivalent to: loadNewSequenceInternal(parsedMidi)
+    /// Equivalent to: loadNewSequenceInternal(parsedMIDI)
     ///
     /// Takes a song index into self.songs instead of a reference, to avoid borrow conflicts.
     pub(crate) fn load_new_sequence(&mut self, song_index: usize) {
         let tracks_len = self.songs[song_index].tracks.len();
         if tracks_len == 0 {
-            spessa_synth_warn("This MIDI has no tracks!");
+            SpessaLog::warn("This MIDI has no tracks!");
             return;
         }
 
         let duration = self.songs[song_index].duration;
         if duration == 0.0 {
-            spessa_synth_warn("This MIDI file has a duration of exactly 0 seconds.");
+            SpessaLog::warn("This MIDI file has a duration of exactly 0 seconds.");
             self.paused_time = Some(0.0);
             self.is_finished = true;
             return;
@@ -67,7 +82,7 @@ impl SpessaSynthSequencer {
 
         // Check for embedded soundfont
         if self.songs[song_index].embedded_sound_bank.is_some() {
-            spessa_synth_info("Embedded soundbank detected! Using it.");
+            SpessaLog::info("Embedded soundbank detected! Using it.");
             let bank_data = self.songs[song_index]
                 .embedded_sound_bank
                 .clone()
@@ -103,7 +118,7 @@ impl SpessaSynthSequencer {
         self.first_note_time = self.songs[song_index].midi_ticks_to_seconds(first_note_on);
 
         let duration_str = format_time(duration.ceil()).time;
-        spessa_synth_info(&format!("Total song time: {}", duration_str));
+        SpessaLog::info(&format!("Total song time: {}", duration_str));
 
         self.call_event(SequencerEvent::SongChange(SongChangeEventData {
             song_index: self.song_index,
@@ -111,7 +126,7 @@ impl SpessaSynthSequencer {
 
         if duration <= 0.2 {
             let short_str = format_time(duration.round()).time;
-            spessa_synth_warn(&format!(
+            SpessaLog::warn(&format!(
                 "Very short song: ({}). Disabling loop!",
                 short_str
             ));
@@ -133,12 +148,24 @@ mod tests {
     use crate::midi::basic_midi::BasicMidi;
     use crate::midi::midi_message::MidiMessage;
     use crate::midi::midi_track::MidiTrack;
-    use crate::midi::types::TempoChange;
+    use crate::midi::types::{TempoChange, TimelineEvent};
     use crate::synthesizer::types::{SynthProcessorEvent, SynthProcessorOptions};
     use crate::synthesizer::processor::SpessaSynthProcessor;
 
     fn make_processor() -> SpessaSynthProcessor {
         SpessaSynthProcessor::new(44100.0, |_: SynthProcessorEvent| {}, SynthProcessorOptions::default())
+    }
+
+    /// See `sequencer.rs`'s test module for why this doesn't just call `BasicMidi::flush()`.
+    fn build_timeline(midi: &mut BasicMidi) {
+        let mut timeline = Vec::new();
+        for (tr, track) in midi.tracks.iter().enumerate() {
+            for ev in 0..track.events.len() {
+                timeline.push(TimelineEvent { tr, ev });
+            }
+        }
+        timeline.sort_by_key(|e| midi.tracks[e.tr].events[e.ev].ticks);
+        midi.timeline = timeline;
     }
 
     fn make_simple_midi() -> BasicMidi {
@@ -155,6 +182,7 @@ mod tests {
         track.push_event(MidiMessage::new(480, 0x80, vec![60, 0]));
         track.push_event(MidiMessage::new(960, 0x2F, vec![]));
         midi.tracks.push(track);
+        build_timeline(&mut midi);
         midi
     }
 
@@ -181,6 +209,7 @@ mod tests {
         t1.push_event(MidiMessage::new(0, 0x90, vec![62, 80]));
         midi.tracks.push(t1);
 
+        build_timeline(&mut midi);
         midi
     }
 
