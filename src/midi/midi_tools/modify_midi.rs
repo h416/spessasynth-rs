@@ -39,6 +39,16 @@
 ///   silently clamps, so the Rust port's `splice_insert` helper clamps explicitly — this is the
 ///   one deviation from "port bugs as-is", and only prevents a panic; it does not change where
 ///   the event ends up when the tick count *is* in-bounds.
+/// - CC-lock deletion uses JS *truthiness* inconsistently across the three lookup sites. The
+///   plain Controller Change path and the NRPN-decoded Controller Change path both test
+///   `if (change)`, so a lock *value* of `0` is falsy and does NOT delete the existing event
+///   (while `"clear"`, a non-empty string, is truthy and does); but the SysEx-decoded
+///   Controller Change path tests `changes !== undefined`, so there even a `0`-valued lock
+///   deletes. All three are reproduced as-is (`Clear` counts as truthy; `Value(0)` deletes only
+///   on the SysEx path).
+/// - The GS-reset auto-insert trigger is `.some((c) => c.patch && c.patch !== "clear")`: a
+///   `Clear`-only patch request removes program changes but does not cause a GS reset to be
+///   inserted.
 use std::collections::{HashMap, HashSet};
 
 use crate::midi::basic_midi::BasicMidi;
@@ -697,8 +707,14 @@ pub fn modify_midi_internal(midi: &mut BasicMidi, opts: &ModifyMidiOptions) {
 
                 let locked = channel_change
                     .and_then(|c| c.controllers.as_ref())
-                    .and_then(|controllers| controllers.iter().find(|(cc, _)| *cc == cc_num));
-                if locked.is_some() {
+                    .and_then(|controllers| controllers.iter().find(|(cc, _)| *cc == cc_num))
+                    .map(|(_, v)| v);
+                // TS truthiness (`if (change)`): a lock *value* of 0 is falsy and does NOT
+                // delete the existing CC event; "clear" (a non-empty string) is truthy and
+                // does. See the module doc quirks list.
+                if matches!(locked, Some(ClearableParameter::Clear))
+                    || matches!(locked, Some(ClearableParameter::Value(v)) if *v != 0)
+                {
                     // This controller is locked, BEGONE CHANGE!
                     delete_this_event(midi, &mut event_indexes, track_num, index);
                     break 'process;
@@ -773,8 +789,13 @@ pub fn modify_midi_internal(midi: &mut BasicMidi, opts: &ModifyMidiOptions) {
                                     .and_then(|c| c.controllers.as_ref())
                                     .and_then(|controllers| {
                                         controllers.iter().find(|(cc, _)| *cc == data_cc)
-                                    });
-                                if locked.is_some() {
+                                    })
+                                    .map(|(_, v)| v);
+                                // Same TS truthiness as the plain CC path above: a lock value
+                                // of 0 is falsy and does not trigger deletion.
+                                if matches!(locked, Some(ClearableParameter::Clear))
+                                    || matches!(locked, Some(ClearableParameter::Value(v)) if *v != 0)
+                                {
                                     delete_parameter(
                                         midi,
                                         &mut event_indexes,
@@ -1001,7 +1022,11 @@ pub fn modify_midi_internal(midi: &mut BasicMidi, opts: &ModifyMidiOptions) {
     }
 
     // Check for GS reset and insert it to ensure that a reset always exists.
-    let any_patch_change = channel_changes.values().any(|c| c.patch.is_some());
+    // TS: `.some((c) => c.patch && c.patch !== "clear")` — a `Clear`-only patch request does
+    // NOT trigger the GS reset insertion, only an actual new patch value does.
+    let any_patch_change = channel_changes
+        .values()
+        .any(|c| matches!(&c.patch, Some(ClearableParameter::Value(_))));
     if !added_gs && any_patch_change && !midi.tracks.is_empty() {
         // GS is not on, add it on the first track at index 0 (or 1 if track name is first).
         let mut insert_index = 0;
@@ -1411,6 +1436,37 @@ mod tests {
         assert!(program_changes.is_empty());
     }
 
+    #[test]
+    fn test_patch_clear_does_not_insert_gs_reset() {
+        // TS: `.some((c) => c.patch && c.patch !== "clear")` — a Clear-only patch request must
+        // NOT trigger the automatic GS reset insertion.
+        let track = make_track(vec![
+            make_msg(0, midi_message_types::PROGRAM_CHANGE, vec![10]),
+            make_msg(100, 0x90, vec![60, 100]),
+            make_msg(200, midi_message_types::END_OF_TRACK, vec![]),
+        ]);
+        let mut midi = make_midi_with_track(track);
+        modify_midi_internal(
+            &mut midi,
+            &opts_with_channel(
+                0,
+                ChannelModification {
+                    patch: Some(ClearableParameter::Clear),
+                    ..Default::default()
+                },
+            ),
+        );
+
+        let gs_on = midi.tracks[0].events.iter().find(|e| {
+            e.status_byte == midi_message_types::SYSTEM_EXCLUSIVE
+                && e.data.len() >= 7
+                && e.data[0] == 0x41
+                && e.data[2] == 0x42
+                && e.data[6] == 0x7f
+        });
+        assert!(gs_on.is_none());
+    }
+
     // ── controller lock ───────────────────────────────────────────────────────
 
     #[test]
@@ -1477,6 +1533,39 @@ mod tests {
             .collect();
         assert_eq!(cc7_events.len(), 1);
         assert_eq!(cc7_events[0].data[1], 100);
+    }
+
+    #[test]
+    fn test_locked_controller_value_zero_keeps_existing_cc() {
+        // TS truthiness quirk: `if (change)` — a lock value of 0 is falsy, so the existing CC
+        // event is NOT deleted (the new CC 0 event is still inserted at the first note-on,
+        // since the insertion loop only skips "clear").
+        let track = make_track(vec![
+            make_msg(0, midi_message_types::CONTROLLER_CHANGE, vec![7, 80]),
+            make_msg(100, 0x90, vec![60, 100]),
+            make_msg(200, midi_message_types::END_OF_TRACK, vec![]),
+        ]);
+        let mut midi = make_midi_with_track(track);
+        let controllers = vec![(7u8, ClearableParameter::Value(0u8))];
+        modify_midi_internal(
+            &mut midi,
+            &opts_with_channel(
+                0,
+                ChannelModification {
+                    controllers: Some(controllers),
+                    ..Default::default()
+                },
+            ),
+        );
+
+        // The original CC7=80 must survive.
+        let existing = midi.tracks[0].events.iter().any(|e| {
+            e.status_byte & 0xF0 == midi_message_types::CONTROLLER_CHANGE
+                && e.data.len() >= 2
+                && e.data[0] == 7
+                && e.data[1] == 80
+        });
+        assert!(existing, "CC7=80 should not be deleted by a 0-valued lock");
     }
 
     #[test]
