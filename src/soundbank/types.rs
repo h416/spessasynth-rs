@@ -10,7 +10,11 @@ use crate::soundbank::basic_soundbank::generator_types::GENERATORS_AMOUNT;
 ///   - SoundFont2WriteOptions / DLSWriteOptions / SoundBankWriteOptions (write-only)
 ///   - SetSampleFormatOptions     (SF3/Vorbis, out of scope)
 ///   - SF2Channel                 (deferred until the channel-engine rework is ported)
-///   - PresetsWithKeyCombinations (used by BasicSoundBank.trim; deferred to midi_tools task)
+///
+/// `PresetsWithKeyCombinations` (Task 18): see the type below for the Rust-specific identity
+/// scheme used in place of TS's `Map<BasicPreset, ...>`.
+use std::collections::{HashMap, HashSet};
+
 use crate::soundbank::basic_soundbank::modulator::Modulator;
 use crate::soundbank::downloadable_sounds::enums::DLSLoopType;
 
@@ -133,6 +137,32 @@ pub enum MIDISystem {
     Gs,
     Xg,
 }
+
+// ---------------------------------------------------------------------------
+// PresetsWithKeyCombinations
+// ---------------------------------------------------------------------------
+
+/// Maps presets used by a MIDI file to the note/velocity combinations actually played through
+/// each one. Produced by `midi_tools::used_programs_and_keys::get_used_programs_and_keys` and
+/// consumed by `BasicSoundBank::trim` to discard unused preset/instrument/sample zones.
+///
+/// TypeScript keys this by `BasicPreset` object identity (`Map<BasicPreset, Map<number,
+/// Set<number>>>`). Rust's `BasicPreset` has no stable identity once stored in a `Vec` other than
+/// its address, so — mirroring the scheme the pre-4.3.0 Rust port already used for this same
+/// purpose (`UsedPresetKeys` in `used_programs_and_keys.rs`) — this keys by the *pointer address*
+/// of the referenced `BasicPreset` (`preset as *const BasicPreset as usize`). A caller holding a
+/// `&BasicPreset` (e.g. while iterating `BasicSoundBank::presets`) can compute the same key to
+/// look itself up; this is valid as long as the `Vec<BasicPreset>` isn't reallocated between
+/// computing the map and querying it.
+///
+/// - Outer key: pointer identity of the preset.
+/// - Inner key: the MIDI note number actually played. Kept as `i32` (not `u8`) because RPN
+///   Coarse Tuning / GS or XG SysEx key-shift can transpose the recorded note outside 0-127,
+///   mirroring JS's unbounded `number`.
+/// - Inner value: the set of velocities (0-127) played at that note.
+///
+/// Equivalent to: PresetsWithKeyCombinations
+pub type PresetsWithKeyCombinations = HashMap<usize, HashMap<i32, HashSet<u8>>>;
 
 // ---------------------------------------------------------------------------
 // Tests

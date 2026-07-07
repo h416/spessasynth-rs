@@ -1,11 +1,8 @@
 /// basic_soundbank.rs
 /// purpose: BasicSoundBank struct - a single SoundFont2/DLS sound bank.
-/// Ported from: src/soundbank/basic_soundbank/basic_soundbank.ts
+/// Ported from: src/soundbank/basic_soundbank/basic_soundbank.ts (spessasynth_core 4.3.0)
 ///
 /// # Skipped features
-/// - `trimSoundBank()` → ported as free function `trim_sound_bank` in `used_keys_loaded.rs`
-///   (TS 4.3.0 reworked it into `trim(presetData: PresetsWithKeyCombinations)`; that change
-///   is deferred to the midi_tools task)
 /// - `setSampleFormat()` → SF3/Vorbis compression, out of scope
 /// - `writeSF2()`, `writeDLS()`, `getSampleSoundBankFile()` → write-only, out of MIDI→WAV scope
 /// - `addCompletePresets()` → replaced by `clone_preset_from` / `merge_sound_banks`
@@ -17,6 +14,27 @@
 /// - `remove_unused_elements` / `delete_*` perform full index recomputation after removal
 /// - `get_preset` returns `Option<&BasicPreset>` (None on empty bank) to satisfy `PresetResolver`
 /// - `parentSoundBank` in `BasicPreset` is removed (circular ownership); passed as params instead
+///
+/// ## `trim` (Task 18)
+///
+/// TS 4.3.0 reworked `trimSoundBank(mid)` (which internally called `mid.getUsedProgramsAndKeys`)
+/// into `trim(presetData: PresetsWithKeyCombinations)`, taking the already-computed result so
+/// `basic_soundbank.ts` no longer depends on `basic_midi.ts`. Callers now do
+/// `bank.trim(&midi.get_used_programs_and_keys(&bank))` (mirrored 1:1 in Rust — see
+/// `midi_tools::used_programs_and_keys`).
+///
+/// TS's `trim` immediately calls `this.deleteInstrument`/`this.deleteSample` (identity-based, no
+/// reindexing needed) as soon as an instrument/sample's use count hits zero mid-loop. Rust's
+/// index-based `delete_instrument`/`delete_sample` instead perform a full reindex of every
+/// other index reference in the bank, which is unsafe to interleave with the in-progress
+/// zone-trimming loop (the loop holds cached indices that a reindex would invalidate). Since
+/// TS's `trim` unconditionally calls `this.removeUnusedElements()` once at the very end anyway
+/// (a no-op if everything was already cleaned up immediately), this Rust port defers *all*
+/// instrument/sample physical removal to that single final `remove_unused_elements()` sweep:
+/// the loop below only decrements use-counts (via `delete_zone`'s existing unlink behavior), and
+/// physical removal + reindexing happens once, after the loop. The final trimmed sound bank
+/// contents are identical either way — removal order cannot change which elements end up with a
+/// zero use-count.
 use crate::soundbank::basic_soundbank::basic_instrument::BasicInstrument;
 use crate::soundbank::basic_soundbank::basic_instrument_zone::BasicInstrumentZone;
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
@@ -25,7 +43,7 @@ use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
 use crate::soundbank::basic_soundbank::midi_patch::{MidiPatch, compare, select_patch};
 use crate::soundbank::basic_soundbank::modulator::{Modulator, SPESSASYNTH_DEFAULT_MODULATORS};
 use crate::soundbank::basic_soundbank::preset_resolver::PresetResolver;
-use crate::soundbank::types::{SF2VersionTag, SoundBankInfoData};
+use crate::soundbank::types::{PresetsWithKeyCombinations, SF2VersionTag, SoundBankInfoData};
 use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::SpessaLog;
 use crate::utils::midi_hacks::BankSelectHacks;
@@ -391,6 +409,142 @@ impl BasicSoundBank {
             compare(&pa, &pb)
         });
         self.parse_internal();
+    }
+
+    // -----------------------------------------------------------------------
+    // trim
+    // -----------------------------------------------------------------------
+
+    /// Trims the sound bank down to only the presets, instrument zones, and samples actually
+    /// referenced by `preset_data` (as produced by
+    /// `midi_tools::used_programs_and_keys::get_used_programs_and_keys`).
+    ///
+    /// Presets not present in `preset_data` at all are deleted outright. For presets that are
+    /// present, each preset zone is kept only if its key/velocity range overlaps at least one
+    /// used (note, velocity) combination; used zones additionally have their instrument's own
+    /// zones trimmed the same way. See the module-level doc comment for why physical
+    /// instrument/sample removal is deferred to the final `remove_unused_elements()` call rather
+    /// than happening immediately (as in TypeScript).
+    ///
+    /// Equivalent to: public trim(presetData: PresetsWithKeyCombinations)
+    pub fn trim(&mut self, preset_data: &PresetsWithKeyCombinations) {
+        SpessaLog::group_collapsed("Trimming sound bank...");
+        SpessaLog::info(&format!("Combinations to trim for: {:?}", preset_data));
+
+        let mut preset_index = 0usize;
+        while preset_index < self.presets.len() {
+            let ptr = &self.presets[preset_index] as *const BasicPreset as usize;
+            let Some(key_combos) = preset_data.get(&ptr) else {
+                SpessaLog::info(&format!(
+                    "Deleting preset {} and its zones",
+                    self.presets[preset_index].name
+                ));
+                self.delete_preset(preset_index);
+                // Do not advance: the next preset slid into this index.
+                continue;
+            };
+
+            SpessaLog::group_collapsed(&format!("Trimming {}", self.presets[preset_index].name));
+            SpessaLog::info(&format!("Keys for {}: {:?}", self.presets[preset_index].name, key_combos));
+
+            let mut trimmed_zones = 0usize;
+            let mut zone_index = 0usize;
+            while zone_index < self.presets[preset_index].zones.len() {
+                let (instrument_idx, key_range, vel_range) = {
+                    let z = &self.presets[preset_index].zones[zone_index];
+                    (z.instrument_idx, z.zone.key_range.clone(), z.zone.vel_range.clone())
+                };
+
+                let is_zone_used = key_combos.iter().any(|(&key, velocities)| {
+                    (key as f64) >= key_range.min
+                        && (key as f64) <= key_range.max
+                        && velocities
+                            .iter()
+                            .any(|&v| (v as f64) >= vel_range.min && (v as f64) <= vel_range.max)
+                });
+
+                if is_zone_used {
+                    let trimmed_i_zones = Self::trim_instrument_zones(
+                        &mut self.instruments[instrument_idx],
+                        instrument_idx,
+                        key_combos,
+                        &mut self.samples,
+                    );
+                    SpessaLog::info(&format!(
+                        "Trimmed off {} instrument zones from {}",
+                        trimmed_i_zones, self.instruments[instrument_idx].name
+                    ));
+                    zone_index += 1;
+                } else {
+                    trimmed_zones += 1;
+                    self.presets[preset_index].delete_zone(
+                        zone_index,
+                        preset_index,
+                        &mut self.instruments,
+                    );
+                    // Do not advance: the next zone slid into this index.
+                }
+            }
+            SpessaLog::info(&format!(
+                "Trimmed off {} preset zones from {}",
+                trimmed_zones, self.presets[preset_index].name
+            ));
+            SpessaLog::group_end();
+
+            preset_index += 1;
+        }
+
+        self.remove_unused_elements();
+
+        SpessaLog::info("Sound bank modified!");
+        SpessaLog::group_end();
+    }
+
+    /// Trims an instrument's own zones down to those overlapping at least one (note, velocity)
+    /// combination in `key_combos`. Returns the number of zones removed.
+    ///
+    /// Equivalent to: the `trimInstrumentZones` closure inside `BasicSoundBank.trim`
+    fn trim_instrument_zones(
+        instrument: &mut BasicInstrument,
+        instrument_idx: usize,
+        key_combos: &std::collections::HashMap<i32, std::collections::HashSet<u8>>,
+        samples: &mut [BasicSample],
+    ) -> usize {
+        let mut trimmed_i_zones = 0usize;
+        let mut i_zone_index = 0usize;
+        while i_zone_index < instrument.zones.len() {
+            let (sample_idx, key_range, vel_range) = {
+                let z = &instrument.zones[i_zone_index];
+                (z.sample_idx, z.zone.key_range.clone(), z.zone.vel_range.clone())
+            };
+
+            let is_used = key_combos.iter().any(|(&key, velocities)| {
+                (key as f64) >= key_range.min
+                    && (key as f64) <= key_range.max
+                    && velocities
+                        .iter()
+                        .any(|&v| (v as f64) >= vel_range.min && (v as f64) <= vel_range.max)
+            });
+
+            if is_used {
+                i_zone_index += 1;
+                continue;
+            }
+
+            let sample_name = samples
+                .get(sample_idx)
+                .map(|s| s.name.clone())
+                .unwrap_or_default();
+            SpessaLog::info(&format!("{} removed from {}.", sample_name, instrument.name));
+            if instrument.delete_zone(i_zone_index, false, instrument_idx, samples) {
+                trimmed_i_zones += 1;
+                SpessaLog::info(&format!("{} deleted", sample_name));
+                // Do not advance: the next zone slid into this index.
+            } else {
+                i_zone_index += 1;
+            }
+        }
+        trimmed_i_zones
     }
 
     // -----------------------------------------------------------------------
@@ -1218,5 +1372,134 @@ mod tests {
         assert_eq!(reindex[1], Some(1));
         assert_eq!(reindex[2], None); // removed
         assert_eq!(reindex[3], Some(2)); // shifted
+    }
+
+    // -----------------------------------------------------------------------
+    // trim
+    // -----------------------------------------------------------------------
+
+    use crate::soundbank::types::GenericRange;
+    use std::collections::{HashMap, HashSet};
+
+    #[test]
+    fn test_trim_deletes_preset_absent_from_preset_data() {
+        let mut bank = BasicSoundBank::new();
+        bank.add_preset(make_preset("Keep", 0, 0));
+        bank.add_preset(make_preset("Drop", 1, 0));
+
+        let keep_ptr = &bank.presets[0] as *const BasicPreset as usize;
+        let mut preset_data: PresetsWithKeyCombinations = HashMap::new();
+        preset_data.insert(keep_ptr, HashMap::new());
+
+        bank.trim(&preset_data);
+
+        assert_eq!(bank.presets.len(), 1);
+        assert_eq!(bank.presets[0].name, "Keep");
+    }
+
+    #[test]
+    fn test_trim_keeps_all_presets_present_in_preset_data() {
+        let mut bank = BasicSoundBank::new();
+        bank.add_preset(make_preset("A", 0, 0));
+        bank.add_preset(make_preset("B", 1, 0));
+
+        let mut preset_data: PresetsWithKeyCombinations = HashMap::new();
+        for p in &bank.presets {
+            preset_data.insert(p as *const BasicPreset as usize, HashMap::new());
+        }
+
+        bank.trim(&preset_data);
+        assert_eq!(bank.presets.len(), 2);
+    }
+
+    #[test]
+    fn test_trim_removes_unused_preset_zone_and_its_instrument() {
+        let mut bank = BasicSoundBank::new();
+        let mut preset = make_preset("Multi", 0, 0);
+
+        // Two instruments, no shared zones between them.
+        bank.add_instrument(make_instrument("InstA"));
+        bank.add_instrument(make_instrument("InstB"));
+
+        // Zone A: key range 0-60, linked to instrument 0 ("InstA").
+        let idx_a = preset.create_zone(0, 0, &mut bank.instruments);
+        preset.zones[idx_a].zone.key_range = GenericRange { min: 0.0, max: 60.0 };
+
+        // Zone B: key range 61-127, linked to instrument 1 ("InstB").
+        let idx_b = preset.create_zone(0, 1, &mut bank.instruments);
+        preset.zones[idx_b].zone.key_range = GenericRange {
+            min: 61.0,
+            max: 127.0,
+        };
+
+        bank.add_preset(preset);
+
+        let ptr = &bank.presets[0] as *const BasicPreset as usize;
+        let mut key_combos: HashMap<i32, HashSet<u8>> = HashMap::new();
+        key_combos.insert(72, HashSet::from([100])); // only overlaps zone B's key range
+
+        let mut preset_data: PresetsWithKeyCombinations = HashMap::new();
+        preset_data.insert(ptr, key_combos);
+
+        bank.trim(&preset_data);
+
+        // Only zone B ("InstB") should remain; InstA (unused) removed by remove_unused_elements.
+        assert_eq!(bank.presets[0].zones.len(), 1);
+        assert_eq!(bank.instruments.len(), 1);
+        assert_eq!(bank.instruments[0].name, "InstB");
+    }
+
+    #[test]
+    fn test_trim_keeps_zone_matching_key_and_velocity() {
+        let mut bank = BasicSoundBank::new();
+        let mut preset = make_preset("Single", 0, 0);
+        bank.add_instrument(make_instrument("Inst"));
+
+        let idx = preset.create_zone(0, 0, &mut bank.instruments);
+        preset.zones[idx].zone.key_range = GenericRange { min: 0.0, max: 127.0 };
+        preset.zones[idx].zone.vel_range = GenericRange {
+            min: 100.0,
+            max: 127.0,
+        };
+        bank.add_preset(preset);
+
+        let ptr = &bank.presets[0] as *const BasicPreset as usize;
+        let mut key_combos: HashMap<i32, HashSet<u8>> = HashMap::new();
+        key_combos.insert(60, HashSet::from([50, 110])); // 110 overlaps vel_range 100-127
+
+        let mut preset_data: PresetsWithKeyCombinations = HashMap::new();
+        preset_data.insert(ptr, key_combos);
+
+        bank.trim(&preset_data);
+
+        assert_eq!(bank.presets[0].zones.len(), 1);
+        assert_eq!(bank.instruments.len(), 1);
+    }
+
+    #[test]
+    fn test_trim_removes_zone_when_velocity_never_overlaps() {
+        let mut bank = BasicSoundBank::new();
+        let mut preset = make_preset("Single", 0, 0);
+        bank.add_instrument(make_instrument("Inst"));
+
+        let idx = preset.create_zone(0, 0, &mut bank.instruments);
+        preset.zones[idx].zone.key_range = GenericRange { min: 0.0, max: 127.0 };
+        preset.zones[idx].zone.vel_range = GenericRange {
+            min: 100.0,
+            max: 127.0,
+        };
+        bank.add_preset(preset);
+
+        let ptr = &bank.presets[0] as *const BasicPreset as usize;
+        let mut key_combos: HashMap<i32, HashSet<u8>> = HashMap::new();
+        key_combos.insert(60, HashSet::from([50])); // never reaches vel_range 100-127
+
+        let mut preset_data: PresetsWithKeyCombinations = HashMap::new();
+        preset_data.insert(ptr, key_combos);
+
+        bank.trim(&preset_data);
+
+        assert!(bank.presets[0].zones.is_empty());
+        assert!(bank.instruments.is_empty());
     }
 }

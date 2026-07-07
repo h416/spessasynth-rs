@@ -15,11 +15,11 @@ fn generate_test_midi(output_path: &str) {
     .expect("Failed to create MidiBuilder");
 
     // Program Change: channel 0, program 0 (Acoustic Grand Piano)
-    builder.add_program_change(0, 0, 0, 0).unwrap();
+    builder.program_change(0, 0, 0, 0).unwrap();
     // Note On: tick 0, track 0, channel 0, note C4 (60), velocity 100
-    builder.add_note_on(0, 0, 0, 60, 100).unwrap();
+    builder.note_on(0, 0, 0, 60, 100).unwrap();
     // Note Off: tick 960 (= 2 beats = 1 second at 120 BPM), track 0, channel 0, note 60
-    builder.add_note_off(960, 0, 0, 60, 64).unwrap();
+    builder.note_off(960, 0, 0, 60, 64).unwrap();
 
     builder.midi.flush(true);
 

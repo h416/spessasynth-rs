@@ -1,8 +1,18 @@
 /// midi_builder.rs
 /// purpose: Convenience builder for constructing a standard MIDI file from scratch.
-/// Ported from: src/midi/midi_tools/midi_builder.ts
+/// Ported from: src/midi/midi_tools/midi_builder.ts (spessasynth_core 4.3.0)
+///
+/// TS 4.3.0 renamed most methods to drop the redundant "add" prefix (`addNewTrack` ->
+/// `addTrack`, `addSetTempo` -> `setTempo`, `addNoteOn` -> `noteOn`, `addNoteOff` -> `noteOff`,
+/// `addProgramChange` -> `programChange`, `addControllerChange` -> `controllerChange`), merged
+/// `addPitchWheel(ticks, track, channel, MSB, LSB)` into a single 14-bit
+/// `pitchWheel(ticks, track, channel, pitch)`, and added three new methods: `systemExclusive`,
+/// `registeredParameter` (RPN MSB/LSB + Data Entry MSB/LSB in one call), and
+/// `nonRegisteredParameter` (same, for NRPN). `addEvent`'s `eventData` parameter widened from
+/// `Uint8Array | Iterable<number>` to `ArrayLike<number>` (both map to Rust's `Vec<u8>`/`&[u8]`,
+/// no functional change).
 use crate::midi::basic_midi::BasicMidi;
-use crate::midi::enums::{midi_message_types, MidiMessageType};
+use crate::midi::enums::{midi_controllers, midi_message_types, MidiMessageType};
 use crate::midi::midi_message::MidiMessage;
 use crate::midi::midi_track::MidiTrack;
 use crate::midi::types::MidiFormat;
@@ -78,8 +88,8 @@ impl MidiBuilder {
         let mut builder = Self { midi };
 
         // Create the conductor track, then set the initial tempo.
-        builder.add_new_track(&options.name, 0)?;
-        builder.add_set_tempo(0, options.initial_tempo)?;
+        builder.add_track(&options.name, 0)?;
+        builder.set_tempo(0, options.initial_tempo)?;
 
         Ok(builder)
     }
@@ -98,8 +108,8 @@ impl MidiBuilder {
     /// Returns `Err` if the current format is 0 (single-track) and a track
     /// already exists.
     ///
-    /// Equivalent to: addNewTrack(name, port)
-    pub fn add_new_track(&mut self, name: &str, port: u32) -> Result<(), String> {
+    /// Equivalent to: addTrack(name, port)
+    pub fn add_track(&mut self, name: &str, port: u32) -> Result<(), String> {
         if self.midi.format == MidiFormat::SingleTrack && !self.midi.tracks.is_empty() {
             return Err(
                 "Can't add more tracks to MIDI format 0. Consider using format 1.".to_string(),
@@ -137,7 +147,7 @@ impl MidiBuilder {
     ) -> Result<(), String> {
         if self.midi.tracks.get(track).is_none() {
             return Err(format!(
-                "Track {} does not exist. Add it via add_new_track.",
+                "Track {} does not exist. Add it via add_track.",
                 track
             ));
         }
@@ -160,8 +170,8 @@ impl MidiBuilder {
     /// Adds a Set Tempo meta event.
     ///
     /// `tempo` is in beats per minute (BPM).
-    /// Equivalent to: addSetTempo(ticks, tempo)
-    pub fn add_set_tempo(&mut self, ticks: u32, tempo: f64) -> Result<(), String> {
+    /// Equivalent to: setTempo(ticks, tempo)
+    pub fn set_tempo(&mut self, ticks: u32, tempo: f64) -> Result<(), String> {
         let tempo_us = (60_000_000.0 / tempo) as u32;
         let data = vec![
             ((tempo_us >> 16) & 0xFF) as u8,
@@ -176,8 +186,8 @@ impl MidiBuilder {
     /// `channel`, `midi_note`, and `velocity` are masked to their valid ranges
     /// (% 16 / % 128) before encoding.
     ///
-    /// Equivalent to: addNoteOn(ticks, track, channel, midiNote, velocity)
-    pub fn add_note_on(
+    /// Equivalent to: noteOn(ticks, track, channel, midiNote, velocity)
+    pub fn note_on(
         &mut self,
         ticks: u32,
         track: usize,
@@ -196,8 +206,8 @@ impl MidiBuilder {
     /// Adds a Note Off event.
     ///
     /// `velocity` is typically 64 (use 64 if unsure).
-    /// Equivalent to: addNoteOff(ticks, track, channel, midiNote, velocity)
-    pub fn add_note_off(
+    /// Equivalent to: noteOff(ticks, track, channel, midiNote, velocity)
+    pub fn note_off(
         &mut self,
         ticks: u32,
         track: usize,
@@ -214,8 +224,8 @@ impl MidiBuilder {
     }
 
     /// Adds a Program Change event.
-    /// Equivalent to: addProgramChange(ticks, track, channel, programNumber)
-    pub fn add_program_change(
+    /// Equivalent to: programChange(ticks, track, channel, programNumber)
+    pub fn program_change(
         &mut self,
         ticks: u32,
         track: usize,
@@ -231,42 +241,150 @@ impl MidiBuilder {
     }
 
     /// Adds a Controller Change event.
-    /// Equivalent to: addControllerChange(ticks, track, channel, controllerNumber, controllerValue)
-    pub fn add_controller_change(
+    ///
+    /// `controller`: the MIDI CC to use. `value`: the new CC value.
+    /// Equivalent to: controllerChange(ticks, track, channel, controller, value)
+    pub fn controller_change(
         &mut self,
         ticks: u32,
         track: usize,
         channel: u8,
-        controller_number: u8,
-        controller_value: u8,
+        controller: u8,
+        value: u8,
     ) -> Result<(), String> {
         self.add_event(
             ticks,
             track,
             midi_message_types::CONTROLLER_CHANGE | (channel % 16),
-            vec![controller_number % 128, controller_value % 128],
+            vec![controller % 128, value % 128],
         )
     }
 
     /// Adds a Pitch Wheel event.
     ///
-    /// `msb` is the second (high) byte; `lsb` is the first (low) byte.
-    /// The data is written as `[lsb, msb]` per the MIDI standard.
+    /// `pitch` is the combined 14-bit pitch wheel value (0-16383).
+    /// The data is written as `[pitch & 0x7f, (pitch >> 7) & 0x7f]` per the MIDI standard.
     ///
-    /// Equivalent to: addPitchWheel(ticks, track, channel, MSB, LSB)
-    pub fn add_pitch_wheel(
+    /// Equivalent to: pitchWheel(ticks, track, channel, pitch)
+    pub fn pitch_wheel(
         &mut self,
         ticks: u32,
         track: usize,
         channel: u8,
-        msb: u8,
-        lsb: u8,
+        pitch: u16,
     ) -> Result<(), String> {
+        let pitch = pitch % 16_384;
         self.add_event(
             ticks,
             track,
             midi_message_types::PITCH_WHEEL | (channel % 16),
-            vec![lsb % 128, msb % 128],
+            vec![(pitch & 0x7f) as u8, ((pitch >> 7) & 0x7f) as u8],
+        )
+    }
+
+    /// Adds a new System Exclusive event.
+    ///
+    /// `data` is the System Exclusive data, without the 0xF0 status byte.
+    /// Equivalent to: systemExclusive(ticks, track, data)
+    pub fn system_exclusive(
+        &mut self,
+        ticks: u32,
+        track: usize,
+        data: &[u8],
+    ) -> Result<(), String> {
+        self.add_event(
+            ticks,
+            track,
+            midi_message_types::SYSTEM_EXCLUSIVE,
+            data.to_vec(),
+        )
+    }
+
+    /// Selects a new Registered Parameter Number and immediately writes its value.
+    ///
+    /// `parameter`: the 14-bit registered parameter number (e.g. 0 = pitch wheel range).
+    /// `value`: the 14-bit value for this parameter.
+    ///
+    /// Equivalent to: registeredParameter(ticks, track, channel, parameter, value)
+    pub fn registered_parameter(
+        &mut self,
+        ticks: u32,
+        track: usize,
+        channel: u8,
+        parameter: u16,
+        value: u16,
+    ) -> Result<(), String> {
+        self.controller_change(
+            ticks,
+            track,
+            channel,
+            midi_controllers::REGISTERED_PARAMETER_MSB,
+            (parameter >> 7) as u8,
+        )?;
+        self.controller_change(
+            ticks,
+            track,
+            channel,
+            midi_controllers::REGISTERED_PARAMETER_LSB,
+            (parameter & 0x7f) as u8,
+        )?;
+        self.controller_change(
+            ticks,
+            track,
+            channel,
+            midi_controllers::DATA_ENTRY_MSB,
+            (value >> 7) as u8,
+        )?;
+        self.controller_change(
+            ticks,
+            track,
+            channel,
+            midi_controllers::DATA_ENTRY_LSB,
+            (value & 0x7f) as u8,
+        )
+    }
+
+    /// Selects a new Non-Registered Parameter Number and immediately writes its value.
+    ///
+    /// `parameter`: the 14-bit non-registered parameter number.
+    /// `value`: the 14-bit value for this parameter.
+    ///
+    /// Equivalent to: nonRegisteredParameter(ticks, track, channel, parameter, value)
+    pub fn non_registered_parameter(
+        &mut self,
+        ticks: u32,
+        track: usize,
+        channel: u8,
+        parameter: u16,
+        value: u16,
+    ) -> Result<(), String> {
+        self.controller_change(
+            ticks,
+            track,
+            channel,
+            midi_controllers::NON_REGISTERED_PARAMETER_MSB,
+            (parameter >> 7) as u8,
+        )?;
+        self.controller_change(
+            ticks,
+            track,
+            channel,
+            midi_controllers::NON_REGISTERED_PARAMETER_LSB,
+            (parameter & 0x7f) as u8,
+        )?;
+        self.controller_change(
+            ticks,
+            track,
+            channel,
+            midi_controllers::DATA_ENTRY_MSB,
+            (value >> 7) as u8,
+        )?;
+        self.controller_change(
+            ticks,
+            track,
+            channel,
+            midi_controllers::DATA_ENTRY_LSB,
+            (value & 0x7f) as u8,
         )
     }
 }
@@ -387,13 +505,13 @@ mod tests {
         assert_eq!(tempo_events[0].data, vec![0x07, 0xA1, 0x20]);
     }
 
-    // ── add_set_tempo ─────────────────────────────────────────────────────────
+    // ── set_tempo ─────────────────────────────────────────────────────────
 
     #[test]
-    fn test_add_set_tempo_120bpm() {
+    fn test_set_tempo_120bpm() {
         // 120 BPM → 500000 µs = 07 A1 20
         let mut b = MidiBuilder::default().unwrap();
-        b.add_set_tempo(480, 120.0).unwrap();
+        b.set_tempo(480, 120.0).unwrap();
         let ev = b.midi.tracks[0]
             .events
             .iter()
@@ -404,10 +522,10 @@ mod tests {
     }
 
     #[test]
-    fn test_add_set_tempo_60bpm() {
+    fn test_set_tempo_60bpm() {
         // 60 BPM → 1000000 µs = 0F 42 40
         let mut b = MidiBuilder::default().unwrap();
-        b.add_set_tempo(0, 60.0).unwrap();
+        b.set_tempo(0, 60.0).unwrap();
         let ev = b.midi.tracks[0]
             .events
             .iter()
@@ -417,35 +535,35 @@ mod tests {
         assert_eq!(ev.data, vec![0x0F, 0x42, 0x40]);
     }
 
-    // ── add_new_track ─────────────────────────────────────────────────────────
+    // ── add_track ─────────────────────────────────────────────────────────
 
     #[test]
-    fn test_add_new_track_format1() {
+    fn test_add_track_format1() {
         let mut b = MidiBuilder::new(MidiBuilderOptions {
             format: MidiFormat::MultiTrack,
             ..MidiBuilderOptions::default()
         })
         .unwrap();
-        b.add_new_track("Piano", 0).unwrap();
+        b.add_track("Piano", 0).unwrap();
         assert_eq!(b.midi.tracks.len(), 2);
         assert_eq!(b.midi.tracks[1].name, "Piano");
     }
 
     #[test]
-    fn test_add_new_track_format0_second_rejected() {
+    fn test_add_track_format0_second_rejected() {
         let mut b = MidiBuilder::default().unwrap(); // format 0
-        let result = b.add_new_track("Second", 0);
+        let result = b.add_track("Second", 0);
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_add_new_track_sets_port() {
+    fn test_add_track_sets_port() {
         let mut b = MidiBuilder::new(MidiBuilderOptions {
             format: MidiFormat::MultiTrack,
             ..MidiBuilderOptions::default()
         })
         .unwrap();
-        b.add_new_track("Port2", 2).unwrap();
+        b.add_track("Port2", 2).unwrap();
         assert_eq!(b.midi.tracks[1].port, 2);
         // MIDI_PORT event data should contain port 2
         let port_ev = b.midi.tracks[1]
@@ -497,12 +615,12 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // ── add_note_on ───────────────────────────────────────────────────────────
+    // ── note_on ───────────────────────────────────────────────────────────
 
     #[test]
-    fn test_add_note_on_status_byte() {
+    fn test_note_on_status_byte() {
         let mut b = MidiBuilder::default().unwrap();
-        b.add_note_on(0, 0, 3, 60, 100).unwrap();
+        b.note_on(0, 0, 3, 60, 100).unwrap();
         let ev = b.midi.tracks[0]
             .events
             .iter()
@@ -512,9 +630,9 @@ mod tests {
     }
 
     #[test]
-    fn test_add_note_on_channel_wrapped() {
+    fn test_note_on_channel_wrapped() {
         let mut b = MidiBuilder::default().unwrap();
-        b.add_note_on(0, 0, 17, 60, 100).unwrap(); // 17 % 16 = 1 → ch1
+        b.note_on(0, 0, 17, 60, 100).unwrap(); // 17 % 16 = 1 → ch1
         let ev = b.midi.tracks[0]
             .events
             .iter()
@@ -524,9 +642,9 @@ mod tests {
     }
 
     #[test]
-    fn test_add_note_on_velocity_wrapped() {
+    fn test_note_on_velocity_wrapped() {
         let mut b = MidiBuilder::default().unwrap();
-        b.add_note_on(0, 0, 0, 60, 200).unwrap(); // 200 % 128 = 72
+        b.note_on(0, 0, 0, 60, 200).unwrap(); // 200 % 128 = 72
         let ev = b.midi.tracks[0]
             .events
             .iter()
@@ -535,12 +653,12 @@ mod tests {
         assert_eq!(ev.data[1], 200 % 128);
     }
 
-    // ── add_note_off ──────────────────────────────────────────────────────────
+    // ── note_off ──────────────────────────────────────────────────────────
 
     #[test]
-    fn test_add_note_off_status_byte() {
+    fn test_note_off_status_byte() {
         let mut b = MidiBuilder::default().unwrap();
-        b.add_note_off(0, 0, 0, 60, 64).unwrap();
+        b.note_off(0, 0, 0, 60, 64).unwrap();
         let ev = b.midi.tracks[0]
             .events
             .iter()
@@ -549,12 +667,12 @@ mod tests {
         assert_eq!(ev.data, vec![60, 64]);
     }
 
-    // ── add_program_change ────────────────────────────────────────────────────
+    // ── program_change ────────────────────────────────────────────────────
 
     #[test]
-    fn test_add_program_change_status_byte() {
+    fn test_program_change_status_byte() {
         let mut b = MidiBuilder::default().unwrap();
-        b.add_program_change(0, 0, 2, 40).unwrap();
+        b.program_change(0, 0, 2, 40).unwrap();
         let ev = b.midi.tracks[0]
             .events
             .iter()
@@ -564,9 +682,9 @@ mod tests {
     }
 
     #[test]
-    fn test_add_program_change_program_wrapped() {
+    fn test_program_change_program_wrapped() {
         let mut b = MidiBuilder::default().unwrap();
-        b.add_program_change(0, 0, 0, 200).unwrap(); // 200 % 128 = 72
+        b.program_change(0, 0, 0, 200).unwrap(); // 200 % 128 = 72
         let ev = b.midi.tracks[0]
             .events
             .iter()
@@ -575,12 +693,12 @@ mod tests {
         assert_eq!(ev.data[0], 200 % 128);
     }
 
-    // ── add_controller_change ─────────────────────────────────────────────────
+    // ── controller_change ─────────────────────────────────────────────────
 
     #[test]
-    fn test_add_controller_change_status_byte() {
+    fn test_controller_change_status_byte() {
         let mut b = MidiBuilder::default().unwrap();
-        b.add_controller_change(0, 0, 5, 7, 100).unwrap(); // ch5, CC7, val=100
+        b.controller_change(0, 0, 5, 7, 100).unwrap(); // ch5, CC7, val=100
         let ev = b.midi.tracks[0]
             .events
             .iter()
@@ -589,13 +707,14 @@ mod tests {
         assert_eq!(ev.data, vec![7, 100]);
     }
 
-    // ── add_pitch_wheel ───────────────────────────────────────────────────────
+    // ── pitch_wheel ───────────────────────────────────────────────────────────
 
     #[test]
-    fn test_add_pitch_wheel_lsb_first() {
-        // lsb must come before msb in the data bytes
+    fn test_pitch_wheel_lsb_first() {
+        // lsb must come before msb in the data bytes.
+        // pitch = (10 << 7) | 20 -> msb=10, lsb=20
         let mut b = MidiBuilder::default().unwrap();
-        b.add_pitch_wheel(0, 0, 0, 10, 20).unwrap(); // msb=10, lsb=20
+        b.pitch_wheel(0, 0, 0, (10 << 7) | 20).unwrap();
         let ev = b.midi.tracks[0]
             .events
             .iter()
@@ -606,9 +725,9 @@ mod tests {
     }
 
     #[test]
-    fn test_add_pitch_wheel_status_byte() {
+    fn test_pitch_wheel_status_byte() {
         let mut b = MidiBuilder::default().unwrap();
-        b.add_pitch_wheel(0, 0, 4, 0, 0).unwrap(); // channel 4 → 0xE4
+        b.pitch_wheel(0, 0, 4, 0).unwrap(); // channel 4 → 0xE4
         let ev = b.midi.tracks[0]
             .events
             .iter()
@@ -630,9 +749,9 @@ mod tests {
             ..MidiBuilderOptions::default()
         })
         .unwrap();
-        b.add_new_track("Piano", 0).unwrap();
-        b.add_note_on(0, 1, 0, 60, 100).unwrap();
-        b.add_note_off(480, 1, 0, 60, 64).unwrap();
+        b.add_track("Piano", 0).unwrap();
+        b.note_on(0, 1, 0, 60, 100).unwrap();
+        b.note_off(480, 1, 0, 60, 64).unwrap();
 
         let bytes = write_midi_internal(&b.midi);
         // MThd magic
@@ -643,5 +762,59 @@ mod tests {
         assert_eq!(u16::from_be_bytes([bytes[10], bytes[11]]), 2);
         // time division 480
         assert_eq!(u16::from_be_bytes([bytes[12], bytes[13]]), 480);
+    }
+
+    // ── system_exclusive ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_system_exclusive_status_byte_and_data() {
+        let mut b = MidiBuilder::default().unwrap();
+        b.system_exclusive(0, 0, &[0x41, 0x10, 0x42, 0x12, 0x40, 0x00, 0x7f, 0x00, 0x41, 0xf7])
+            .unwrap();
+        let ev = b.midi.tracks[0]
+            .events
+            .iter()
+            .find(|e| e.status_byte == midi_message_types::SYSTEM_EXCLUSIVE)
+            .unwrap();
+        assert_eq!(ev.data[0], 0x41);
+        assert_eq!(*ev.data.last().unwrap(), 0xf7);
+    }
+
+    // ── registered_parameter ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_registered_parameter_emits_four_cc_events() {
+        let mut b = MidiBuilder::default().unwrap();
+        b.registered_parameter(0, 0, 0, 0, 2 << 7).unwrap(); // pitch wheel range = 2 semitones
+
+        let ccs: Vec<(u8, u8)> = b.midi.tracks[0]
+            .events
+            .iter()
+            .filter(|e| e.status_byte == midi_message_types::CONTROLLER_CHANGE)
+            .map(|e| (e.data[0], e.data[1]))
+            .collect();
+        assert!(ccs.contains(&(midi_controllers::REGISTERED_PARAMETER_MSB, 0)));
+        assert!(ccs.contains(&(midi_controllers::REGISTERED_PARAMETER_LSB, 0)));
+        assert!(ccs.contains(&(midi_controllers::DATA_ENTRY_MSB, 2)));
+        assert!(ccs.contains(&(midi_controllers::DATA_ENTRY_LSB, 0)));
+    }
+
+    // ── non_registered_parameter ──────────────────────────────────────────────
+
+    #[test]
+    fn test_non_registered_parameter_emits_four_cc_events() {
+        let mut b = MidiBuilder::default().unwrap();
+        b.non_registered_parameter(0, 0, 0, 0x1808, 64).unwrap(); // drum pitch, part 8
+
+        let ccs: Vec<(u8, u8)> = b.midi.tracks[0]
+            .events
+            .iter()
+            .filter(|e| e.status_byte == midi_message_types::CONTROLLER_CHANGE)
+            .map(|e| (e.data[0], e.data[1]))
+            .collect();
+        assert!(ccs.contains(&(midi_controllers::NON_REGISTERED_PARAMETER_MSB, (0x1808 >> 7) as u8)));
+        assert!(ccs.contains(&(midi_controllers::NON_REGISTERED_PARAMETER_LSB, (0x1808 & 0x7f) as u8)));
+        assert!(ccs.contains(&(midi_controllers::DATA_ENTRY_MSB, 0)));
+        assert!(ccs.contains(&(midi_controllers::DATA_ENTRY_LSB, 64)));
     }
 }

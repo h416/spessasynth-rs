@@ -64,6 +64,14 @@ pub const MIN_EXCLUSIVE_LENGTH: f64 = 0.07;
 /// Equivalent to: SYNTHESIZER_GAIN
 pub const SYNTHESIZER_GAIN: f64 = 1.0;
 
+/// Default (reset) value of the RPN MSB/LSB pair: 0x7f/0x7f (= "no RPN selected").
+/// Equivalent to: DEFAULT_RPN
+pub const DEFAULT_RPN: u8 = 0x7f;
+
+/// Default (reset) value of the NRPN MSB/LSB pair.
+/// Equivalent to: DEFAULT_NRPN
+pub const DEFAULT_NRPN: u8 = 0;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,6 +167,18 @@ mod tests {
     #[test]
     fn test_synthesizer_gain() {
         assert!((SYNTHESIZER_GAIN - 1.0).abs() < f64::EPSILON);
+    }
+
+    // --- DEFAULT_RPN / DEFAULT_NRPN ---
+
+    #[test]
+    fn test_default_rpn() {
+        assert_eq!(DEFAULT_RPN, 0x7f);
+    }
+
+    #[test]
+    fn test_default_nrpn() {
+        assert_eq!(DEFAULT_NRPN, 0);
     }
 
     // --- consistency checks ---

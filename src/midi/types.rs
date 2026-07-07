@@ -7,14 +7,12 @@
 /// Rust this is simply `&[u8]`, so no type alias is needed).
 ///
 /// TS 4.3.0 also *removed* `DesiredProgramChange`, `DesiredControllerChange`, and
-/// `DesiredChannelTranspose` from this file (folded into `midi_tools/modify_midi.ts`'s
-/// restructured `ModifyMIDIOptions`, which is not yet ported — Task 18). They are kept below
-/// (not removed) because `midi_tools/modify_midi.rs` (out of scope for this task) still uses
-/// them; removing them now would break that file. They should be removed/restructured together
-/// with the `modify_midi.rs` 4.3.0 port.
+/// `DesiredChannelTranspose` from this file — folded into `midi_tools/modify_midi.ts`'s
+/// restructured `ModifyMIDIOptions`. The Rust equivalents were deleted in Task 18 along with the
+/// `modify_midi.rs` 4.3.0 port (see `midi_tools::modify_midi::{ModifyMidiOptions,
+/// ChannelModification, ClearableParameter}`).
 use chrono::NaiveDateTime;
 
-use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RMIDInfoData
@@ -171,43 +169,6 @@ pub struct NoteTime {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DesiredProgramChange / DesiredControllerChange / DesiredChannelTranspose
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Desired program change for a MIDI channel.
-/// In TypeScript this extends `MIDIPatch`; in Rust it is represented by composition.
-/// Equivalent to: DesiredProgramChange (extends MIDIPatch)
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DesiredProgramChange {
-    /// Target channel number.
-    pub channel: u8,
-    /// Desired patch (program + bank).
-    pub patch: MidiPatch,
-}
-
-/// Desired controller change for a MIDI channel.
-/// Equivalent to: DesiredControllerChange
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DesiredControllerChange {
-    /// Target channel number.
-    pub channel: u8,
-    /// MIDI controller number.
-    pub controller_number: u8,
-    /// New controller value.
-    pub controller_value: u8,
-}
-
-/// Desired transpose change for a MIDI channel.
-/// Equivalent to: DesiredChannelTranspose
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DesiredChannelTranspose {
-    /// Target channel number.
-    pub channel: u8,
-    /// Number of semitones to transpose. The fractional part is used for fine-tuning in cents.
-    pub key_shift: f64,
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // RMIDIWriteOptions
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -337,7 +298,6 @@ pub struct TimelineEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 
     // ── RMIDInfoData ──────────────────────────────────────────────────────────
 
@@ -518,84 +478,6 @@ mod tests {
         };
         let b = a;
         assert_eq!(a.midi_note, b.midi_note);
-    }
-
-    // ── DesiredProgramChange ─────────────────────────────────────────────────
-
-    #[test]
-    fn test_desired_program_change_fields() {
-        let patch = MidiPatch {
-            program: 10,
-            bank_msb: 0,
-            bank_lsb: 0,
-            is_gm_gs_drum: false,
-        };
-        let dpc = DesiredProgramChange { channel: 3, patch };
-        assert_eq!(dpc.channel, 3);
-        assert_eq!(dpc.patch.program, 10);
-    }
-
-    #[test]
-    fn test_desired_program_change_drum() {
-        let patch = MidiPatch {
-            program: 0,
-            bank_msb: 0,
-            bank_lsb: 0,
-            is_gm_gs_drum: true,
-        };
-        let dpc = DesiredProgramChange { channel: 9, patch };
-        assert!(dpc.patch.is_gm_gs_drum);
-        assert_eq!(dpc.channel, 9);
-    }
-
-    // ── DesiredControllerChange ──────────────────────────────────────────────
-
-    #[test]
-    fn test_desired_controller_change_fields() {
-        let dcc = DesiredControllerChange {
-            channel: 0,
-            controller_number: 7, // MAIN_VOLUME
-            controller_value: 100,
-        };
-        assert_eq!(dcc.channel, 0);
-        assert_eq!(dcc.controller_number, 7);
-        assert_eq!(dcc.controller_value, 100);
-    }
-
-    #[test]
-    fn test_desired_controller_change_equality() {
-        let a = DesiredControllerChange {
-            channel: 1,
-            controller_number: 10,
-            controller_value: 64,
-        };
-        let b = DesiredControllerChange {
-            channel: 1,
-            controller_number: 10,
-            controller_value: 64,
-        };
-        assert_eq!(a, b);
-    }
-
-    // ── DesiredChannelTranspose ──────────────────────────────────────────────
-
-    #[test]
-    fn test_desired_channel_transpose_fields() {
-        let dct = DesiredChannelTranspose {
-            channel: 2,
-            key_shift: 2.5,
-        };
-        assert_eq!(dct.channel, 2);
-        assert_eq!(dct.key_shift, 2.5);
-    }
-
-    #[test]
-    fn test_desired_channel_transpose_negative_shift() {
-        let dct = DesiredChannelTranspose {
-            channel: 0,
-            key_shift: -1.0,
-        };
-        assert_eq!(dct.key_shift, -1.0);
     }
 
     // ── RMIDIWriteOptions ─────────────────────────────────────────────────────

@@ -6,11 +6,16 @@
 /// `read/midi.ts`'s `parseSMFInternal` now inlines an equivalent range-check + a private
 /// `DataBytesAmount` const instead of calling `getChannel`, and `midi_message.ts` no longer
 /// exports any of the three. This Rust file's `read/midi.rs` counterpart has been updated to
-/// match (see `parse_smf_internal`), but `get_channel`/`get_event`/`data_bytes_amount` are kept
-/// here (not removed) because `sequencer/set_time_to.rs` and `sequencer/process_event.rs` (out
-/// of scope for this task; the `sequencer` module has not been ported to 4.3.0 yet) still call
-/// `get_event`. They will be removed once the sequencer module is ported and no longer needs
-/// them.
+/// match (it defines its own private `data_bytes_amount` and does not call any of the three
+/// functions below).
+///
+/// Of the three, only `get_event` still has a real caller: `sequencer/set_time_to.rs` and
+/// `sequencer/process_event.rs` (out of scope for this task; the `sequencer` module has not been
+/// ported to 4.3.0 yet) call it. `get_channel` and `data_bytes_amount` (this file's copies, not
+/// `read/midi.rs`'s private one) currently have no callers anywhere in the crate; they are kept
+/// for now since removing unreferenced-but-harmless helpers is not this task's concern, but a
+/// future cleanup pass could drop them. All three will be revisited once the `sequencer` module
+/// is ported and `get_event` is no longer needed either.
 /// A single MIDI message.
 /// Equivalent to: class MIDIMessage
 #[derive(Clone)]

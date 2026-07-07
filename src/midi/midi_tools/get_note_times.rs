@@ -1,7 +1,13 @@
 /// get_note_times.rs
 /// purpose: Compute the absolute start time and duration (in seconds) for every
 ///          note in a BasicMidi, taking tempo changes into account.
-/// Ported from: src/midi/midi_tools/get_note_times.ts
+/// Ported from: src/midi/midi_tools/get_note_times.ts (spessasynth_core 4.3.0)
+///
+/// TS 4.3.0 dropped the function-local "flatten all track events and sort by tick" step in
+/// favor of iterating `midi.timeline` (a flattened, time-sorted `{tr, ev}` index list computed
+/// once by `BasicMIDI.flush()`, ported in Task 17). This Rust file follows suit: `event_index`
+/// walks `midi.timeline` and dereferences `midi.tracks[e.tr].events[e.ev]` instead of maintaining
+/// its own locally-sorted `Vec<&MidiMessage>`.
 use crate::midi::basic_midi::BasicMidi;
 use crate::midi::types::NoteTime;
 use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
@@ -56,11 +62,6 @@ fn note_off(
 pub fn get_note_times_internal(midi: &BasicMidi, min_drum_length: f64) -> Vec<Vec<NoteTime>> {
     let mut note_times: Vec<Vec<NoteTime>> = vec![Vec::new(); 16];
 
-    // Flatten all track events and sort by tick (stable, matches TypeScript Array.sort).
-    let mut events: Vec<&crate::midi::midi_message::MidiMessage> =
-        midi.tracks.iter().flat_map(|t| t.events.iter()).collect();
-    events.sort_by_key(|e| e.ticks);
-
     let mut elapsed_time = 0.0f64;
     // Default: 120 BPM
     let mut one_tick_to_seconds = 60.0 / (120.0 * midi.time_division as f64);
@@ -69,11 +70,12 @@ pub fn get_note_times_internal(midi: &BasicMidi, min_drum_length: f64) -> Vec<Ve
     // unfinished_notes[channel] = list of (midi_note, index_into_note_times[channel])
     let mut unfinished_notes: Vec<Vec<(u8, usize)>> = vec![Vec::new(); 16];
 
-    let n_events = events.len();
+    let n_events = midi.timeline.len();
     let mut event_index = 0usize;
 
     while event_index < n_events {
-        let event = events[event_index];
+        let te = midi.timeline[event_index];
+        let event = &midi.tracks[te.tr].events[te.ev];
         let status_nibble = event.status_byte >> 4;
         let channel = (event.status_byte & 0x0F) as usize;
 
@@ -133,14 +135,17 @@ pub fn get_note_times_internal(midi: &BasicMidi, min_drum_length: f64) -> Vec<Ve
             one_tick_to_seconds = 60.0 / (tempo_bpm * midi.time_division as f64);
         }
 
+        let prev_ticks = event.ticks;
+
         event_index += 1;
         if event_index >= n_events {
             break;
         }
 
         // Advance elapsed time by the tick difference to the next event.
-        elapsed_time += one_tick_to_seconds
-            * (events[event_index].ticks as f64 - events[event_index - 1].ticks as f64);
+        let next_te = midi.timeline[event_index];
+        let next_ticks = midi.tracks[next_te.tr].events[next_te.ev].ticks;
+        elapsed_time += one_tick_to_seconds * (next_ticks as f64 - prev_ticks as f64);
     }
 
     // Close any notes that never received a note-off.
@@ -196,6 +201,7 @@ mod tests {
         push(&mut t, 480, 0x80, vec![60, 0]);
         m.tracks.push(t);
 
+        m.flush(true);
         let result = get_note_times_internal(&m, 0.0);
         assert_eq!(result[0].len(), 1);
         let note = &result[0][0];
@@ -212,6 +218,7 @@ mod tests {
         push(&mut t, 480, 0x80, vec![64, 0]);
         m.tracks.push(t);
 
+        m.flush(true);
         let result = get_note_times_internal(&m, 0.0);
         assert_eq!(result[0][0].velocity, 80);
     }
@@ -224,6 +231,7 @@ mod tests {
         push(&mut t, 480, 0x90, vec![60, 0]); // vel=0 → note-off
         m.tracks.push(t);
 
+        m.flush(true);
         let result = get_note_times_internal(&m, 0.0);
         assert_eq!(result[0].len(), 1);
         assert!((result[0][0].length - 0.5).abs() < 1e-6);
@@ -245,6 +253,7 @@ mod tests {
         push(&mut t, 960, 0x80, vec![60, 0]);
         m.tracks.push(t);
 
+        m.flush(true);
         let result = get_note_times_internal(&m, 0.0);
         assert_eq!(result[0].len(), 1);
         // 480 ticks @ 120 BPM → 0.5 s, then 480 ticks @ 240 BPM → 0.25 s
@@ -259,6 +268,7 @@ mod tests {
         push(&mut t, 480, 0x80, vec![60, 0]);
         m.tracks.push(t);
 
+        m.flush(true);
         let result = get_note_times_internal(&m, 0.0);
         assert!((result[0][0].length - 0.5).abs() < 1e-6);
     }
@@ -274,6 +284,7 @@ mod tests {
         push(&mut t, 0, 0x89, vec![38, 0]); // note-off ch9, same tick
         m.tracks.push(t);
 
+        m.flush(true);
         let result = get_note_times_internal(&m, 0.1);
         assert_eq!(result[9].len(), 1);
         assert!(
@@ -291,6 +302,7 @@ mod tests {
         push(&mut t, 0, 0x80, vec![60, 0]); // note-off same tick
         m.tracks.push(t);
 
+        m.flush(true);
         let result = get_note_times_internal(&m, 0.1);
         assert_eq!(result[0].len(), 1);
         assert!((result[0][0].length - 0.0).abs() < 1e-9);
@@ -308,6 +320,7 @@ mod tests {
         push(&mut t, 0, 0x90, vec![60, 100]); // note-on, no note-off
         m.tracks.push(t);
 
+        m.flush(true);
         let result = get_note_times_internal(&m, 0.0);
         assert_eq!(result[0].len(), 1);
         assert_eq!(result[0][0].start, 0.0);
@@ -326,6 +339,7 @@ mod tests {
         push(&mut t, 480, 0x81, vec![64, 0]); // ch1 note-off
         m.tracks.push(t);
 
+        m.flush(true);
         let result = get_note_times_internal(&m, 0.0);
         assert_eq!(result[0].len(), 1);
         assert_eq!(result[1].len(), 1);
@@ -353,6 +367,7 @@ mod tests {
         push(&mut t1, 480, 0x81, vec![64, 0]);
         m.tracks.push(t1);
 
+        m.flush(true);
         let result = get_note_times_internal(&m, 0.0);
         assert_eq!(result[0].len(), 1);
         assert_eq!(result[1].len(), 1);
@@ -369,6 +384,7 @@ mod tests {
         push(&mut t, 480, 0x80, vec![60, 0]); // note-off for second
         m.tracks.push(t);
 
+        m.flush(true);
         let result = get_note_times_internal(&m, 0.0);
         // Two NoteTime entries for ch0
         assert_eq!(result[0].len(), 2);
@@ -385,7 +401,8 @@ mod tests {
 
     #[test]
     fn test_empty_midi_returns_16_empty_channels() {
-        let m = BasicMidi::new();
+        let mut m = BasicMidi::new();
+        m.flush(true);
         let result = get_note_times_internal(&m, 0.0);
         assert_eq!(result.len(), 16);
         for ch in &result {
@@ -408,6 +425,7 @@ mod tests {
         push(&mut t, 1440, 0x81, vec![64, 0]); // note-B off ch1 at 1.5 s
         m.tracks.push(t);
 
+        m.flush(true);
         let result = get_note_times_internal(&m, 0.0);
         assert_eq!(result[0].len(), 1);
         assert_eq!(result[1].len(), 1);

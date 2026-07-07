@@ -4,7 +4,8 @@
 /// Ported from: src/midi/midi_tools/midi_utils.ts (spessasynth_core 4.3.0)
 ///
 /// TS 4.3.0 introduced this file, which absorbed and replaced two 4.2.0 files:
-/// - `src/midi/midi_tools/get_gs_on.ts` (the `getGsOn` free function, now `MidiUtils::gs_reset`)
+/// - `src/midi/midi_tools/get_gs_on.ts` (the `getGsOn` free function, now `MidiUtils::gs_reset`;
+///   the temporary Rust `get_gs_on` compatibility wrapper was removed in Task 18)
 /// - `src/utils/sysex_detector.ts` (the `isXGOn`/`isGSOn`/`isGMOn`/`isGM2On`/`isGSDrumsOn`/
 ///   `syxToChannel` free functions, now unified into `MidiUtils::analyze_sysex` which returns a
 ///   single `AnalyzedMIDIMessage` classification instead of several independent booleans, plus
@@ -15,15 +16,18 @@
 ///   uses this to replace such SysEx events with regular CC/PC events during RMIDI bank
 ///   correction; this is the "wider MIDI/SysEx support" mentioned in the 4.3.0 release notes).
 ///
-/// Scope note: only the subset of `MIDIUtils` actually consumed by this task's file
-/// (`write/rmidi.rs`, per the Task 17 hand-off notes) is ported here: `analyze_sysex` (plus its
-/// private `analyze_gm`/`analyze_gs`/`analyze_xg` helpers), `syx_to_channel`, `channel_to_syx`,
-/// `gs_data`, `gs_message`, `gs_drum_change`, and `gs_reset`. `MIDIUtils.analyzeRPN` and
-/// `analyzeNRPN` (channel-parameter-tracker helpers used by `parameter_tracker.ts` /
-/// `modify_midi.ts`, both not yet ported) are intentionally NOT ported here; that belongs to
-/// Task 18 (midi_tools) alongside `modify_midi.rs` / `used_programs_and_keys.rs`, which still
-/// depend on the pre-4.3.0 `utils/sysex_detector.rs` free functions kept there for compatibility.
-use crate::midi::enums::{midi_controllers, midi_message_types};
+/// Task 17 ported only the subset of `MIDIUtils` consumed by `write/rmidi.rs`: `analyze_sysex`
+/// (plus its private `analyze_gm`/`analyze_gs`/`analyze_xg` helpers), `syx_to_channel`,
+/// `channel_to_syx`, `gs_data`, `gs_message`, `gs_drum_change`, and `gs_reset`.
+///
+/// Task 18 adds `analyze_rpn`/`analyze_nrpn` (channel-parameter-tracker helpers used by
+/// `parameter_tracker.rs` / `modify_midi.rs` / `used_programs_and_keys.rs`), completing the
+/// `MIDIUtils` port and letting those three files drop their dependency on the pre-4.3.0
+/// `utils/sysex_detector.rs` free functions (now deleted).
+use crate::midi::enums::{
+    midi_controllers, midi_message_types, non_registered_lsb, non_registered_msb,
+    registered_parameter_types,
+};
 use crate::midi::midi_message::MidiMessage;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -89,6 +93,76 @@ impl MidiUtils {
             0x41 => Self::analyze_gs(syx),
             // Yamaha
             0x43 => Self::analyze_xg(syx),
+            _ => AnalyzedMidiMessage::Other,
+        }
+    }
+
+    /// Analyzes a MIDI Registered Parameter Number and returns an identification and data for it.
+    /// * `channel` - the MIDI channel number.
+    /// * `rpn` - the 14-bit RPN number.
+    /// * `value` - the 14-bit value for that number.
+    ///
+    /// Equivalent to: MIDIUtils.analyzeRPN(channel, rpn, value)
+    pub fn analyze_rpn(channel: u8, rpn: u16, value: u16) -> AnalyzedMidiMessage {
+        match rpn {
+            registered_parameter_types::FINE_TUNING => AnalyzedMidiMessage::FineTune {
+                channel,
+                value: (value as f64 - 8192.0) / 81.92,
+            },
+            registered_parameter_types::COARSE_TUNING => AnalyzedMidiMessage::KeyShift {
+                channel,
+                value: (value >> 7) as i32 - 64,
+            },
+            _ => AnalyzedMidiMessage::Other,
+        }
+    }
+
+    /// Analyzes a MIDI Non-Registered Parameter Number and returns an identification and data
+    /// for it.
+    /// * `channel` - the MIDI channel number.
+    /// * `nrpn` - the 14-bit NRPN number.
+    /// * `value` - the 14-bit value for that number.
+    ///
+    /// Equivalent to: MIDIUtils.analyzeNRPN(channel, nrpn, value)
+    pub fn analyze_nrpn(channel: u8, nrpn: u16, value: u16) -> AnalyzedMidiMessage {
+        let msb = (nrpn >> 7) as u8;
+        let lsb = (nrpn & 0x7f) as u8;
+        match msb {
+            non_registered_msb::PART_PARAMETER => match lsb {
+                non_registered_lsb::TVF_CUTOFF_FREQUENCY => AnalyzedMidiMessage::ControllerChange {
+                    channel,
+                    controller: midi_controllers::BRIGHTNESS,
+                    value: (value >> 7) as u8,
+                },
+                non_registered_lsb::TVF_RESONANCE => AnalyzedMidiMessage::ControllerChange {
+                    channel,
+                    controller: midi_controllers::FILTER_RESONANCE,
+                    value: (value >> 7) as u8,
+                },
+                non_registered_lsb::ENVELOPE_ATTACK_TIME => AnalyzedMidiMessage::ControllerChange {
+                    channel,
+                    controller: midi_controllers::ATTACK_TIME,
+                    value: (value >> 7) as u8,
+                },
+                non_registered_lsb::ENVELOPE_DECAY_TIME => AnalyzedMidiMessage::ControllerChange {
+                    channel,
+                    controller: midi_controllers::DECAY_TIME,
+                    value: (value >> 7) as u8,
+                },
+                non_registered_lsb::ENVELOPE_RELEASE_TIME => AnalyzedMidiMessage::ControllerChange {
+                    channel,
+                    controller: midi_controllers::RELEASE_TIME,
+                    value: (value >> 7) as u8,
+                },
+                _ => AnalyzedMidiMessage::Other,
+            },
+            non_registered_msb::DRUM_PITCH
+            | non_registered_msb::DRUM_PITCH_FINE
+            | non_registered_msb::DRUM_LEVEL
+            | non_registered_msb::DRUM_PAN
+            | non_registered_msb::DRUM_REVERB
+            | non_registered_msb::DRUM_CHORUS
+            | non_registered_msb::DRUM_DELAY => AnalyzedMidiMessage::DrumSetup,
             _ => AnalyzedMidiMessage::Other,
         }
     }
@@ -611,36 +685,11 @@ impl MidiUtils {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// get_gs_on (deprecated backward-compatible alias)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Generates and returns a Roland GS ON SysEx message.
-///
-/// GS ON is a SysEx message that enables Roland GS mode.
-///
-/// Deprecated: this free function was `src/midi/midi_tools/get_gs_on.ts`'s `getGsOn`, merged
-/// into `midi_utils.ts` as `MIDIUtils.gsReset` in TS 4.3.0. It is kept here (delegating to
-/// `MidiUtils::gs_reset`) because `midi_tools/modify_midi.rs` (out of scope for this task) still
-/// calls it; new code should call `MidiUtils::gs_reset` directly.
-pub fn get_gs_on(ticks: u32) -> MidiMessage {
-    MidiUtils::gs_reset(ticks)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // ── get_gs_on / gs_reset ────────────────────────────────────────────────
-
-    #[test]
-    fn test_get_gs_on_matches_gs_reset() {
-        let a = get_gs_on(0);
-        let b = MidiUtils::gs_reset(0);
-        assert_eq!(a.ticks, b.ticks);
-        assert_eq!(a.status_byte, b.status_byte);
-        assert_eq!(a.data, b.data);
-    }
+    // ── gs_reset ────────────────────────────────────────────────────────────
 
     #[test]
     fn test_gs_reset_full_sysex_payload() {
@@ -938,5 +987,73 @@ mod tests {
     fn test_analyze_xg_wrong_id() {
         let syx = [0x43, 0x10, 0x00, 0x00, 0x00, 0x7e, 0x00];
         assert_eq!(MidiUtils::analyze_sysex(&syx), AnalyzedMidiMessage::Other);
+    }
+
+    // ── analyze_rpn ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_analyze_rpn_fine_tuning() {
+        // value=8192 (center) -> 0 cents
+        assert_eq!(
+            MidiUtils::analyze_rpn(2, registered_parameter_types::FINE_TUNING, 8192),
+            AnalyzedMidiMessage::FineTune { channel: 2, value: 0.0 }
+        );
+    }
+
+    #[test]
+    fn test_analyze_rpn_coarse_tuning() {
+        // value = 65 << 7 -> (65)-64 = 1 semitone
+        assert_eq!(
+            MidiUtils::analyze_rpn(3, registered_parameter_types::COARSE_TUNING, 65 << 7),
+            AnalyzedMidiMessage::KeyShift { channel: 3, value: 1 }
+        );
+    }
+
+    #[test]
+    fn test_analyze_rpn_unknown_returns_other() {
+        assert_eq!(
+            MidiUtils::analyze_rpn(0, registered_parameter_types::MODULATION_DEPTH, 0),
+            AnalyzedMidiMessage::Other
+        );
+    }
+
+    // ── analyze_nrpn ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_analyze_nrpn_vibrato_rate_is_drum_setup() {
+        // msb=PART_PARAMETER(1), lsb=vibratoRate(0x08) -> not a "part parameter" case ported below
+        // (only tvfCutoff/tvfResonance/attack/decay/release are ported; vibrato falls to Other)
+        let nrpn = ((non_registered_msb::PART_PARAMETER as u16) << 7)
+            | non_registered_lsb::VIBRATO_RATE as u16;
+        assert_eq!(MidiUtils::analyze_nrpn(0, nrpn, 0), AnalyzedMidiMessage::Other);
+    }
+
+    #[test]
+    fn test_analyze_nrpn_tvf_cutoff_frequency() {
+        let nrpn = ((non_registered_msb::PART_PARAMETER as u16) << 7)
+            | non_registered_lsb::TVF_CUTOFF_FREQUENCY as u16;
+        assert_eq!(
+            MidiUtils::analyze_nrpn(5, nrpn, 100 << 7),
+            AnalyzedMidiMessage::ControllerChange {
+                channel: 5,
+                controller: midi_controllers::BRIGHTNESS,
+                value: 100
+            }
+        );
+    }
+
+    #[test]
+    fn test_analyze_nrpn_drum_pitch_is_drum_setup() {
+        let nrpn = (non_registered_msb::DRUM_PITCH as u16) << 7;
+        assert_eq!(
+            MidiUtils::analyze_nrpn(9, nrpn, 0),
+            AnalyzedMidiMessage::DrumSetup
+        );
+    }
+
+    #[test]
+    fn test_analyze_nrpn_unknown_msb_returns_other() {
+        let nrpn = (0x7fu16) << 7; // awe32, not a tracked NRPN msb here
+        assert_eq!(MidiUtils::analyze_nrpn(0, nrpn, 0), AnalyzedMidiMessage::Other);
     }
 }

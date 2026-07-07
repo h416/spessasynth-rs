@@ -7,8 +7,11 @@
 /// - `BasicMIDI::get_used_programs_and_keys` accepts `&dyn PresetResolver`
 ///   instead of `&BasicSoundBank`, so `basic_midi.rs` no longer depends on
 ///   `basic_soundbank.rs`.
-/// - `BasicSoundBank::trim_sound_bank` is moved to `used_keys_loaded.rs` as a
-///   free function, so `basic_soundbank.rs` no longer depends on `basic_midi.rs`.
+/// - `BasicSoundBank::trim` (TS 4.3.0's rework of `trimSoundBank`) takes an
+///   already-computed `PresetsWithKeyCombinations` instead of a `&BasicMIDI`, so
+///   `basic_soundbank.rs` still doesn't need to depend on `basic_midi.rs`; the free function
+///   `get_used_programs_and_keys` (in `midi_tools::used_programs_and_keys`) is the one that
+///   depends on this trait to stay decoupled from `basic_soundbank.rs`.
 ///
 /// Implementors:
 /// - `BasicSoundBank`    (implemented when `basic_soundbank.rs` is ported)
