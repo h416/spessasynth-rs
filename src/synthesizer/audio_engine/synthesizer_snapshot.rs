@@ -159,13 +159,15 @@ pub fn apply_snapshot(core: &mut SynthesizerCore, snapshot: &SynthesizerSnapshot
     // TS 4.3.0 iterates `Object.entries(this.midiParameters)` — the LIVE values, not the
     // snapshot — so this re-sets every MIDI parameter to its current value (firing
     // globalParamChange events and updating the legacy plumbing) without restoring anything
-    // from the snapshot. Ported bug-for-bug.
+    // from the snapshot. Ported bug-for-bug, including the iteration order: `Object.entries`
+    // follows the key insertion order of `DEFAULT_GLOBAL_MIDI_PARAMETERS`
+    // (gain, pan, keyShift, fineTune, system).
     let mp = core.midi_parameters;
-    core.set_midi_parameter(GlobalMIDIParameterChangeCallback::System(mp.system));
-    core.set_midi_parameter(GlobalMIDIParameterChangeCallback::KeyShift(mp.key_shift));
-    core.set_midi_parameter(GlobalMIDIParameterChangeCallback::FineTune(mp.fine_tune));
     core.set_midi_parameter(GlobalMIDIParameterChangeCallback::Gain(mp.gain));
     core.set_midi_parameter(GlobalMIDIParameterChangeCallback::Pan(mp.pan));
+    core.set_midi_parameter(GlobalMIDIParameterChangeCallback::KeyShift(mp.key_shift));
+    core.set_midi_parameter(GlobalMIDIParameterChangeCallback::FineTune(mp.fine_tune));
+    core.set_midi_parameter(GlobalMIDIParameterChangeCallback::System(mp.system));
 
     // Restore system parameters last
     // TS 4.3.0 likewise iterates `Object.entries(this.systemParameters)` (the LIVE values);
