@@ -154,7 +154,7 @@ impl SpessaSynthSequencer {
     /// Creates a new sequencer without any songs loaded.
     /// Equivalent to: constructor(spessasynthProcessor)
     pub fn new(synth: SpessaSynthProcessor) -> Self {
-        let absolute_start_time = synth.current_synth_time();
+        let absolute_start_time = synth.current_time();
         let mut playing_notes = Vec::with_capacity(16);
         for _ in 0..16 {
             playing_notes.push(Vec::new());
@@ -252,7 +252,7 @@ impl SpessaSynthSequencer {
         if let Some(paused) = self.paused_time {
             return paused;
         }
-        (self.synth.current_synth_time() - self.absolute_start_time) * self.playback_rate
+        (self.synth.current_time() - self.absolute_start_time) * self.playback_rate
     }
 
     /// Sets the current playback time.
@@ -415,7 +415,7 @@ impl SpessaSynthSequencer {
     /// Equivalent to: sendMIDIReset() (internal-synth branch only; see module doc comment)
     pub(crate) fn send_midi_reset(&mut self) {
         self.send_midi_all_off();
-        self.synth.reset_all_controllers(DEFAULT_SYNTH_MODE);
+        self.synth.reset();
     }
 
     /// Loads the current song from the song list.
@@ -464,7 +464,7 @@ impl SpessaSynthSequencer {
     /// Recalculates the absolute start time.
     /// Equivalent to: recalculateStartTime(time)
     pub(crate) fn recalculate_start_time(&mut self, time: f64) {
-        self.absolute_start_time = self.synth.current_synth_time() - time / self.playback_rate;
+        self.absolute_start_time = self.synth.current_time() - time / self.playback_rate;
     }
 
     /// Jumps to a MIDI tick without processing controllers (soft-loop).
@@ -751,7 +751,7 @@ mod tests {
     fn test_recalculate_start_time_at_zero() {
         let mut seq = make_sequencer();
         seq.recalculate_start_time(0.0);
-        let synth_time = seq.synth.current_synth_time();
+        let synth_time = seq.synth.current_time();
         assert!((seq.absolute_start_time - synth_time).abs() < 1e-9);
     }
 

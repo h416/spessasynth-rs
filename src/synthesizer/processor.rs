@@ -1,6 +1,6 @@
 /// processor.rs
 /// purpose: SpessaSynthProcessor - the main public API wrapping SynthesizerCore.
-/// Ported from: src/synthesizer/processor.ts
+/// Ported from: src/synthesizer/processor.ts (spessasynth_core 4.3.0)
 ///
 /// # Design note
 /// TypeScript's SpessaSynthProcessor wraps SynthesizerCore and adds:
@@ -14,18 +14,42 @@
 /// wrapper methods and MIDI message dispatch (process_message), since those
 /// belong to synthesizer_core.ts but require access to the synthesizer state
 /// that is most naturally expressed as SynthesizerCore methods.
+///
+/// # Changes from 4.2.0 (reviewed against the 4.3.0 diff)
+/// - `currentSynthTime` → `currentTime` (pure rename; same `synthCore.currentTime`).
+/// - `totalVoicesAmount` → `voiceCount`.
+/// - `resetAllControllers(system = DEFAULT_SYNTH_MODE)` → `reset()` (no argument; the core's
+///   `reset(system)` keeps the parameter).
+/// - `clearEmbeddedBank` → `clearEmbeddedSoundBank`.
+/// - `applySynthesizerSnapshot` → `applySnapshot` (now via the free-standing
+///   `applySnapshot`/`getSynthesizerSnapshot` core functions; no post-apply "Finished
+///   applying snapshot!" log).
+/// - `setMasterParameter`/`getMasterParameter`/`getAllMasterParameters` →
+///   `setSystemParameter` + read-only `midiParameters`/`systemParameters` getters
+///   (replacing the `enableEffects`/`enableEventSystem` get/set pairs).
+/// - `getInsertionSnapshot` public wrapper removed (became protected on the core).
+/// - `processMessage` lost its `force` parameter.
+/// - `killVoices` (deprecated no-op) removed upstream; never existed in Rust.
+/// - The constructor creates 16 channels via a literal (MIDI_CHANNEL_COUNT was removed).
 use crate::midi::enums::midi_message_types;
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::soundbank::sound_bank_loader::load_sound_bank;
-use crate::synthesizer::audio_engine::synth_constants::{
-    DEFAULT_SYNTH_MODE, MIDI_CHANNEL_COUNT, embedded_sound_bank_id,
+use crate::synthesizer::audio_engine::parameters::midi::GlobalMIDIParameter;
+use crate::synthesizer::audio_engine::parameters::system::{
+    GlobalSystemParameter, GlobalSystemParameterChange,
 };
-use crate::synthesizer::audio_engine::synthesizer_snapshot::SynthesizerSnapshot;
+use crate::synthesizer::audio_engine::synth_constants::{
+    DEFAULT_SYNTH_MODE, embedded_sound_bank_id,
+};
+use crate::synthesizer::audio_engine::synthesizer_snapshot::{
+    apply_snapshot, get_synthesizer_snapshot, SynthesizerSnapshot,
+};
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
-use crate::synthesizer::types::{CachedVoiceList, MasterParameterChangeCallback, MasterParameterType, SynthMethodOptions, SynthProcessorEvent, SynthProcessorOptions};
-use crate::soundbank::types::MIDISystem;
-use crate::utils::loggin::spessa_synth_info;
+use crate::synthesizer::types::{
+    CachedVoiceList, SynthMethodOptions, SynthProcessorEvent, SynthProcessorOptions,
+};
+use crate::utils::loggin::SpessaLog;
 
 // ---------------------------------------------------------------------------
 // Additional SynthesizerCore methods — channel-level wrappers
@@ -36,7 +60,7 @@ impl SynthesizerCore {
     /// Equivalent to: midiChannels[channel].noteOff(midiNote) (SpessaSynthProcessor context)
     pub fn note_off_channel(&mut self, channel: usize, midi_note: u8) {
         let current_time = self.current_time;
-        let black_midi_mode = self.master_parameters.black_midi_mode;
+        let black_midi_mode = self.system_parameters.black_midi_mode;
         let voices = &mut self.voices;
         let events =
             self.midi_channels[channel].note_off(midi_note, voices, current_time, black_midi_mode);
@@ -49,8 +73,8 @@ impl SynthesizerCore {
     /// Equivalent to: midiChannels[channel].controllerChange(controller, value)
     pub fn controller_change_channel(&mut self, channel: usize, controller: u8, value: u8) {
         let current_time = self.current_time;
-        let current_system = self.master_parameters.midi_system;
-        let enable_event_system = self.enable_event_system;
+        let current_system = self.midi_parameters.system;
+        let events_enabled = self.system_parameters.events_enabled;
         let voices = &mut self.voices;
         let events = self.midi_channels[channel].controller_change(
             controller,
@@ -58,7 +82,7 @@ impl SynthesizerCore {
             voices,
             current_time,
             current_system,
-            enable_event_system,
+            events_enabled,
         );
         for ev in events {
             self.call_event(ev);
@@ -68,13 +92,13 @@ impl SynthesizerCore {
     /// Sends a program change to a channel, dispatching events.
     /// Equivalent to: midiChannels[channel].programChange(program)
     pub fn program_change_channel(&mut self, channel: usize, program: u8) {
-        let current_system = self.master_parameters.midi_system;
-        let enable_event_system = self.enable_event_system;
+        let current_system = self.midi_parameters.system;
+        let events_enabled = self.system_parameters.events_enabled;
         let events = self.midi_channels[channel].program_change(
             program,
             &self.sound_bank_manager,
             current_system,
-            enable_event_system,
+            events_enabled,
         );
         for ev in events {
             self.call_event(ev);
@@ -84,17 +108,19 @@ impl SynthesizerCore {
     /// Sends a pitch wheel message to a channel, dispatching events.
     /// Equivalent to: midiChannels[channel].pitchWheel(pitch, midiNote)
     pub fn pitch_wheel_channel(&mut self, channel: usize, pitch: i16, midi_note: i32) {
-        let enable_event_system = self.enable_event_system;
+        let events_enabled = self.system_parameters.events_enabled;
         let voices = &mut self.voices;
         let events =
-            self.midi_channels[channel].pitch_wheel(voices, pitch, midi_note, enable_event_system);
+            self.midi_channels[channel].pitch_wheel(voices, pitch, midi_note, events_enabled);
         for ev in events {
             self.call_event(ev);
         }
     }
 
     /// Sends a channel pressure message to a channel, dispatching events.
-    /// Equivalent to: midiChannels[channel].channelPressure(pressure)
+    /// Equivalent to: midiChannels[channel].setMIDIParameter("pressure", pressure)
+    /// (TODO(Task 21): the channel-side setMIDIParameter does not exist yet; the legacy
+    /// channelPressure channel method is used.)
     pub fn channel_pressure_channel(&mut self, channel: usize, pressure: u8) {
         let voices = &mut self.voices;
         let events = self.midi_channels[channel].channel_pressure(voices, pressure);
@@ -117,14 +143,12 @@ impl SynthesizerCore {
     /// Dispatches to the appropriate handler based on the manufacturer byte.
     /// Equivalent to: systemExclusiveInternal(syx, channelOffset)
     pub fn system_exclusive(&mut self, syx: &[u8], channel_offset: usize) {
-        use crate::synthesizer::audio_engine::synth_constants::ALL_CHANNELS_OR_DIFFERENT_ACTION;
-        use crate::utils::loggin::spessa_synth_info;
         use crate::utils::other::array_to_hex_string;
 
-        // Ensure that the device ID matches
-        if self.master_parameters.device_id != ALL_CHANNELS_OR_DIFFERENT_ACTION
+        // Ensure that the device ID matches (-1 accepts all)
+        if self.system_parameters.device_id != -1
             && syx[1] != 0x7f // 0x7f means broadcast
-            && self.master_parameters.device_id != syx[1] as i32
+            && self.system_parameters.device_id != syx[1] as i32
         {
             return;
         }
@@ -144,7 +168,7 @@ impl SynthesizerCore {
                 self.handle_xg(syx, channel_offset);
             }
             _ => {
-                spessa_synth_info(&format!(
+                SpessaLog::info(&format!(
                     "Unrecognized SysEx: {} (unknown manufacturer)",
                     array_to_hex_string(syx)
                 ));
@@ -155,29 +179,30 @@ impl SynthesizerCore {
     /// Processes a raw MIDI message.
     /// If options.time > current_time, the dispatch is scheduled for later;
     /// otherwise it executes immediately.
-    /// Equivalent to: processMessage(message, channelOffset, force, options) in synthesizer_core.ts
+    /// Equivalent to: processMessage(message, channelOffset, options) in synthesizer_core.ts
+    /// (the 4.2.0 `force` parameter was removed in TS 4.3.0)
     pub fn process_message(
         &mut self,
         message: &[u8],
         channel_offset: usize,
-        force: bool,
         options: SynthMethodOptions,
     ) {
         let time = options.time;
         if time > self.current_time {
             let msg = message.to_vec();
             self.schedule_event(
-                move |core| core.dispatch_message_internal(&msg, channel_offset, force),
+                move |core| core.dispatch_message_internal(&msg, channel_offset),
                 time,
             );
         } else {
             let msg = message.to_vec();
-            self.dispatch_message_internal(&msg, channel_offset, force);
+            self.dispatch_message_internal(&msg, channel_offset);
         }
     }
 
     /// Dispatches the actual MIDI event bytes.
-    fn dispatch_message_internal(&mut self, message: &[u8], channel_offset: usize, force: bool) {
+    /// Equivalent to: processMessageInternal(message, channelOffset) (private)
+    fn dispatch_message_internal(&mut self, message: &[u8], channel_offset: usize) {
         if message.is_empty() {
             return;
         }
@@ -206,18 +231,7 @@ impl SynthesizerCore {
                     if message.len() < 2 {
                         return;
                     }
-                    if force {
-                        let current_time = self.current_time;
-                        let voices = &mut self.voices;
-                        self.midi_channels[channel].kill_note(
-                            message[1],
-                            -12000,
-                            voices,
-                            current_time,
-                        );
-                    } else {
-                        self.note_off_channel(channel, message[1]);
-                    }
+                    self.note_off_channel(channel, message[1]);
                 }
                 midi_message_types::PITCH_WHEEL => {
                     if message.len() < 3 {
@@ -262,8 +276,9 @@ impl SynthesizerCore {
                     self.system_exclusive(message.get(1..).unwrap_or(&[]), channel_offset);
                 }
                 midi_message_types::RESET => {
+                    // Do not **force** stop channels (breaks seamless loops, for example th06)
                     self.stop_all_channels(false);
-                    self.reset_all_controllers(DEFAULT_SYNTH_MODE);
+                    self.reset(DEFAULT_SYNTH_MODE);
                 }
                 _ => {}
             }
@@ -271,7 +286,7 @@ impl SynthesizerCore {
     }
 
     /// Renders per-channel audio.
-    /// Stub: renderAudioSplit from synthesizer_core.ts is not yet ported.
+    /// Stub: processSplit from synthesizer_core.ts is not yet ported.
     pub fn render_audio_split(
         &mut self,
         _reverb: &mut [Vec<f32>],
@@ -280,7 +295,7 @@ impl SynthesizerCore {
         _start_index: usize,
         _sample_count: usize,
     ) {
-        // TODO: Port from synthesizer_core.ts renderAudioSplit
+        // TODO: Port from synthesizer_core.ts processSplit
     }
 }
 
@@ -313,10 +328,11 @@ impl SpessaSynthProcessor {
         options: SynthProcessorOptions,
     ) -> Self {
         let mut core = SynthesizerCore::new(event_callback, sample_rate, options);
-        for _ in 0..MIDI_CHANNEL_COUNT {
+        for _ in 0..16 {
+            // Don't send events as we're creating the initial channels
             core.create_midi_channel(false);
         }
-        spessa_synth_info("SpessaSynth is ready!");
+        SpessaLog::info("SpessaSynth is ready!");
         Self {
             sample_rate,
             synth_core: core,
@@ -325,83 +341,73 @@ impl SpessaSynthProcessor {
     }
 
     // -----------------------------------------------------------------------
-    // Properties (Rust getters/setters for TypeScript get/set)
+    // Properties (Rust getters for TypeScript get)
     // -----------------------------------------------------------------------
 
-    /// Are chorus and reverb effects enabled?
-    /// Equivalent to: get enableEffects() / set enableEffects(v)
-    pub fn enable_effects(&self) -> bool {
-        self.synth_core.enable_effects
-    }
-    pub fn set_enable_effects(&mut self, v: bool) {
-        self.synth_core.enable_effects = v;
+    /// The global MIDI parameters of the synthesizer.
+    /// These are only editable via MIDI messages.
+    /// Equivalent to: get midiParameters()
+    pub fn midi_parameters(&self) -> &GlobalMIDIParameter {
+        &self.synth_core.midi_parameters
     }
 
-    /// Is the event system enabled?
-    /// Equivalent to: get enableEventSystem() / set enableEventSystem(v)
-    pub fn enable_event_system(&self) -> bool {
-        self.synth_core.enable_event_system
-    }
-    pub fn set_enable_event_system(&mut self, v: bool) {
-        self.synth_core.enable_event_system = v;
+    /// The global system parameters of the synthesizer.
+    /// These are only editable via the API.
+    /// Equivalent to: get systemParameters()
+    pub fn system_parameters(&self) -> &GlobalSystemParameter {
+        &self.synth_core.system_parameters
     }
 
-    /// Total active voice count.
-    /// Equivalent to: get totalVoicesAmount()
-    pub fn total_voices_amount(&self) -> u32 {
-        self.synth_core.voice_count
+    /// Current total amount of voices that are currently playing.
+    /// Equivalent to: get voiceCount() (renamed from totalVoicesAmount in TS 4.3.0)
+    pub fn voice_count(&self) -> u32 {
+        self.synth_core.voice_count()
     }
 
-    /// Current synthesizer time in seconds.
-    /// Equivalent to: get currentSynthTime()
-    pub fn current_synth_time(&self) -> f64 {
+    /// The current time of the synthesizer, in seconds.
+    /// Equivalent to: get currentTime() (renamed from currentSynthTime in TS 4.3.0)
+    pub fn current_time(&self) -> f64 {
         self.synth_core.current_time
     }
 
     // -----------------------------------------------------------------------
-    // Master parameters
+    // System parameters
     // -----------------------------------------------------------------------
 
-    /// Sets a master parameter.
-    /// Equivalent to: setMasterParameter(type, value)
-    pub fn set_master_parameter(&mut self, change: MasterParameterChangeCallback) {
-        self.synth_core.set_master_parameter(change);
-    }
-
-    /// Gets all master parameters.
-    /// Equivalent to: getAllMasterParameters()
-    pub fn get_all_master_parameters(&self) -> MasterParameterType {
-        self.synth_core.get_all_master_parameters()
+    /// Sets a system parameter of the synthesizer.
+    /// Equivalent to: setSystemParameter(type, value)
+    pub fn set_system_parameter(&mut self, change: GlobalSystemParameterChange) {
+        self.synth_core.set_system_parameter(change);
     }
 
     // -----------------------------------------------------------------------
     // System control
     // -----------------------------------------------------------------------
 
-    /// Resets all controllers on all channels.
-    /// Equivalent to: resetAllControllers(system = DEFAULT_SYNTH_MODE)
-    pub fn reset_all_controllers(&mut self, system: MIDISystem) {
-        self.synth_core.reset_all_controllers(system);
+    /// Executes a full synthesizer reset.
+    /// This will reset all controllers to their default values,
+    /// except for the locked controllers.
+    /// Equivalent to: reset() (renamed from resetAllControllers in TS 4.3.0)
+    pub fn reset(&mut self) {
+        self.synth_core.reset(DEFAULT_SYNTH_MODE);
     }
 
     // -----------------------------------------------------------------------
     // Snapshot
     // -----------------------------------------------------------------------
 
-    /// Applies a synthesizer snapshot to restore state.
-    /// Saves the snapshot so it can be re-applied after bank changes.
-    /// Equivalent to: applySynthesizerSnapshot(snapshot)
-    pub fn apply_synthesizer_snapshot(&mut self, snapshot: SynthesizerSnapshot) {
+    /// Applies the snapshot to this `SpessaSynthProcessor` instance.
+    /// Equivalent to: applySnapshot(snapshot) (renamed from applySynthesizerSnapshot)
+    pub fn apply_snapshot(&mut self, snapshot: SynthesizerSnapshot) {
         self.saved_snapshot = Some(snapshot.clone());
-        snapshot.apply(&mut self.synth_core);
-        spessa_synth_info("Finished applying snapshot!");
-        self.reset_all_controllers(DEFAULT_SYNTH_MODE);
+        apply_snapshot(&mut self.synth_core, &snapshot);
+        self.reset();
     }
 
-    /// Returns a snapshot of the current synthesizer state.
+    /// Gets a synthesizer snapshot from this processor instance.
     /// Equivalent to: getSnapshot()
     pub fn get_snapshot(&self) -> SynthesizerSnapshot {
-        SynthesizerSnapshot::create(&self.synth_core)
+        get_synthesizer_snapshot(&self.synth_core)
     }
 
     // -----------------------------------------------------------------------
@@ -424,14 +430,14 @@ impl SpessaSynthProcessor {
         self.synth_core.sound_bank_manager.set_priority_order(&order);
         // Re-apply snapshot if one was saved
         if let Some(snapshot) = self.saved_snapshot.clone() {
-            self.apply_synthesizer_snapshot(snapshot);
+            self.apply_snapshot(snapshot);
         }
-        spessa_synth_info(&format!("Embedded sound bank set at offset {}", offset));
+        SpessaLog::info(&format!("Embedded sound bank set at offset {}", offset));
     }
 
-    /// Removes the embedded sound bank.
-    /// Equivalent to: clearEmbeddedBank()
-    pub fn clear_embedded_bank(&mut self) {
+    /// Removes the embedded sound bank from the synthesizer.
+    /// Equivalent to: clearEmbeddedSoundBank() (renamed from clearEmbeddedBank in TS 4.3.0)
+    pub fn clear_embedded_sound_bank(&mut self) {
         let id = embedded_sound_bank_id();
         if self
             .synth_core
@@ -448,7 +454,7 @@ impl SpessaSynthProcessor {
     // Channel management
     // -----------------------------------------------------------------------
 
-    /// Creates a new MIDI channel.
+    /// Creates a new MIDI channel and adds it to the synthesizer.
     /// Equivalent to: createMIDIChannel()
     pub fn create_midi_channel(&mut self) {
         self.synth_core.create_midi_channel(true);
@@ -471,39 +477,39 @@ impl SpessaSynthProcessor {
     // -----------------------------------------------------------------------
 
     /// Sends a MIDI controller change.
-    /// Equivalent to: controllerChange(channel, controllerNumber, controllerValue)
+    /// Equivalent to: controllerChange(channel, controller, value)
     pub fn controller_change(&mut self, channel: usize, controller: u8, value: u8) {
         self.synth_core
             .controller_change_channel(channel, controller, value);
     }
 
-    /// Sends a MIDI note-on message.
+    /// Sends a MIDI Note On message.
     /// Equivalent to: noteOn(channel, midiNote, velocity)
     pub fn note_on(&mut self, channel: usize, midi_note: u8, velocity: u8) {
         self.synth_core.note_on(channel, midi_note, velocity);
     }
 
-    /// Sends a MIDI note-off message.
+    /// Sends a MIDI Note Off message.
     /// Equivalent to: noteOff(channel, midiNote)
     pub fn note_off(&mut self, channel: usize, midi_note: u8) {
         self.synth_core.note_off_channel(channel, midi_note);
     }
 
-    /// Sends a MIDI poly pressure (aftertouch) message.
+    /// Sends a MIDI Poly Pressure (aftertouch) message.
     /// Equivalent to: polyPressure(channel, midiNote, pressure)
     pub fn poly_pressure(&mut self, channel: usize, midi_note: u8, pressure: u8) {
         self.synth_core
             .poly_pressure_channel(channel, midi_note, pressure);
     }
 
-    /// Sends a MIDI channel pressure (aftertouch) message.
+    /// Sends a MIDI Channel Pressure (aftertouch) message.
     /// Equivalent to: channelPressure(channel, pressure)
     pub fn channel_pressure(&mut self, channel: usize, pressure: u8) {
         self.synth_core.channel_pressure_channel(channel, pressure);
     }
 
-    /// Sends a MIDI pitch wheel message.
-    /// pitch: 0–16383 (8192 = center); midi_note: -1 for channel-wide pitch wheel.
+    /// Sends a MIDI Pitch Wheel message.
+    /// pitch: 0–16383 (8192 = center); midi_note: -1 for the regular pitch wheel.
     /// Equivalent to: pitchWheel(channel, pitch, midiNote = -1)
     pub fn pitch_wheel(&mut self, channel: usize, pitch: i16, midi_note: i32) {
         self.synth_core
@@ -517,16 +523,16 @@ impl SpessaSynthProcessor {
     }
 
     /// Processes a raw MIDI message.
-    /// Equivalent to: processMessage(message, channelOffset, force, options)
+    /// Equivalent to: processMessage(message, channelOffset, options)
+    /// (the 4.2.0 `force` parameter was removed in TS 4.3.0)
     pub fn process_message(
         &mut self,
         message: &[u8],
         channel_offset: usize,
-        force: bool,
         options: SynthMethodOptions,
     ) {
         self.synth_core
-            .process_message(message, channel_offset, force, options);
+            .process_message(message, channel_offset, options);
     }
 
     /// Executes a system exclusive message.
@@ -565,19 +571,6 @@ impl SpessaSynthProcessor {
         self.synth_core
             .render_audio(outputs, start_index, sample_count);
     }
-
-    /// Legacy render_audio with reverb/chorus parameters (ignored, kept for compatibility).
-    pub fn render_audio_legacy(
-        &mut self,
-        outputs: &mut [Vec<f32>],
-        _reverb: &mut [Vec<f32>],
-        _chorus: &mut [Vec<f32>],
-        start_index: usize,
-        sample_count: usize,
-    ) {
-        self.synth_core
-            .render_audio(outputs, start_index, sample_count);
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -587,7 +580,7 @@ impl SpessaSynthProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::synthesizer::audio_engine::synth_constants::MIDI_CHANNEL_COUNT;
+    use crate::soundbank::types::MIDISystem;
     use crate::synthesizer::types::{SynthProcessorEvent, SynthProcessorOptions};
     use std::sync::{Arc, Mutex};
 
@@ -619,7 +612,7 @@ mod tests {
     #[test]
     fn test_new_creates_16_midi_channels() {
         let (proc, _) = make_processor();
-        assert_eq!(proc.synth_core.midi_channels.len(), MIDI_CHANNEL_COUNT as usize);
+        assert_eq!(proc.synth_core.midi_channels.len(), 16);
     }
 
     #[test]
@@ -641,95 +634,101 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // enable_effects / enable_event_system
+    // system_parameters / midi_parameters getters
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_enable_effects_default_true() {
+    fn test_effects_enabled_default_true() {
         let (proc, _) = make_processor();
-        assert!(proc.enable_effects());
+        assert!(proc.system_parameters().effects_enabled);
     }
 
     #[test]
-    fn test_set_enable_effects_false() {
+    fn test_set_effects_enabled_false() {
         let (mut proc, _) = make_processor();
-        proc.set_enable_effects(false);
-        assert!(!proc.enable_effects());
+        proc.set_system_parameter(GlobalSystemParameterChange::EffectsEnabled(false));
+        assert!(!proc.system_parameters().effects_enabled);
     }
 
     #[test]
-    fn test_enable_event_system_default_true() {
+    fn test_events_enabled_default_true() {
         let (proc, _) = make_processor();
-        assert!(proc.enable_event_system());
+        assert!(proc.system_parameters().events_enabled);
     }
 
     #[test]
-    fn test_set_enable_event_system_false() {
+    fn test_set_events_enabled_false() {
         let (mut proc, _) = make_processor();
-        proc.set_enable_event_system(false);
-        assert!(!proc.enable_event_system());
+        proc.set_system_parameter(GlobalSystemParameterChange::EventsEnabled(false));
+        assert!(!proc.system_parameters().events_enabled);
     }
 
-    // -----------------------------------------------------------------------
-    // total_voices_amount / current_synth_time
-    // -----------------------------------------------------------------------
-
     #[test]
-    fn test_total_voices_amount_initially_zero() {
+    fn test_midi_parameters_default_system_gs() {
         let (proc, _) = make_processor();
-        assert_eq!(proc.total_voices_amount(), 0);
+        assert_eq!(proc.midi_parameters().system, MIDISystem::Gs);
     }
 
+    // -----------------------------------------------------------------------
+    // voice_count / current_time
+    // -----------------------------------------------------------------------
+
     #[test]
-    fn test_current_synth_time_initially_zero() {
+    fn test_voice_count_initially_zero() {
         let (proc, _) = make_processor();
-        assert!((proc.current_synth_time() - 0.0).abs() < f64::EPSILON);
+        assert_eq!(proc.voice_count(), 0);
+    }
+
+    #[test]
+    fn test_current_time_initially_zero() {
+        let (proc, _) = make_processor();
+        assert!((proc.current_time() - 0.0).abs() < f64::EPSILON);
     }
 
     // -----------------------------------------------------------------------
-    // set_master_parameter / get_all_master_parameters
+    // set_system_parameter
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_set_master_parameter_master_gain() {
+    fn test_set_system_parameter_gain() {
         let (mut proc, _) = make_processor();
-        proc.set_master_parameter(MasterParameterChangeCallback::MasterGain(0.5));
-        assert!((proc.get_all_master_parameters().master_gain - 0.5).abs() < 1e-9);
+        proc.set_system_parameter(GlobalSystemParameterChange::Gain(0.5));
+        assert!((proc.system_parameters().gain - 0.5).abs() < 1e-9);
     }
 
     #[test]
-    fn test_set_master_parameter_voice_cap() {
+    fn test_set_system_parameter_voice_cap() {
         let (mut proc, _) = make_processor();
-        proc.set_master_parameter(MasterParameterChangeCallback::VoiceCap(100));
-        assert_eq!(proc.get_all_master_parameters().voice_cap, 100);
+        proc.set_system_parameter(GlobalSystemParameterChange::VoiceCap(100));
+        assert_eq!(proc.system_parameters().voice_cap, 100);
     }
 
     #[test]
-    fn test_set_master_parameter_device_id() {
+    fn test_set_system_parameter_device_id() {
         let (mut proc, _) = make_processor();
-        proc.set_master_parameter(MasterParameterChangeCallback::DeviceId(5));
-        assert_eq!(proc.get_all_master_parameters().device_id, 5);
+        proc.set_system_parameter(GlobalSystemParameterChange::DeviceId(5));
+        assert_eq!(proc.system_parameters().device_id, 5);
     }
 
     // -----------------------------------------------------------------------
-    // reset_all_controllers
+    // reset
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_reset_all_controllers_fires_event() {
+    fn test_reset_fires_event() {
         let (mut proc, events) = make_processor();
         let before = event_count(&events);
-        proc.reset_all_controllers(MIDISystem::Gs);
-        // AllControllerReset event should be emitted
+        proc.reset();
+        // Reset event should be emitted
         let evs = events.lock().unwrap();
         assert!(
             evs.len() > before,
             "Expected at least one event after reset"
         );
         let has_reset = evs.iter().any(|e| {
-            matches!(e, SynthProcessorEvent::AllControllerReset)
+            matches!(e, SynthProcessorEvent::Reset(_))
         });
-        assert!(has_reset, "Expected AllControllerReset event");
+        assert!(has_reset, "Expected Reset event");
     }
 
     // -----------------------------------------------------------------------
@@ -745,16 +744,16 @@ mod tests {
     }
 
     #[test]
-    fn test_create_midi_channel_fires_new_channel_event() {
+    fn test_create_midi_channel_fires_channel_added_event() {
         let (mut proc, events) = make_processor();
         let before = event_count(&events);
         proc.create_midi_channel();
         let evs = events.lock().unwrap();
         assert!(evs.len() > before);
-        let has_new_channel = evs.iter().skip(before).any(|e| {
-            matches!(e, SynthProcessorEvent::NewChannel)
+        let has_channel_added = evs.iter().skip(before).any(|e| {
+            matches!(e, SynthProcessorEvent::ChannelAdded)
         });
-        assert!(has_new_channel);
+        assert!(has_channel_added);
     }
 
     // -----------------------------------------------------------------------
@@ -859,7 +858,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // get_snapshot / apply_synthesizer_snapshot round-trip
+    // get_snapshot / apply_snapshot round-trip
     // -----------------------------------------------------------------------
 
     #[test]
@@ -867,22 +866,8 @@ mod tests {
         let (proc, _) = make_processor();
         let snap = proc.get_snapshot();
         assert_eq!(
-            snap.channel_snapshots.len(),
+            snap.midi_channels.len(),
             proc.synth_core.midi_channels.len()
-        );
-    }
-
-    #[test]
-    fn test_apply_snapshot_restores_master_gain() {
-        let (mut proc, _) = make_processor();
-        proc.set_master_parameter(MasterParameterChangeCallback::MasterGain(0.3));
-        let snap = proc.get_snapshot();
-
-        proc.set_master_parameter(MasterParameterChangeCallback::MasterGain(1.0));
-        proc.apply_synthesizer_snapshot(snap);
-
-        assert!(
-            (proc.get_all_master_parameters().master_gain - 0.3).abs() < 1e-9
         );
     }
 
@@ -890,7 +875,7 @@ mod tests {
     fn test_apply_snapshot_saves_snapshot_internally() {
         let (mut proc, _) = make_processor();
         let snap = proc.get_snapshot();
-        proc.apply_synthesizer_snapshot(snap);
+        proc.apply_snapshot(snap);
         assert!(proc.saved_snapshot.is_some());
     }
 
@@ -902,7 +887,7 @@ mod tests {
     fn test_process_message_note_on_no_preset_does_not_panic() {
         // Without a sound bank, note_on silently returns; no panic expected.
         let (mut proc, _) = make_processor();
-        proc.process_message(&[0x90, 60, 100], 0, false, SynthMethodOptions::default());
+        proc.process_message(&[0x90, 60, 100], 0, SynthMethodOptions::default());
     }
 
     #[test]
@@ -910,7 +895,7 @@ mod tests {
         let (mut proc, events) = make_processor();
         let before = event_count(&events);
         // Note-on with velocity 0 → note-off
-        proc.process_message(&[0x90, 60, 0], 0, false, SynthMethodOptions::default());
+        proc.process_message(&[0x90, 60, 0], 0, SynthMethodOptions::default());
         let evs = events.lock().unwrap();
         let has_note_off = evs.iter().skip(before).any(|e| {
             matches!(e, SynthProcessorEvent::NoteOff(_))
@@ -923,7 +908,7 @@ mod tests {
         let (mut proc, events) = make_processor();
         let before = event_count(&events);
         // Note-off: status 0x80 (ch 0), note 60
-        proc.process_message(&[0x80, 60, 0], 0, false, SynthMethodOptions::default());
+        proc.process_message(&[0x80, 60, 0], 0, SynthMethodOptions::default());
         let evs = events.lock().unwrap();
         let has_note_off = evs.iter().skip(before).any(|e| {
             matches!(e, SynthProcessorEvent::NoteOff(_))
@@ -936,7 +921,7 @@ mod tests {
         let (mut proc, events) = make_processor();
         let before = event_count(&events);
         // Pitch wheel: status 0xE0 (ch 0), LSB=0, MSB=64 → pitch=64<<7=8192
-        proc.process_message(&[0xE0, 0x00, 0x40], 0, false, SynthMethodOptions::default());
+        proc.process_message(&[0xE0, 0x00, 0x40], 0, SynthMethodOptions::default());
         let evs = events.lock().unwrap();
         let has_pw = evs.iter().skip(before).any(|e| {
             matches!(e, SynthProcessorEvent::PitchWheel(_))
@@ -949,7 +934,7 @@ mod tests {
         let (mut proc, events) = make_processor();
         let before = event_count(&events);
         // Program change: status 0xC0 (ch 0), program 10
-        proc.process_message(&[0xC0, 10], 0, false, SynthMethodOptions::default());
+        proc.process_message(&[0xC0, 10], 0, SynthMethodOptions::default());
         // Program change fires ProgramChange event only when preset found; with no bank loaded,
         // it might not fire. Just ensure no panic.
         drop(events.lock().unwrap()); // no panic = pass
@@ -961,7 +946,7 @@ mod tests {
         let (mut proc, events) = make_processor();
         let before = event_count(&events);
         // Controller change: status 0xB0 (ch 0), CC 7 (volume), value 100
-        proc.process_message(&[0xB0, 7, 100], 0, false, SynthMethodOptions::default());
+        proc.process_message(&[0xB0, 7, 100], 0, SynthMethodOptions::default());
         let evs = events.lock().unwrap();
         let has_cc = evs.iter().skip(before).any(|e| {
             matches!(e, SynthProcessorEvent::ControllerChange(_))
@@ -970,14 +955,14 @@ mod tests {
     }
 
     #[test]
-    fn test_process_message_reset_fires_controller_reset_event() {
+    fn test_process_message_reset_fires_reset_event() {
         let (mut proc, events) = make_processor();
         let before = event_count(&events);
         // System Reset: 0xFF
-        proc.process_message(&[0xFF], 0, false, SynthMethodOptions::default());
+        proc.process_message(&[0xFF], 0, SynthMethodOptions::default());
         let evs = events.lock().unwrap();
         let has_reset = evs.iter().skip(before).any(|e| {
-            matches!(e, SynthProcessorEvent::AllControllerReset)
+            matches!(e, SynthProcessorEvent::Reset(_))
         });
         assert!(has_reset);
     }
@@ -989,7 +974,7 @@ mod tests {
         let (mut proc, events) = make_processor();
         let before = event_count(&events);
         // Pitch wheel on MIDI ch 0 with channel_offset=1 → should affect ch 1
-        proc.process_message(&[0xE0, 0x00, 0x40], 1, false, SynthMethodOptions::default());
+        proc.process_message(&[0xE0, 0x00, 0x40], 1, SynthMethodOptions::default());
         let evs = events.lock().unwrap();
         let has_ch1_pw = evs.iter().skip(before).any(|e| {
             if let SynthProcessorEvent::PitchWheel(cb) = e {
@@ -1011,7 +996,7 @@ mod tests {
         let before = event_count(&events);
         // Schedule far in the future
         let future_time = SynthMethodOptions { time: 9999.0 };
-        proc.process_message(&[0x90, 60, 100], 0, false, future_time);
+        proc.process_message(&[0x90, 60, 100], 0, future_time);
         // Should not have fired yet
         assert_eq!(event_count(&events), before);
     }
@@ -1022,32 +1007,60 @@ mod tests {
         // to verify that scheduled messages execute after render_audio advances time.
         //
         // render_audio processes the event queue at the START of each call (using the time
-        // from the PREVIOUS render), so two render calls are needed:
-        //   1st render: advances time from 0.0 → 1.0 (event at 0.1 s is not yet processed)
-        //   2nd render: process_event_queue sees time=1.0 ≥ 0.1 → fires the scheduled CC
+        // from the PREVIOUS render), so two render passes are needed:
+        //   1st pass: advances time from 0.0 → 1.0 (event at 0.1 s is not yet processed)
+        //   2nd pass: process_event_queue sees time=1.0 ≥ 0.1 → fires the scheduled CC
         let (mut proc, events) = make_processor();
         // Schedule CC 7 (volume) for time = 0.1 s
         let future_opts = SynthMethodOptions { time: 0.1 };
-        proc.process_message(&[0xB0, 7, 80], 0, false, future_opts);
+        proc.process_message(&[0xB0, 7, 80], 0, future_opts);
 
         // Verify the event hasn't fired yet
         let before = event_count(&events);
 
-        let samples = 44100; // 1 second at 44100 Hz
-
-        // First render: advances time from 0.0 → 1.0
-        let mut out = vec![vec![0.0f32; samples]; 2];
-        proc.render_audio(&mut out, 0, samples);
-
-        // Second render: process_event_queue fires the event scheduled at 0.1 s
-        let mut out2 = vec![vec![0.0f32; samples]; 2];
-        proc.render_audio(&mut out2, 0, samples);
+        // Render 1 second in maxBufferSize (128) chunks (rendering more than
+        // maxBufferSize at once panics in 4.3.0).
+        let chunk = 128;
+        let mut out = vec![vec![0.0f32; chunk]; 2];
+        for _ in 0..(44100 / chunk + 1) {
+            proc.render_audio(&mut out, 0, chunk);
+        }
+        // One more chunk so the queue (processed at the start of a render) fires.
+        proc.render_audio(&mut out, 0, chunk);
 
         let evs = events.lock().unwrap();
         let has_cc = evs.iter().skip(before).any(|e| {
             matches!(e, SynthProcessorEvent::ControllerChange(_))
         });
         assert!(has_cc, "Scheduled CC should fire after render advances time past 0.1s");
+    }
+
+    // -----------------------------------------------------------------------
+    // render_audio — maxBufferSize
+    // -----------------------------------------------------------------------
+
+    #[test]
+    #[should_panic(expected = "maxBufferSize")]
+    fn test_render_audio_beyond_max_buffer_size_panics() {
+        let (mut proc, _) = make_processor();
+        let samples = 256; // default maxBufferSize is 128
+        let mut out = vec![vec![0.0f32; samples]; 2];
+        proc.render_audio(&mut out, 0, samples);
+    }
+
+    #[test]
+    fn test_render_audio_with_larger_max_buffer_size() {
+        let mut proc = SpessaSynthProcessor::new(
+            44100.0,
+            |_: SynthProcessorEvent| {},
+            SynthProcessorOptions {
+                max_buffer_size: 4096,
+                ..Default::default()
+            },
+        );
+        let samples = 4096;
+        let mut out = vec![vec![0.0f32; samples]; 2];
+        proc.render_audio(&mut out, 0, samples); // must not panic
     }
 
     // -----------------------------------------------------------------------

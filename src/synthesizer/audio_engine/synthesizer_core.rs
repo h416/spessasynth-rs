@@ -1,18 +1,70 @@
 /// synthesizer_core.rs
 /// purpose: SynthesizerCore struct — the core synthesis engine which interacts with channels.
-/// Ported from: src/synthesizer/audio_engine/synthesizer_core.ts
+/// Ported from: src/synthesizer/audio_engine/synthesizer_core.ts (spessasynth_core 4.3.0)
 ///
 /// # Design note
 /// MidiChannel lives in channel/midi_channel.rs. It does not hold a back-reference to
 /// SynthesizerCore (unlike TypeScript's `this.synthCore`), so there is no ownership cycle
 /// between the two structs; methods on MidiChannel receive the needed data as parameters.
+///
+/// # Changes from 4.2.0 (reviewed against the 4.3.0 diff)
+/// Orchestration-layer changes ported in Task 20:
+/// - `masterParameters` split into `midiParameters: GlobalMIDIParameter` +
+///   `systemParameters: GlobalSystemParameter` (see `parameters/{midi,system}.rs`).
+///   `enableEffects`/`enableEventSystem` core fields folded into the system parameters.
+/// - `maxBufferSize` (from `SynthProcessorOptions`): all effect input buffers are allocated
+///   once at that size, the 4.2.0 grow-on-demand path is gone, and rendering more samples
+///   than `maxBufferSize` panics (TS throws).
+/// - `voiceCount` became private with a public getter.
+/// - `assignVoice` gained the `autoAllocateVoices` path (allocate a new voice instead of
+///   stealing when the cap is hit; cap grows by 1; logs instead of firing an event). Note:
+///   TS 4.3.0 has an upstream quirk here — `allocateNewVoices(1)` already pushes the new
+///   voice and then `this.voices.push(v)` pushes the *same object* again (aliased at two
+///   indices). A Rust `Vec<Voice>` cannot alias one element at two indices; only the intent
+///   (allocate one, return it) is ported. The duplicate slot is beyond the cap and unused.
+/// - `resetAllControllers` renamed to `reset`, now firing `Reset(system)` (was
+///   `allControllerReset`), calling `resetMIDIParameters(system)` and respecting
+///   `delayLock`. The 4.2.0 post-reset locked-controller / pitch-wheel / channel-pressure
+///   event-restoration block was removed upstream (TS 4.3.0 fires those from
+///   `ch.reset(false)` instead) — removed here too. TODO(Task 21): the per-channel reset
+///   still uses the legacy `reset_controllers`/`reset_preset` pair (TS 4.3.0: `ch.reset()`),
+///   which does not re-fire locked-controller events.
+/// - `setReverbMacro`/`setChorusMacro`/`setDelayMacro`: now guarded by the corresponding
+///   lock system parameter; an *invalid* macro number warns and returns instead of falling
+///   back to macro 0 (Room1/Chorus1/Delay1); fires `effectChange`.
+/// - `resetInsertion`: sendLevelToReverb now scaled by `EFX_SENDS_GAIN_CORRECTION`;
+///   parameter cache grown 20 → 23 entries (params + 3 sends at indices 20/21/22) with the
+///   new `resetInsertionParams()` helper; fires `effectChange`.
+/// - `getInsertionSnapshot`: `{type, params, channels}` — the separate send-level fields are
+///   gone (folded into params[20..23]).
+/// - `setMIDIVolume`/`setMasterTuning` were removed upstream (replaced by the
+///   `midiParameters.gain`/`fineTune` flow applied in the channels' `updateInternalParams`).
+///   TODO(Task 21): they are kept here as legacy plumbing called by
+///   `set_midi_parameter` and the (pre-4.3.0) SysEx handlers, because the current render
+///   path still consumes `midi_volume`/the MASTER_TUNING custom controller. In particular
+///   the 4.2.0 GM2 `volume^E` curve is still applied — TS 4.3.0 applies the gain linearly.
+/// - `processMessage` lost its `force` parameter (and the force-kill Note Off branch).
+/// - `createMIDIChannel`: fires `ChannelAdded` (was `newChannel` + `sendChannelProperty`).
+///   Pre-existing phase-1 divergence kept: the TS constructor-side `channel.setDrums(true)`
+///   for event-sending channels is not called (the Rust port sets `drum_channel` by
+///   `channel % 16 == 9` instead) — revisit in Task 21.
+/// - The per-channel `updateVoiceCount()` loop at the end of `process()` was removed
+///   upstream (channel voice-count events move to the channel side) — removed here too.
+/// - `process()` no longer skips voices on muted channels in TS 4.3.0 (muting became part of
+///   the channel gain computed in `updateInternalParams`). TODO(Task 21): the `is_muted`
+///   skip is KEPT here, because the current channel code has no gain-based muting yet —
+///   removing it would audibly un-mute muted channels.
+/// - TODO(Task 21-23, not ported — channel/voice/effects internals): `voiceBuffer` (shared
+///   per-voice render buffer), `ch.midiParameters.rxChannel` (currently `rx_channel` is not
+///   implemented in the Rust channel; `customChannelNumbers` dispatch is likewise not
+///   implemented), `ch.setMIDIParameter("pressure", ...)`, `ch.destroy()`, per-channel
+///   `systemParameters.presetLock` juggling in the preset-list refresh, and effect processor
+///   constructors taking `maxBufferSize`.
 use std::collections::HashMap;
 
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
-use crate::soundbank::enums::modulator_sources;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
-use crate::synthesizer::audio_engine::channel::parameters::midi::NON_CC_INDEX_OFFSET;
 use crate::synthesizer::audio_engine::effects::chorus::SpessaSynthChorus;
 use crate::synthesizer::audio_engine::effects::delay::SpessaSynthDelay;
 use crate::synthesizer::audio_engine::effects::insertion::{
@@ -22,14 +74,23 @@ use crate::synthesizer::audio_engine::effects::insertion::{
 use crate::synthesizer::audio_engine::effects::reverb::SpessaSynthReverb;
 use crate::synthesizer::audio_engine::voice::lowpass_filter::LowpassFilter;
 use crate::synthesizer::audio_engine::key_modifier_manager::KeyModifierManager;
-use crate::synthesizer::audio_engine::parameters::system::DEFAULT_MASTER_PARAMETERS;
+use crate::synthesizer::audio_engine::parameters::midi::{
+    DEFAULT_GLOBAL_MIDI_PARAMETERS, GlobalMIDIParameter,
+};
+use crate::synthesizer::audio_engine::parameters::system::{
+    DEFAULT_GLOBAL_SYSTEM_PARAMETERS, GlobalSystemParameter,
+};
 use crate::synthesizer::audio_engine::sound_bank_manager::SoundBankManager;
-use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
+use crate::synthesizer::audio_engine::synth_constants::{
+    DEFAULT_PERCUSSION, EFX_SENDS_GAIN_CORRECTION,
+};
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::enums::custom_controllers;
-use crate::synthesizer::types::{CachedVoiceList, MasterParameterType, SynthProcessorEvent, SynthProcessorOptions};
+use crate::synthesizer::types::{
+    CachedVoiceList, EffectChangeCallback, EffectKind, SynthProcessorEvent, SynthProcessorOptions,
+};
 use crate::soundbank::types::MIDISystem;
-use crate::utils::loggin::{spessa_synth_info, spessa_synth_warn};
+use crate::utils::loggin::SpessaLog;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -48,7 +109,7 @@ const PAN_SMOOTHING_FACTOR: f64 = 0.05;
 // ---------------------------------------------------------------------------
 
 /// A MIDI event scheduled for a future time.
-/// Equivalent to: { callback: () => unknown; time: number }
+/// Equivalent to: { message, channelOffset, time } (the TS eventQueue entry)
 struct ScheduledEvent {
     callback: Box<dyn FnOnce(&mut SynthesizerCore)>,
     time: f64,
@@ -81,30 +142,30 @@ pub struct SynthesizerCore {
     /// Equivalent to: sampleRate
     pub sample_rate: f64,
 
+    /// The maximum allowed buffer size to render.
+    /// Equivalent to: maxBufferSize (new in TS 4.3.0)
+    pub max_buffer_size: usize,
+
     /// MIDI Tuning Standard table: tunings[program * 128 + key] = note.cents
     /// -1.0 means no change.
     /// Equivalent to: tunings: Float32Array(128 * 128).fill(-1)
     pub tunings: Vec<f32>,
 
-    /// Master synthesizer parameters.
-    /// Equivalent to: masterParameters
-    pub master_parameters: MasterParameterType,
+    /// The global MIDI parameters of the synthesizer.
+    /// Equivalent to: midiParameters (new in TS 4.3.0)
+    pub midi_parameters: GlobalMIDIParameter,
+
+    /// The system parameters of the synthesizer.
+    /// Equivalent to: systemParameters (new in TS 4.3.0)
+    pub system_parameters: GlobalSystemParameter,
 
     /// Current synthesizer time in seconds.
     /// Equivalent to: currentTime
     pub current_time: f64,
 
-    /// Overall MIDI volume gain (0.0–1.0, set by SysEx).
-    /// Equivalent to: midiVolume
+    /// Overall MIDI volume gain (set by SysEx master volume, GM2 `volume^E` curve).
+    /// Legacy 4.2.0 plumbing — removed upstream in 4.3.0; see module doc TODO(Task 21).
     pub midi_volume: f64,
-
-    /// True if chorus and reverb effects are enabled.
-    /// Equivalent to: enableEffects
-    pub enable_effects: bool,
-
-    /// True if the event system is enabled.
-    /// Equivalent to: enableEventSystem
-    pub enable_event_system: bool,
 
     /// Reverb effect processor.
     pub reverb_processor: SpessaSynthReverb,
@@ -118,21 +179,22 @@ pub struct SynthesizerCore {
     /// Whether delay effect is active (enabled via SysEx).
     pub delay_active: bool,
 
-    /// Mono reverb input buffer (zero-indexed, cleared each render call).
+    /// Mono reverb input buffer (fixed at max_buffer_size, cleared each render call).
     reverb_input: Vec<f32>,
 
-    /// Mono chorus input buffer (zero-indexed, cleared each render call).
+    /// Mono chorus input buffer (fixed at max_buffer_size, cleared each render call).
     chorus_input: Vec<f32>,
 
-    /// Mono delay input buffer (zero-indexed, cleared each render call).
+    /// Mono delay input buffer (fixed at max_buffer_size, cleared each render call).
     delay_input: Vec<f32>,
 
-    /// Left channel pan (0.0–1.0).
-    /// Equivalent to: panLeft
+    /// The pan of the left channel (0.0–1.0), derived from
+    /// `system_parameters.pan + midi_parameters.pan`.
+    /// Legacy 4.2.0 plumbing — removed upstream in 4.3.0; see module doc TODO(Task 21).
     pub pan_left: f64,
 
-    /// Right channel pan (0.0–1.0).
-    /// Equivalent to: panRight
+    /// The pan of the right channel (0.0–1.0).
+    /// Legacy 4.2.0 plumbing — removed upstream in 4.3.0; see module doc TODO(Task 21).
     pub pan_right: f64,
 
     /// Gain smoothing factor adjusted to the sample rate.
@@ -151,9 +213,8 @@ pub struct SynthesizerCore {
     /// Equivalent to: cachedVoices: Map<number, CachedVoiceList>
     pub cached_voices: HashMap<u64, CachedVoiceList>,
 
-    /// Total active voice count.
-    /// Equivalent to: voiceCount
-    pub voice_count: u32,
+    /// Total active voice count. Private in TS 4.3.0 (`_voiceCount` + getter).
+    pub(crate) voice_count: u32,
 
     /// Last time voice priorities were assigned (avoids redundant work in a quantum).
     /// Equivalent to: lastPriorityAssignmentTime (private)
@@ -173,12 +234,16 @@ pub struct SynthesizerCore {
     /// True if any channel has insertion enabled (optimization flag).
     pub insertion_active: bool,
 
-    /// Stereo insertion input buffers (zero-indexed).
+    /// Stereo insertion input buffers (fixed at max_buffer_size).
     insertion_input_l: Vec<f32>,
     insertion_input_r: Vec<f32>,
 
-    /// Parameter cache for insertion snapshot tracking (255 = unchanged).
-    pub insertion_params: [u8; 20],
+    /// For insertion snapshot tracking.
+    /// 20 parameters (0-19) + 3 sends (indices 20-22).
+    /// Index to GS is Addr3 - 3 (for example EFX PARAMETER 1 is 0x03 and here it's 0).
+    /// Note: 255 means "no change".
+    /// Equivalent to: insertionParams: Uint8Array(23) (was 20 in 4.2.0)
+    pub insertion_params: [u8; 23],
 }
 
 impl SynthesizerCore {
@@ -193,8 +258,10 @@ impl SynthesizerCore {
         let pan_smoothing_factor = PAN_SMOOTHING_FACTOR * (44_100.0 / sample_rate);
         LowpassFilter::init_cache(sample_rate);
 
+        let buf_size = options.max_buffer_size;
+
         // Initialize voice pool
-        let voice_cap = DEFAULT_MASTER_PARAMETERS.voice_cap as usize;
+        let voice_cap = DEFAULT_GLOBAL_SYSTEM_PARAMETERS.voice_cap as usize;
         let mut voices = Vec::with_capacity(voice_cap);
         for _ in 0..voice_cap {
             voices.push(Voice::new(sample_rate));
@@ -202,19 +269,25 @@ impl SynthesizerCore {
 
         let tunings = vec![-1.0f32; 128 * 128];
 
-        let buf_size = 128;
-        Self {
+        // TS sets effectsEnabled/eventsEnabled via setSystemParameter in the constructor
+        // (which early-returns for the default values); the Rust struct-literal form below
+        // is equivalent since no channels exist yet.
+        let mut system_parameters = DEFAULT_GLOBAL_SYSTEM_PARAMETERS;
+        system_parameters.effects_enabled = options.effects_enabled;
+        system_parameters.events_enabled = options.events_enabled;
+
+        let mut core = Self {
             voices,
             midi_channels: Vec::new(),
             sound_bank_manager: SoundBankManager::new(|| {}),
             key_modifier_manager: KeyModifierManager::new(),
             sample_rate,
+            max_buffer_size: buf_size,
             tunings,
-            master_parameters: DEFAULT_MASTER_PARAMETERS,
+            midi_parameters: DEFAULT_GLOBAL_MIDI_PARAMETERS,
+            system_parameters,
             current_time: options.initial_time,
             midi_volume: 1.0,
-            enable_effects: options.enable_effects,
-            enable_event_system: options.enable_event_system,
             reverb_processor: SpessaSynthReverb::new(sample_rate),
             chorus_processor: SpessaSynthChorus::new(sample_rate),
             delay_processor: SpessaSynthDelay::new(sample_rate),
@@ -236,50 +309,64 @@ impl SynthesizerCore {
             insertion_active: false,
             insertion_input_l: vec![0.0; buf_size],
             insertion_input_r: vec![0.0; buf_size],
-            insertion_params: [255u8; 20],
-        }
+            insertion_params: [255u8; 23],
+        };
+        core.reset_insertion_params(); // Initial setup
+        core
+    }
+
+    /// Current total amount of voices that are playing.
+    /// Equivalent to: get voiceCount()
+    pub fn voice_count(&self) -> u32 {
+        self.voice_count
     }
 
     /// Dispatches an event through the event callback.
     /// Equivalent to: callEvent(eventName, eventData)
     pub fn call_event(&self, event: SynthProcessorEvent) {
-        if self.enable_event_system {
+        if self.system_parameters.events_enabled {
             (self.event_callback)(event);
         }
     }
 
-    /// Assigns the first available (inactive) voice, stealing the lowest-priority one if needed.
+    /// Recomputes the legacy shared stereo pan (`pan_left`/`pan_right`) from the sum of the
+    /// system and MIDI global pans (TS 4.3.0 adds them per channel in updateInternalParams;
+    /// legacy plumbing until Task 21 — see module doc).
+    pub(crate) fn update_legacy_pan(&mut self) {
+        let pan = self.system_parameters.pan + self.midi_parameters.pan;
+        // Convert from [-1, 1] to [0, 1] where 0 = left
+        let p = pan / 2.0 + 0.5;
+        self.pan_left = 1.0 - p;
+        self.pan_right = p;
+    }
+
+    /// Assigns the first available (inactive) voice, allocating a new one
+    /// (autoAllocateVoices) or stealing the lowest-priority one if none is free.
     /// Equivalent to: assignVoice()
     pub fn assign_voice(&mut self) -> &mut Voice {
-        let voice_cap = self.master_parameters.voice_cap as usize;
-        // Find an inactive voice
-        for i in 0..voice_cap {
-            if !self.voices[i].is_active {
-                self.voices[i].priority = i32::MAX;
-                return &mut self.voices[i];
-            }
-        }
-        // All voices active — assign priorities and steal the lowest
-        self.assign_voice_priorities();
-        let mut lowest_idx = 0;
-        for i in 1..voice_cap {
-            if self.voices[i].priority < self.voices[lowest_idx].priority {
-                lowest_idx = i;
-            }
-        }
-        self.voices[lowest_idx].priority = i32::MAX;
-        &mut self.voices[lowest_idx]
+        let idx = self.assign_voice_idx();
+        &mut self.voices[idx]
     }
 
     /// Like `assign_voice()` but returns the voice index instead of a reference.
     /// Used by `note_on` to allow simultaneous borrows of `voices` and `midi_channels`.
     pub(crate) fn assign_voice_idx(&mut self) -> usize {
-        let voice_cap = self.master_parameters.voice_cap as usize;
+        let voice_cap = self.system_parameters.voice_cap as usize;
         for i in 0..voice_cap {
             if !self.voices[i].is_active {
+                // Prevent this voice from being stolen
                 self.voices[i].priority = i32::MAX;
                 return i;
             }
+        }
+        // No match, assign priorities
+        if self.system_parameters.auto_allocate_voices {
+            // Allocate a new voice and return it (see module doc note on the TS 4.3.0
+            // duplicate-push quirk here).
+            self.allocate_new_voices(1);
+            self.system_parameters.voice_cap += 1;
+            SpessaLog::info("Allocating a new voice!");
+            return self.voices.len() - 1;
         }
         self.assign_voice_priorities();
         let mut lowest_idx = 0;
@@ -295,7 +382,7 @@ impl SynthesizerCore {
     /// Stops all notes on all channels.
     /// Equivalent to: stopAllChannels(force)
     pub fn stop_all_channels(&mut self, force: bool) {
-        spessa_synth_info("Stop all received!");
+        SpessaLog::info("Stop all received!");
         let current_time = self.current_time;
         let voices = &mut self.voices;
         let mut events = Vec::new();
@@ -316,6 +403,7 @@ impl SynthesizerCore {
         let mut channel = MidiChannel::new(preset, bank_idx, channel_number);
 
         // Channel 9 (0-based) is the default percussion channel.
+        // (Pre-existing phase-1 divergence from TS's `channel.setDrums(true)` — see module doc.)
         if channel_number % 16 == DEFAULT_PERCUSSION {
             channel.drum_channel = true;
         }
@@ -323,11 +411,7 @@ impl SynthesizerCore {
         self.midi_channels.push(channel);
 
         if send_event {
-            self.call_event(SynthProcessorEvent::NewChannel);
-            let ch = self.midi_channels.last().unwrap();
-            if let Some(ev) = ch.build_channel_property_event(self.enable_event_system) {
-                self.call_event(ev);
-            }
+            self.call_event(SynthProcessorEvent::ChannelAdded);
         }
     }
 
@@ -349,85 +433,53 @@ impl SynthesizerCore {
         }
     }
 
-    /// Resets all controllers on all channels.
-    /// Equivalent to: resetAllControllers(system = DEFAULT_SYNTH_MODE)
-    pub fn reset_all_controllers(&mut self, system: MIDISystem) {
-        self.call_event(SynthProcessorEvent::AllControllerReset);
-        self.master_parameters.midi_system = system;
-        // Reset private fields
+    /// Executes a full system reset of the synthesizer.
+    /// This will reset all controllers to their default values,
+    /// except for the locked controllers.
+    /// Equivalent to: reset(system = DEFAULT_SYNTH_MODE) (renamed from resetAllControllers)
+    pub fn reset(&mut self, system: MIDISystem) {
+        // Call here because there are returns in this function.
+        self.call_event(SynthProcessorEvent::Reset(system));
+        self.reset_midi_parameters(system);
+        // Reset private props
         self.tunings.fill(-1.0);
-        self.set_midi_volume(1.0);
-        // Default effect macros: Hall2, Chorus3, Delay1
+        // TODO(Task 21): portSelectChannelOffset = 0; customChannelNumbers = false;
+        // (neither is implemented in the Rust core yet — see module doc)
+        // Hall2 default
         self.set_reverb_macro(4);
+        // Chorus3 default
         self.set_chorus_macro(2);
+        // Delay1 default
         self.set_delay_macro(0);
-        self.delay_active = false;
+        if !self.system_parameters.delay_lock {
+            self.delay_active = false;
+        }
         self.reset_insertion();
 
-        let enable_event_system = self.enable_event_system;
+        let events_enabled = self.system_parameters.events_enabled;
         let current_time = self.current_time;
         let mut events = Vec::new();
 
-        // Reset controllers and preset for each channel (TS: ch.resetControllers(false); ch.resetPreset())
+        // Reset channels
+        // Do not send CC changes as we call reset
+        // TODO(Task 21): TS 4.3.0 calls ch.reset(false) — the legacy
+        // reset_controllers/reset_preset pair is kept until the channel restructuring.
         for ch_idx in 0..self.midi_channels.len() {
             let mut sub = self.midi_channels[ch_idx].reset_controllers(
                 false, // do not send CC events
                 &mut self.voices,
                 current_time,
                 system,
-                enable_event_system,
+                events_enabled,
             );
             events.append(&mut sub);
 
             let mut sub = self.midi_channels[ch_idx].reset_preset(
                 &self.sound_bank_manager,
                 system,
-                enable_event_system,
+                events_enabled,
             );
             events.append(&mut sub);
-        }
-
-        for ch_idx in 0..self.midi_channels.len() {
-            // Restore locked controller events.
-            for cc_num in 0..128usize {
-                if self.midi_channels[ch_idx].locked_controllers[cc_num] {
-                    use crate::midi::enums::MidiController;
-                    use crate::synthesizer::types::ControllerChangeCallback;
-                    events.push(SynthProcessorEvent::ControllerChange(
-                        ControllerChangeCallback {
-                            channel: ch_idx as u8,
-                            controller_number: cc_num as MidiController,
-                            controller_value: (self.midi_channels[ch_idx].midi_controllers[cc_num]
-                                >> 7) as u8,
-                        },
-                    ));
-                }
-            }
-
-            // Restore pitch wheel event.
-            let pitch_lock_idx = NON_CC_INDEX_OFFSET + modulator_sources::PITCH_WHEEL as usize;
-            if !self.midi_channels[ch_idx].locked_controllers[pitch_lock_idx] {
-                use crate::synthesizer::types::PitchWheelCallback;
-                let val = self.midi_channels[ch_idx].midi_controllers[pitch_lock_idx];
-                events.push(SynthProcessorEvent::PitchWheel(PitchWheelCallback {
-                    channel: ch_idx as u8,
-                    pitch: val as u16,
-                    midi_note: -1,
-                }));
-            }
-
-            // Restore channel pressure event.
-            let cp_lock_idx = NON_CC_INDEX_OFFSET + modulator_sources::CHANNEL_PRESSURE as usize;
-            if !self.midi_channels[ch_idx].locked_controllers[cp_lock_idx] {
-                use crate::synthesizer::types::ChannelPressureCallback;
-                let val = self.midi_channels[ch_idx].midi_controllers[cp_lock_idx] >> 7;
-                events.push(SynthProcessorEvent::ChannelPressure(
-                    ChannelPressureCallback {
-                        channel: ch_idx as u8,
-                        pressure: val as u8,
-                    },
-                ));
-            }
         }
 
         for event in events {
@@ -436,7 +488,7 @@ impl SynthesizerCore {
     }
 
     /// Renders audio for the current quantum.
-    /// Equivalent to: renderAudio(outputs, reverb, chorus, startIndex, sampleCount)
+    /// Equivalent to: process(outputs, effectsLeft, effectsRight, startIndex, samples)
     pub fn render_audio(
         &mut self,
         outputs: &mut [Vec<f32>],
@@ -452,17 +504,36 @@ impl SynthesizerCore {
             outputs[0].len().saturating_sub(start_index)
         };
 
+        // TS 4.3.0: throw if the requested quantum exceeds the fixed buffer size.
+        assert!(
+            quantum_size <= self.max_buffer_size,
+            "Requested {} samples, but maxBufferSize is {}",
+            quantum_size,
+            self.max_buffer_size
+        );
+
+        // Clear the buffers (fixed size — the 4.2.0 grow-on-demand path is gone).
+        self.reverb_input.fill(0.0);
+        self.chorus_input.fill(0.0);
+        if self.delay_active {
+            self.delay_input.fill(0.0);
+        }
+        if self.insertion_active {
+            self.insertion_input_l.fill(0.0);
+            self.insertion_input_r.fill(0.0);
+        }
+
         // Clear voice counts.
         for ch in self.midi_channels.iter_mut() {
             ch.clear_voice_count();
         }
         self.voice_count = 0;
 
-        let enable_effects = self.enable_effects;
-        let master_gain = self.master_parameters.master_gain;
-        let reverb_gain = self.master_parameters.reverb_gain;
-        let chorus_gain = self.master_parameters.chorus_gain;
-        let delay_gain = self.master_parameters.delay_gain;
+        let effects_enabled = self.system_parameters.effects_enabled;
+        let master_gain = self.system_parameters.gain;
+        let reverb_gain = self.system_parameters.reverb_gain;
+        let chorus_gain = self.system_parameters.chorus_gain;
+        let delay_gain = self.system_parameters.delay_gain;
         let midi_volume = self.midi_volume;
         let pan_left = self.pan_left;
         let pan_right = self.pan_right;
@@ -471,32 +542,6 @@ impl SynthesizerCore {
         let delay_active = self.delay_active;
         let insertion_active = self.insertion_active;
         let out_len = outputs[0].len();
-
-        // Grow and clear effect input buffers if effects are enabled.
-        if enable_effects {
-            if self.reverb_input.len() < quantum_size {
-                self.reverb_input.resize(quantum_size, 0.0);
-                self.chorus_input.resize(quantum_size, 0.0);
-                self.delay_input.resize(quantum_size, 0.0);
-            } else {
-                self.reverb_input[..quantum_size].fill(0.0);
-                self.chorus_input[..quantum_size].fill(0.0);
-                if delay_active {
-                    self.delay_input[..quantum_size].fill(0.0);
-                }
-            }
-
-            // Grow and clear insertion input buffers if insertion is active.
-            if insertion_active {
-                if self.insertion_input_l.len() < quantum_size {
-                    self.insertion_input_l.resize(quantum_size, 0.0);
-                    self.insertion_input_r.resize(quantum_size, 0.0);
-                } else {
-                    self.insertion_input_l[..quantum_size].fill(0.0);
-                    self.insertion_input_r[..quantum_size].fill(0.0);
-                }
-            }
-        }
 
         // Render active voices.
         // SAFETY: voices, midi_channels, and effect buffers are separate Vec fields — no aliasing.
@@ -515,11 +560,15 @@ impl SynthesizerCore {
         let ins_l_len = self.insertion_input_l.len();
         let ins_r_len = self.insertion_input_r.len();
 
-        for v_idx in 0..self.voices.len() {
+        // Process voices (up to the cap, matching TS).
+        let cap = (self.system_parameters.voice_cap as usize).min(self.voices.len());
+        for v_idx in 0..cap {
             if !self.voices[v_idx].is_active {
                 continue;
             }
             let ch_idx = self.voices[v_idx].channel as usize;
+            // TODO(Task 21): TS 4.3.0 removed this skip (muting moved into the channel gain);
+            // kept because the current channel code has no gain-based muting yet.
             if self.midi_channels[ch_idx].is_muted {
                 continue;
             }
@@ -552,7 +601,7 @@ impl SynthesizerCore {
                 midi_volume,
                 pan_left,
                 pan_right,
-                enable_effects,
+                effects_enabled,
                 delay_active,
                 pan_smoothing_factor,
                 &self.tunings,
@@ -564,7 +613,7 @@ impl SynthesizerCore {
         }
 
         // Process effect chain: Insertion → Chorus → Delay → Reverb
-        if enable_effects {
+        if effects_enabled {
             let (out_left, out_rest) = outputs.split_at_mut(1);
             let out_l = &mut out_left[0];
             let out_r = &mut out_rest[0];
@@ -598,8 +647,9 @@ impl SynthesizerCore {
                 quantum_size,
             );
 
-            // Delay sends to reverb (only if active and not XG)
-            if delay_active && self.master_parameters.midi_system != MIDISystem::Xg {
+            // CC#94 in XG is variation, not delay
+            if delay_active && self.midi_parameters.system != MIDISystem::Xg {
+                // Process delay
                 let delay_in = self.delay_input[..quantum_size].to_vec();
                 self.delay_processor.process(
                     &delay_in,
@@ -622,29 +672,31 @@ impl SynthesizerCore {
             );
         }
 
-        // Fire voice count change events.
-        let enable_event_system = self.enable_event_system;
-        let mut events = Vec::new();
-        for ch in self.midi_channels.iter() {
-            if let Some(ev) = ch.update_voice_count(enable_event_system) {
-                events.push(ev);
-            }
-        }
-        for event in events {
-            self.call_event(event);
-        }
+        // (TS 4.3.0 removed the per-channel updateVoiceCount() event loop here.)
 
-        // Advance time.
+        // Advance the time appropriately
         self.current_time += quantum_size as f64 * self.sample_time;
     }
 
     /// Sets the reverb macro (SC-8850 manual page 81).
+    /// Equivalent to: setReverbMacro(macro)
     pub fn set_reverb_macro(&mut self, macro_num: u8) {
+        if self.system_parameters.reverb_lock {
+            return;
+        }
         let rev = &mut self.reverb_processor;
         rev.set_level(64);
         rev.set_pre_delay_time(0);
         rev.set_character(macro_num);
         match macro_num {
+            0 => {
+                // Room1
+                rev.set_character(0);
+                rev.set_pre_lowpass(3);
+                rev.set_time(80);
+                rev.set_delay_feedback(0);
+                rev.set_pre_delay_time(0);
+            }
             1 => {
                 // Room2
                 rev.set_pre_lowpass(4);
@@ -688,18 +740,25 @@ impl SynthesizerCore {
                 rev.set_delay_feedback(32);
             }
             _ => {
-                // Room1 (default)
-                rev.set_character(0);
-                rev.set_pre_lowpass(3);
-                rev.set_time(80);
-                rev.set_delay_feedback(0);
-                rev.set_pre_delay_time(0);
+                // Check for invalid macros (TS 4.3.0: warn + return instead of Room1 fallback)
+                // Testcase: 18 - Dichromatic Lotus Butterfly ~ Ancients (ZUN).mid
+                SpessaLog::warn(&format!("Invalid reverb macro: {}", macro_num));
+                return;
             }
         }
+        self.call_event(SynthProcessorEvent::EffectChange(EffectChangeCallback {
+            effect: EffectKind::Reverb,
+            parameter: 0,
+            value: macro_num as i32,
+        }));
     }
 
     /// Sets the chorus macro (SC-8850 manual page 83).
+    /// Equivalent to: setChorusMacro(macro)
     pub fn set_chorus_macro(&mut self, macro_num: u8) {
+        if self.system_parameters.chorus_lock {
+            return;
+        }
         let chr = &mut self.chorus_processor;
         chr.set_level(64);
         chr.set_pre_lowpass(0);
@@ -707,6 +766,13 @@ impl SynthesizerCore {
         chr.set_send_level_to_delay(0);
         chr.set_send_level_to_reverb(0);
         match macro_num {
+            0 => {
+                // Chorus1
+                chr.set_feedback(0);
+                chr.set_delay(112);
+                chr.set_rate(3);
+                chr.set_depth(5);
+            }
             1 => {
                 // Chorus2
                 chr.set_feedback(5);
@@ -757,17 +823,25 @@ impl SynthesizerCore {
                 chr.set_depth(127);
             }
             _ => {
-                // Chorus1 (default)
-                chr.set_feedback(0);
-                chr.set_delay(112);
-                chr.set_rate(3);
-                chr.set_depth(5);
+                // Check for invalid macros (TS 4.3.0: warn + return instead of Chorus1 fallback)
+                // Testcase: 18 - Dichromatic Lotus Butterfly ~ Ancients (ZUN).mid
+                SpessaLog::warn(&format!("Invalid chorus macro: {}", macro_num));
+                return;
             }
         }
+        self.call_event(SynthProcessorEvent::EffectChange(EffectChangeCallback {
+            effect: EffectKind::Chorus,
+            parameter: 0,
+            value: macro_num as i32,
+        }));
     }
 
     /// Sets the delay macro (SC-8850 manual page 85).
+    /// Equivalent to: setDelayMacro(macro)
     pub fn set_delay_macro(&mut self, macro_num: u8) {
+        if self.system_parameters.delay_lock {
+            return;
+        }
         let dly = &mut self.delay_processor;
         dly.set_level(64);
         dly.set_pre_lowpass(0);
@@ -776,6 +850,13 @@ impl SynthesizerCore {
         dly.set_level_left(0);
         dly.set_level_center(127);
         match macro_num {
+            0 => {
+                // Delay1
+                dly.set_time_center(97);
+                dly.set_time_ratio_left(1);
+                dly.set_time_ratio_right(1);
+                dly.set_feedback(80);
+            }
             1 => {
                 // Delay2
                 dly.set_time_center(106);
@@ -859,26 +940,69 @@ impl SynthesizerCore {
                 dly.set_feedback(40);
             }
             _ => {
-                // Delay1 (default)
-                dly.set_time_center(97);
-                dly.set_time_ratio_left(1);
-                dly.set_time_ratio_right(1);
-                dly.set_feedback(80);
+                // Check for invalid macros (TS 4.3.0: warn + return instead of Delay1 fallback)
+                // Testcase: 18 - Dichromatic Lotus Butterfly ~ Ancients (ZUN).mid
+                SpessaLog::warn(&format!("Invalid delay macro: {}", macro_num));
+                return;
             }
         }
+        self.call_event(SynthProcessorEvent::EffectChange(EffectChangeCallback {
+            effect: EffectKind::Delay,
+            parameter: 0,
+            value: macro_num as i32,
+        }));
+    }
+
+    /// Resets the insertion parameter cache to "no change" + the default sends.
+    /// Equivalent to: resetInsertionParams() (protected, new in TS 4.3.0)
+    pub(crate) fn reset_insertion_params(&mut self) {
+        // No change
+        self.insertion_params.fill(255);
+        self.insertion_params[20] = 40; // Reverb
+        self.insertion_params[21] = 0; // Chorus
+        self.insertion_params[22] = 0; // Delay
     }
 
     /// Resets the insertion effect to defaults.
     /// Equivalent to: resetInsertion()
     pub fn reset_insertion(&mut self) {
+        if self.system_parameters.insertion_effect_lock {
+            return;
+        }
         self.insertion_active = false;
         self.insertion_processor = Box::new(ThruFx::new(self.sample_rate));
-        self.insertion_processor.set_send_level_to_reverb(40.0 / 127.0);
+        self.insertion_processor.reset();
+        self.insertion_processor
+            .set_send_level_to_reverb(40.0 / 127.0 * EFX_SENDS_GAIN_CORRECTION);
         self.insertion_processor.set_send_level_to_chorus(0.0);
         self.insertion_processor.set_send_level_to_delay(0.0);
-        self.insertion_params = [255u8; 20];
+        self.reset_insertion_params();
+        // Legacy compensation (not in TS, where ch.reset handles efxAssign — Task 21):
         for ch in self.midi_channels.iter_mut() {
             ch.insertion_enabled = false;
+        }
+        let efx_type = self.insertion_processor.effect_type();
+        self.call_event(SynthProcessorEvent::EffectChange(EffectChangeCallback {
+            effect: EffectKind::Insertion,
+            parameter: 0,
+            value: efx_type as i32,
+        }));
+    }
+
+    /// Returns the insertion effect snapshot.
+    /// Equivalent to: getInsertionSnapshot() (protected in TS 4.3.0; the send-level fields
+    /// were folded into params[20..23])
+    pub fn get_insertion_snapshot(
+        &self,
+    ) -> crate::synthesizer::audio_engine::synthesizer_snapshot::InsertionProcessorSnapshot {
+        crate::synthesizer::audio_engine::synthesizer_snapshot::InsertionProcessorSnapshot {
+            efx_type: self.insertion_processor.effect_type(),
+            params: self.insertion_params,
+            channels: self
+                .midi_channels
+                .iter()
+                .map(|c| c.insertion_enabled)
+                .collect(),
         }
     }
 
@@ -898,7 +1022,7 @@ impl SynthesizerCore {
             };
             if let Some((preset, bank_idx)) = self
                 .sound_bank_manager
-                .get_preset_and_bank_idx(patch, self.master_parameters.midi_system)
+                .get_preset_and_bank_idx(patch, self.midi_parameters.system)
             {
                 let bank = &self.sound_bank_manager.sound_bank_list[bank_idx].sound_bank;
                 return self.get_voices_for_preset(preset, bank, midi_note, velocity);
@@ -941,7 +1065,7 @@ impl SynthesizerCore {
             let sample = match bank.samples.get(vp.sample_idx) {
                 Some(s) => s,
                 None => {
-                    spessa_synth_warn(&format!(
+                    SpessaLog::warn(&format!(
                         "get_voices_for_preset: invalid sample index {}",
                         vp.sample_idx
                     ));
@@ -953,7 +1077,7 @@ impl SynthesizerCore {
             let audio_data = match &sample.audio_data {
                 Some(data) => data.clone(),
                 None => {
-                    spessa_synth_warn(&format!(
+                    SpessaLog::warn(&format!(
                         "Discarding invalid sample: {}",
                         sample.name
                     ));
@@ -985,13 +1109,19 @@ impl SynthesizerCore {
     }
 
     /// Sets the MIDI volume (raised to e as per GM2 spec).
-    /// Equivalent to: setMIDIVolume(volume) (protected)
+    /// Legacy 4.2.0 plumbing — removed upstream in 4.3.0 (replaced by
+    /// `midiParameters.gain` applied linearly in the channels); see module doc TODO(Task 21).
+    /// Equivalent to: setMIDIVolume(volume) (4.2.0, protected)
     pub fn set_midi_volume(&mut self, volume: f64) {
+        // GM2 specification, section 4.1: volume is squared.
+        // Though, according to my own testing, Math.E seems like a better choice
         self.midi_volume = volume.powf(std::f64::consts::E);
     }
 
     /// Sets the master tuning for all channels.
-    /// Equivalent to: setMasterTuning(cents) (protected)
+    /// Legacy 4.2.0 plumbing — removed upstream in 4.3.0 (replaced by
+    /// `midiParameters.fineTune`); see module doc TODO(Task 21).
+    /// Equivalent to: setMasterTuning(cents) (4.2.0, protected)
     pub fn set_master_tuning(&mut self, cents: f64) {
         let cents = cents.round();
         for ch in self.midi_channels.iter_mut() {
@@ -1003,6 +1133,7 @@ impl SynthesizerCore {
     /// Equivalent to: destroySynthProcessor()
     pub fn destroy(&mut self) {
         self.voices.clear();
+        // TODO(Task 21): TS 4.3.0 calls c.destroy() per channel.
         for ch in self.midi_channels.iter_mut() {
             ch.locked_controllers.clear();
             ch.preset = None;
@@ -1017,7 +1148,7 @@ impl SynthesizerCore {
     // -----------------------------------------------------------------------
 
     /// Processes all scheduled events whose time has arrived.
-    /// Equivalent to: event queue processing in renderAudio
+    /// Equivalent to: event queue processing in process()
     fn process_event_queue(&mut self) {
         if self.event_queue.is_empty() {
             return;
@@ -1038,8 +1169,10 @@ impl SynthesizerCore {
         if (self.last_priority_assignment_time - self.current_time).abs() < f64::EPSILON {
             return;
         }
+        SpessaLog::info("Polyphony exceeded, stealing voices");
         self.last_priority_assignment_time = self.current_time;
-        for voice in self.voices.iter_mut() {
+        let cap = (self.system_parameters.voice_cap as usize).min(self.voices.len());
+        for voice in self.voices.iter_mut().take(cap) {
             voice.priority = 0;
             let ch_idx = voice.channel as usize;
             if ch_idx < self.midi_channels.len() && self.midi_channels[ch_idx].drum_channel {
@@ -1081,5 +1214,19 @@ impl SynthesizerCore {
     ) {
         self.event_queue
             .push(ScheduledEvent { callback: Box::new(callback), time });
+        // TS sorts the queue by time after each push.
+        self.event_queue
+            .sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+    }
+
+    /// Registers a factory-constructed insertion processor (used by tests and the snapshot
+    /// SysEx path via the insertion module's `create_insertion_processor`).
+    #[allow(dead_code)]
+    pub(crate) fn set_insertion_processor_by_type(&mut self, efx_type: u16) {
+        if let Some(proc) = insertion::create_insertion_processor(efx_type, self.sample_rate) {
+            self.insertion_processor = proc;
+        } else {
+            self.insertion_processor = Box::new(ThruFx::new(self.sample_rate));
+        }
     }
 }

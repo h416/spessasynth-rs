@@ -5,31 +5,34 @@
 /// Ported from: src/midi/midi_tools/apply_snapshot.ts (spessasynth_core 4.3.0)
 /// (split out of `midi_editor.ts`'s `applySnapshotInternal` in 4.2.0)
 ///
-/// # Snapshot type gap (deferred to Task 20)
+/// # Snapshot type bridge
 ///
-/// TS 4.3.0's snapshot types were restructured (`SynthesizerSnapshot.systemParameters:
-/// GlobalSystemParameter`, `ChannelSnapshot.systemParameters: ChannelSystemParameter`, effect
-/// processor snapshots stored as `reverbProcessor`/`chorusProcessor`/`delayProcessor`/
-/// `insertionProcessor`). The Rust `SynthesizerSnapshot`/`ChannelSnapshot` are still 4.2.0-shaped
-/// (`master_parameters: MasterParameterType`, flat channel fields, `reverb_snapshot` etc.).
-/// This port bridges the gap with the following field mapping, to be revisited in Task 20:
+/// TS 4.3.0's `SynthesizerSnapshot` is fully ported (`system_parameters: GlobalSystemParameter`,
+/// `midi_parameters: GlobalMIDIParameter`, effect processor snapshots stored as
+/// `reverb_processor`/`chorus_processor`/`delay_processor`/`insertion_processor`), so the
+/// snapshot-level reads here match TS directly:
+///
+/// - `snapshot.systemParameters.keyShift`/`fineTune` (global) -> `system_parameters.key_shift`
+///   (semitones) / `system_parameters.fine_tune` (cents)
+/// - `snapshot.systemParameters.drumLock`/`reverbLock`/`chorusLock`/`delayLock` -> the matching
+///   `system_parameters.*_lock` flags, wired through to `ModifyMidiOptions`
+/// - `snapshot.reverbProcessor`/`chorusProcessor`/`delayProcessor` -> the matching
+///   `reverb_processor`/`chorus_processor`/`delay_processor` snapshots
+///
+/// `ChannelSnapshot` is still 4.2.0-shaped (flat fields, not the 4.3.0 `systemParameters`
+/// sub-struct — that restructuring lands in Task 21), so the per-channel reads use the bridge:
 ///
 /// - `channelSnapshot.systemParameters.isMuted` -> `ChannelSnapshot::is_muted`
 /// - `channelSnapshot.systemParameters.presetLock` -> `ChannelSnapshot::lock_preset`
 /// - `channelSnapshot.systemParameters.keyShift` (semitones) ->
 ///   `ChannelSnapshot::channel_transpose_key_shift`
 /// - `channelSnapshot.systemParameters.fineTune` (cents) ->
-///   `ChannelSnapshot::custom_controllers[CHANNEL_TRANSPOSE_FINE]` (also cents; 4.2.0's
-///   `applySnapshotInternal` divided this by 100 to fold it into a fractional key-shift, which
-///   is exactly the split 4.3.0 makes explicit)
-/// - `snapshot.systemParameters.keyShift`/`fineTune` (global) -> derived from
-///   `MasterParameterType::transposition` (semitones, decimal): the integer part becomes the
-///   global key shift and the fractional part x100 the global fine tune in cents (4.3.0 split
-///   `transposition` into exactly these two fields)
-/// - `snapshot.systemParameters.drumLock`/`reverbLock`/`chorusLock`/`delayLock`/
-///   `insertionEffectLock` -> **not present** in the 4.2.0-shaped `MasterParameterType`; treated
-///   as `false` (no drum-param clearing, no effect-parameter SysEx writing). TODO(Task 20): wire
-///   these through once the snapshot/master-parameter types are updated to 4.3.0.
+///   `ChannelSnapshot::custom_controllers[CHANNEL_TRANSPOSE_FINE]`
+///
+/// The one remaining gap is `insertionParams`: TS passes `snapshot.insertionProcessor`
+/// (`InsertionProcessorSnapshot`), but `ModifyMidiOptions.insertion_params` expects
+/// `InsertionEffectParams`. Unifying those two effect types is deferred to Task 26 (effects);
+/// it is not WAV-relevant, since the render path never applies snapshots.
 use std::collections::HashMap;
 
 use crate::midi::basic_midi::BasicMidi;
@@ -49,13 +52,12 @@ use crate::synthesizer::enums::custom_controllers;
 pub fn apply_snapshot_internal(midi: &mut BasicMidi, snapshot: &SynthesizerSnapshot) {
     let mut channels: HashMap<u8, ClearableParameter<ChannelModification>> = HashMap::new();
 
-    // See module doc: global keyShift/fineTune are derived from the 4.2.0-shaped
-    // `transposition` (semitones, decimal).
-    let transposition = snapshot.master_parameters.transposition;
-    let global_key_shift = transposition.trunc();
-    let global_fine_tune = (transposition - global_key_shift) * 100.0;
+    // TS 4.3.0: global key shift / fine tune come from the system parameters
+    // (keyShift in semitones, fineTune in cents).
+    let global_key_shift = snapshot.system_parameters.key_shift;
+    let global_fine_tune = snapshot.system_parameters.fine_tune;
 
-    for (channel_number, channel_snapshot) in snapshot.channel_snapshots.iter().enumerate() {
+    for (channel_number, channel_snapshot) in snapshot.midi_channels.iter().enumerate() {
         if channel_snapshot.is_muted {
             channels.insert(channel_number as u8, ClearableParameter::Clear);
             continue;
@@ -105,17 +107,37 @@ pub fn apply_snapshot_internal(midi: &mut BasicMidi, snapshot: &SynthesizerSnaps
         );
     }
 
+    // TS 4.3.0: locked GS effect parameters are baked into the sequence when their
+    // corresponding `*Lock` system parameter is set.
+    let sys = &snapshot.system_parameters;
+    let reverb_params = if sys.reverb_lock {
+        Some(ClearableParameter::Value(snapshot.reverb_processor.clone()))
+    } else {
+        None
+    };
+    let chorus_params = if sys.chorus_lock {
+        Some(ClearableParameter::Value(snapshot.chorus_processor.clone()))
+    } else {
+        None
+    };
+    let delay_params = if sys.delay_lock {
+        Some(ClearableParameter::Value(snapshot.delay_processor.clone()))
+    } else {
+        None
+    };
+
     modify_midi_internal(
         midi,
         &ModifyMidiOptions {
             channels: Some(channels),
-            // TODO(Task 20): snapshot.systemParameters.drumLock / reverbLock / chorusLock /
-            // delayLock / insertionEffectLock do not exist on the 4.2.0-shaped
-            // MasterParameterType yet; until then these are always "no change".
-            drum_setup_params_clear: false,
-            reverb_params: None,
-            chorus_params: None,
-            delay_params: None,
+            drum_setup_params_clear: sys.drum_lock,
+            reverb_params,
+            chorus_params,
+            delay_params,
+            // TODO(Task 26, effects): TS passes `snapshot.insertionProcessor`
+            // (InsertionProcessorSnapshot) here, but `ModifyMidiOptions.insertion_params`
+            // expects `InsertionEffectParams`. Wiring this requires unifying those two
+            // effect types (not WAV-relevant: the render path never applies snapshots).
             insertion_params: None,
         },
     );
@@ -133,6 +155,7 @@ mod tests {
     use crate::midi::midi_track::MidiTrack;
     use crate::synthesizer::audio_engine::channel::channel_snapshot::ChannelSnapshot;
     use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
+    use crate::synthesizer::audio_engine::synthesizer_snapshot::get_synthesizer_snapshot;
     use crate::synthesizer::types::{SynthProcessorEvent, SynthProcessorOptions};
     use std::sync::{Arc, Mutex};
 
@@ -145,7 +168,7 @@ mod tests {
             },
             44100.0,
             SynthProcessorOptions {
-                enable_event_system: true,
+                events_enabled: true,
                 ..Default::default()
             },
         );
@@ -157,7 +180,7 @@ mod tests {
 
     fn make_snapshot(channels: usize) -> SynthesizerSnapshot {
         let core = make_core_with_channels(channels);
-        SynthesizerSnapshot::create(&core)
+        get_synthesizer_snapshot(&core)
     }
 
     fn make_msg(ticks: u32, status: u8, data: Vec<u8>) -> MidiMessage {
@@ -181,7 +204,7 @@ mod tests {
     }
 
     fn ch(snapshot: &mut SynthesizerSnapshot, i: usize) -> &mut ChannelSnapshot {
-        &mut snapshot.channel_snapshots[i]
+        &mut snapshot.midi_channels[i]
     }
 
     #[test]
@@ -303,7 +326,7 @@ mod tests {
     #[test]
     fn test_global_transposition_skipped_on_drum_channel() {
         let mut snapshot = make_snapshot(10);
-        snapshot.master_parameters.transposition = 2.0;
+        snapshot.system_parameters.key_shift = 2.0;
         ch(&mut snapshot, 9).drum_channel = true;
 
         let mut midi = simple_midi(vec![

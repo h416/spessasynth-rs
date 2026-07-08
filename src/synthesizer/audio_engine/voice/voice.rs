@@ -9,7 +9,7 @@ use crate::synthesizer::audio_engine::voice::lowpass_filter::LowpassFilter;
 use crate::synthesizer::audio_engine::voice::modulation_envelope::ModulationEnvelope;
 use crate::synthesizer::audio_engine::voice::volume_envelope::VolumeEnvelope;
 use crate::synthesizer::audio_engine::voice::wavetable_oscillator::WavetableOscillator;
-use crate::synthesizer::audio_engine::parameters::system::DEFAULT_MASTER_PARAMETERS;
+use crate::synthesizer::audio_engine::parameters::system::DEFAULT_GLOBAL_SYSTEM_PARAMETERS;
 use crate::synthesizer::audio_engine::synth_constants::{
     MIN_EXCLUSIVE_LENGTH, MIN_NOTE_LENGTH,
 };
@@ -200,7 +200,7 @@ impl Voice {
     /// Creates a new, inactive Voice for the given sample rate.
     ///
     /// The default oscillator type is `HERMITE` (= 2), matching
-    /// `DEFAULT_MASTER_PARAMETERS.interpolation_type`.
+    /// `DEFAULT_GLOBAL_SYSTEM_PARAMETERS.interpolation_type`.
     ///
     /// Equivalent to: constructor(sampleRate: number)
     pub fn new(sample_rate: f64) -> Self {
@@ -210,7 +210,7 @@ impl Voice {
                 WavetableOscillator::new(interpolation_types::NEAREST_NEIGHBOR),
                 WavetableOscillator::new(interpolation_types::HERMITE),
             ],
-            oscillator_type: DEFAULT_MASTER_PARAMETERS.interpolation_type,
+            oscillator_type: DEFAULT_GLOBAL_SYSTEM_PARAMETERS.interpolation_type,
             filter: LowpassFilter::new(sample_rate),
             generators: [0; GENERATORS_AMOUNT],
             modulated_generators: [0; GENERATORS_AMOUNT],
@@ -449,7 +449,7 @@ mod tests {
         GENERATORS_AMOUNT, generator_types as gt,
     };
     use crate::soundbank::basic_soundbank::modulator::DecodedModulator;
-    use crate::synthesizer::audio_engine::parameters::system::DEFAULT_MASTER_PARAMETERS;
+    use crate::synthesizer::audio_engine::parameters::system::DEFAULT_GLOBAL_SYSTEM_PARAMETERS;
     use crate::synthesizer::enums::interpolation_types;
 
     const SAMPLE_RATE: f64 = 44_100.0;
@@ -486,7 +486,7 @@ mod tests {
         let v = Voice::new(SAMPLE_RATE);
         assert_eq!(
             v.oscillator_type,
-            DEFAULT_MASTER_PARAMETERS.interpolation_type
+            DEFAULT_GLOBAL_SYSTEM_PARAMETERS.interpolation_type
         );
         assert_eq!(v.oscillator_type, interpolation_types::HERMITE);
     }

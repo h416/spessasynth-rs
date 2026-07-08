@@ -13,7 +13,7 @@ use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::{
 };
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::enums::custom_controllers;
-use crate::synthesizer::types::MasterParameterChangeCallback;
+use crate::synthesizer::types::GlobalMIDIParameterChangeCallback;
 use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::spessa_synth_info;
 use crate::utils::byte_functions::string::read_binary_string;
@@ -49,8 +49,8 @@ impl SynthesizerCore {
 
                         // Extract borrow-checker-safe copies of self fields
                         let current_time = self.current_time;
-                        let current_system = self.master_parameters.midi_system;
-                        let enable_event_system = self.enable_event_system;
+                        let current_system = self.midi_parameters.system;
+                        let enable_event_system = self.system_parameters.events_enabled;
 
                         match syx[6] {
                             0x15 => {
@@ -205,8 +205,8 @@ impl SynthesizerCore {
                         };
 
                         let current_time = self.current_time;
-                        let current_system = self.master_parameters.midi_system;
-                        let enable_event_system = self.enable_event_system;
+                        let current_system = self.midi_parameters.system;
+                        let enable_event_system = self.system_parameters.events_enabled;
 
                         // Setup receivers for CC to parameter mapping (SC-88 manual page 198)
                         match syx[6] & 0x0f {
@@ -428,11 +428,11 @@ impl SynthesizerCore {
                                 if message_value == 0x00 {
                                     // This is a GS reset
                                     spessa_synth_info("GS Reset received!");
-                                    self.reset_all_controllers(MIDISystem::Gs);
+                                    self.reset(MIDISystem::Gs);
                                 } else if message_value == 0x7f {
                                     // GS mode off
                                     spessa_synth_info("GS system off, switching to GM");
-                                    self.reset_all_controllers(MIDISystem::Gm);
+                                    self.reset(MIDISystem::Gm);
                                 }
                             }
 
@@ -442,8 +442,8 @@ impl SynthesizerCore {
                                     "Roland GS Master Pan set to: {} with: {:02X?}",
                                     message_value, syx
                                 ));
-                                self.set_master_parameter(
-                                    MasterParameterChangeCallback::MasterPan(
+                                self.set_midi_parameter(
+                                    GlobalMIDIParameterChangeCallback::Pan(
                                         (message_value as f64 - 64.0) / 64.0,
                                     ),
                                 );
@@ -497,7 +497,7 @@ impl SynthesizerCore {
                                     spessa_synth_info(&format!("Unsupported EFX processor: {:04X}, using Thru", efx_type));
                                     self.insertion_processor = Box::new(crate::synthesizer::audio_engine::effects::insertion::thru::ThruFx::new(self.sample_rate));
                                 }
-                                self.insertion_params = [255u8; 20];
+                                self.reset_insertion_params();
                                 self.insertion_processor.reset();
                             }
 
@@ -708,8 +708,8 @@ impl SynthesizerCore {
                                     message_value,
                                     voices,
                                     self.current_time,
-                                    self.master_parameters.midi_system,
-                                    self.enable_event_system,
+                                    self.midi_parameters.system,
+                                    self.system_parameters.events_enabled,
                                 );
                                 for ev in evs {
                                     self.call_event(ev);
@@ -748,14 +748,14 @@ impl SynthesizerCore {
                     if syx[5] == 0x00 {
                         // Display letters
                         self.call_event(
-                            crate::synthesizer::types::SynthProcessorEvent::SynthDisplay(
+                            crate::synthesizer::types::SynthProcessorEvent::DisplayMessage(
                                 syx.to_vec(),
                             ),
                         );
                     } else if syx[5] == 0x01 {
                         // Matrix display
                         self.call_event(
-                            crate::synthesizer::types::SynthProcessorEvent::SynthDisplay(
+                            crate::synthesizer::types::SynthProcessorEvent::DisplayMessage(
                                 syx.to_vec(),
                             ),
                         );

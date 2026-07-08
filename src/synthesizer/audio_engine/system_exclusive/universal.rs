@@ -3,7 +3,7 @@
 /// Ported from: src/synthesizer/audio_engine/engine_methods/system_exclusive/handle_gm.ts
 use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::sys_ex_not_recognized;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
-use crate::synthesizer::types::MasterParameterChangeCallback;
+use crate::synthesizer::types::GlobalMIDIParameterChangeCallback;
 use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::{spessa_synth_info, spessa_synth_warn};
 use crate::utils::byte_functions::string::read_binary_string;
@@ -44,7 +44,7 @@ impl SynthesizerCore {
                         // Main balance (MIDI spec page 62)
                         let balance = ((syx[5] as u32) << 7) | syx[4] as u32;
                         let pan = (balance as f64 - 8192.0) / 8192.0;
-                        self.set_master_parameter(MasterParameterChangeCallback::MasterPan(pan));
+                        self.set_midi_parameter(GlobalMIDIParameterChangeCallback::Pan(pan));
                         spessa_synth_info(&format!("Master Pan. Pan: {}", pan));
                     }
 
@@ -77,13 +77,13 @@ impl SynthesizerCore {
                 // GM system related
                 if syx[3] == 0x01 {
                     spessa_synth_info("GM1 system on");
-                    self.reset_all_controllers(MIDISystem::Gm);
+                    self.reset(MIDISystem::Gm);
                 } else if syx[3] == 0x03 {
                     spessa_synth_info("GM2 system on");
-                    self.reset_all_controllers(MIDISystem::Gm2);
+                    self.reset(MIDISystem::Gm2);
                 } else {
                     spessa_synth_info("GM system off, defaulting to GS");
-                    self.set_master_parameter(MasterParameterChangeCallback::MidiSystem(
+                    self.set_midi_parameter(GlobalMIDIParameterChangeCallback::System(
                         MIDISystem::Gs,
                     ));
                 }

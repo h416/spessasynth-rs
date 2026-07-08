@@ -51,8 +51,8 @@ pub fn render_midi_to_wav(
         opts.sample_rate as f64,
         |_| {},
         SynthProcessorOptions {
-            enable_event_system: false,
-            enable_effects: true,
+            events_enabled: false,
+            effects_enabled: true,
             ..Default::default()
         },
     );
@@ -67,7 +67,7 @@ pub fn render_midi_to_wav(
     // Initialize presets
     seq.synth
         .synth_core
-        .reset_all_controllers(DEFAULT_SYNTH_MODE);
+        .reset(DEFAULT_SYNTH_MODE);
 
     // Load MIDI and play
     seq.load_new_song_list(vec![midi]);

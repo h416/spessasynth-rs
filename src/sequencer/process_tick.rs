@@ -105,6 +105,18 @@ mod tests {
         midi.timeline = timeline;
     }
 
+    /// Renders `total` samples to advance synth time. TS 4.3.0 caps a single `render_audio`
+    /// call at `maxBufferSize` (128), so split the request into fixed-size quanta.
+    fn render_to_advance_time(seq: &mut SpessaSynthSequencer, total: usize) {
+        let mut out = vec![vec![0.0f32; total]; 2];
+        let mut i = 0;
+        while i < total {
+            let n = (total - i).min(128);
+            seq.synth.render_audio(&mut out, i, n);
+            i += n;
+        }
+    }
+
     fn make_midi_with_events(events: Vec<MidiMessage>, duration: f64) -> BasicMidi {
         let mut midi = BasicMidi::new();
         midi.time_division = 480;
@@ -171,9 +183,7 @@ mod tests {
         seq.play();
 
         // Render some audio to advance synth time
-        let samples = 44100; // 1 second
-        let mut out = vec![vec![0.0f32; samples]; 2];
-        seq.synth.render_audio(&mut out, 0, samples);
+        render_to_advance_time(&mut seq, 44100); // 1 second
 
         // Now process tick should advance
         seq.process_tick();
@@ -198,9 +208,7 @@ mod tests {
         seq.play();
 
         // Advance synth time past the song duration
-        let samples = 44100 * 2; // 2 seconds
-        let mut out = vec![vec![0.0f32; samples]; 2];
-        seq.synth.render_audio(&mut out, 0, samples);
+        render_to_advance_time(&mut seq, 44100 * 2); // 2 seconds
 
         seq.process_tick();
         assert!(seq.is_finished);
@@ -229,9 +237,7 @@ mod tests {
         seq.play();
 
         // Advance synth time
-        let samples = 44100 * 3;
-        let mut out = vec![vec![0.0f32; samples]; 2];
-        seq.synth.render_audio(&mut out, 0, samples);
+        render_to_advance_time(&mut seq, 44100 * 3);
 
         seq.process_tick();
         // Loop count should have decremented

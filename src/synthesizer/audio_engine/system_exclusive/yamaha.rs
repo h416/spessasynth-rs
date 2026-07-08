@@ -6,7 +6,7 @@ use crate::midi::enums::midi_controllers;
 use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::sys_ex_not_recognized;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::enums::custom_controllers;
-use crate::synthesizer::types::MasterParameterChangeCallback;
+use crate::synthesizer::types::GlobalMIDIParameterChangeCallback;
 use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::spessa_synth_info;
 use crate::utils::midi_hacks::BankSelectHacks;
@@ -55,7 +55,7 @@ impl SynthesizerCore {
                 // Master transpose
                 0x06 => {
                     let transpose = syx[6] as f64 - 64.0;
-                    self.set_master_parameter(MasterParameterChangeCallback::Transposition(
+                    self.set_midi_parameter(GlobalMIDIParameterChangeCallback::KeyShift(
                         transpose,
                     ));
                     spessa_synth_info(&format!("XG master transpose. Semitones: {}", transpose));
@@ -64,7 +64,7 @@ impl SynthesizerCore {
                 // XG on
                 0x7e => {
                     spessa_synth_info("XG system on");
-                    self.reset_all_controllers(MIDISystem::Xg);
+                    self.reset(MIDISystem::Xg);
                 }
 
                 _ => {}
@@ -85,7 +85,7 @@ impl SynthesizerCore {
         } else if a1 == 0x08 {
             // A2 is the channel number
             // XG part parameter
-            if !BankSelectHacks::is_system_xg(self.master_parameters.midi_system) {
+            if !BankSelectHacks::is_system_xg(self.midi_parameters.system) {
                 return;
             }
             let channel = a2 as usize + channel_offset;
@@ -96,8 +96,8 @@ impl SynthesizerCore {
             let value = syx[6];
 
             let current_time = self.current_time;
-            let current_system = self.master_parameters.midi_system;
-            let enable_event_system = self.enable_event_system;
+            let current_system = self.midi_parameters.system;
+            let enable_event_system = self.system_parameters.events_enabled;
 
             match syx[5] {
                 // Bank-select MSB
@@ -396,9 +396,9 @@ impl SynthesizerCore {
         } else if a1 == 0x06 || a1 == 0x07 {
             // Display letters (0x06) or Display bitmap (0x07)
             self.call_event(
-                crate::synthesizer::types::SynthProcessorEvent::SynthDisplay(syx.to_vec()),
+                crate::synthesizer::types::SynthProcessorEvent::DisplayMessage(syx.to_vec()),
             );
-        } else if BankSelectHacks::is_system_xg(self.master_parameters.midi_system) {
+        } else if BankSelectHacks::is_system_xg(self.midi_parameters.system) {
             sys_ex_not_recognized(syx, "Yamaha XG");
         }
     }

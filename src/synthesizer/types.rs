@@ -1,13 +1,31 @@
 /// types.rs
 /// purpose: Common data types for the synthesizer.
-/// Ported from: src/synthesizer/types.ts
+/// Ported from: src/synthesizer/types.ts (spessasynth_core 4.3.0)
 ///
-/// Note: TS 4.3.0 moved `SynthSystem` to soundbank/types.ts as `MIDISystem`;
-/// the Rust definition now lives in `crate::soundbank::types`.
+/// Changes from 4.2.0 (reviewed against the 4.3.0 diff):
+/// - `SynthSystem` moved to soundbank/types.ts as `MIDISystem` (Rust:
+///   `crate::soundbank::types`).
+/// - `MasterParameterType` was removed, split into `GlobalMIDIParameter`
+///   (`audio_engine/parameters/midi.rs`) and `GlobalSystemParameter`
+///   (`audio_engine/parameters/system.rs`).
+/// - `SynthProcessorOptions` was reshaped: `enableEventSystem` → `eventsEnabled`,
+///   `enableEffects` → `effectsEnabled`, new `maxBufferSize`; the reverb/chorus/delay
+///   processor fields became optional (the core constructs the defaults itself — the Rust
+///   port always constructs the defaults internally, unchanged).
+/// - Event renames in `SynthProcessorEventData`: `newChannel` → `channelAdded`,
+///   `allControllerReset` → `reset` (now carrying the `MIDISystem`), `synthDisplay` →
+///   `displayMessage`, `masterParameterChange` → `globalParamChange` (now only for the
+///   global *MIDI* parameters; system-parameter changes fire no event).
+/// - TODO(Task 21, channel restructuring): TS 4.3.0 moved the per-channel callback payload
+///   types (`NoteOnCallback`, `NoteOffCallback`, `ControllerChangeCallback`,
+///   `ProgramChangeCallback`, `PolyPressureCallback`, `StopAllCallback`, ...) to
+///   `audio_engine/channel/types.ts` and replaced `channelPropertyChange`/`ChannelProperty`
+///   with `channelParamChange`/`ChannelMIDIParameterChange`. The Rust equivalents stay here
+///   (with the 4.2.0 payload shapes for the channel-fired ones) until the channel
+///   restructuring lands.
 use crate::midi::enums::MidiController;
 use crate::soundbank::basic_soundbank::midi_patch::{MidiPatch, MidiPatchFull};
 use crate::soundbank::types::MIDISystem;
-use crate::synthesizer::enums::InterpolationType;
 
 /// Equivalent to: NoteOnCallback
 #[derive(Clone, Copy, Debug)]
@@ -100,55 +118,22 @@ pub struct StopAllCallback {
     pub force: bool,
 }
 
-/// The master parameters of the synthesizer.
-/// Equivalent to: MasterParameterType
-#[derive(Clone, Debug)]
-pub struct MasterParameterType {
-    /// Master gain, from 0 to any number. 1 is 100% volume.
-    pub master_gain: f64,
-    /// Master pan, from -1 (left) to 1 (right). 0 is center.
-    pub master_pan: f64,
-    /// Maximum number of voices that can be played at once.
-    pub voice_cap: u32,
-    /// Interpolation type used for sample playback.
-    pub interpolation_type: InterpolationType,
-    /// MIDI system used for bank selects and system exclusives.
-    pub midi_system: MIDISystem,
-    /// Monophonic retrigger mode (emulates Microsoft GS Wavetable Synth behavior).
-    pub monophonic_retrigger_mode: bool,
-    /// Reverb gain, from 0 to any number. 1 is 100% reverb.
-    pub reverb_gain: f64,
-    /// Chorus gain, from 0 to any number. 1 is 100% chorus.
-    pub chorus_gain: f64,
-    /// Forces note killing instead of releasing. Improves performance in black MIDIs.
-    pub black_midi_mode: bool,
-    /// Global transposition in semitones (decimal for microtonal tuning).
-    pub transposition: f64,
-    /// Synthesizer's device ID for system exclusive messages. -1 to accept all.
-    pub device_id: i32,
-    /// Delay gain, from 0 to any number. 1 is 100% delay.
-    pub delay_gain: f64,
-}
-
-/// Discriminated union for master parameter changes.
-/// Equivalent to: MasterParameterChangeCallback
-#[derive(Clone, Debug)]
-pub enum MasterParameterChangeCallback {
-    MasterGain(f64),
-    MasterPan(f64),
-    VoiceCap(u32),
-    InterpolationType(InterpolationType),
-    MidiSystem(MIDISystem),
-    MonophonicRetriggerMode(bool),
-    ReverbGain(f64),
-    ChorusGain(f64),
-    BlackMidiMode(bool),
-    Transposition(f64),
-    DeviceId(i32),
+/// A single global MIDI parameter change (parameter + new value).
+/// TS 4.3.0's `globalParamChange` event payload is `{ parameter, value }` over the
+/// `GlobalMIDIParameter` keys; Rust uses a discriminated union.
+/// Equivalent to: GlobalMIDIParameterChangeCallback
+#[derive(Clone, Copy, Debug)]
+pub enum GlobalMIDIParameterChangeCallback {
+    System(MIDISystem),
+    KeyShift(f64),
+    FineTune(f64),
+    Gain(f64),
+    Pan(f64),
 }
 
 /// Channel property snapshot.
-/// Equivalent to: ChannelProperty
+/// Equivalent to: ChannelProperty (removed in TS 4.3.0 — replaced by the channel MIDI
+/// parameter set; kept until the Task 21 channel restructuring, see module doc)
 #[derive(Clone, Copy, Debug)]
 pub struct ChannelProperty {
     pub voices_amount: u32,
@@ -161,11 +146,34 @@ pub struct ChannelProperty {
     pub transposition: f64,
 }
 
-/// Equivalent to: ChannelPropertyChangeCallback
+/// Equivalent to: ChannelPropertyChangeCallback (removed in TS 4.3.0 — replaced by
+/// `channelParamChange`/`ChannelMIDIParameterChange`; kept until Task 21, see module doc)
 #[derive(Clone, Copy, Debug)]
 pub struct ChannelPropertyChangeCallback {
     pub channel: u8,
     pub property: ChannelProperty,
+}
+
+/// The payload of an `effectChange` event.
+/// Equivalent to: SynthProcessorEventData["effectChange"] (partial — the TS payload also
+/// distinguishes the effect kind via a string union)
+#[derive(Clone, Copy, Debug)]
+pub struct EffectChangeCallback {
+    /// Which effect changed: "reverb" | "chorus" | "delay" | "insertion".
+    pub effect: EffectKind,
+    /// The changed parameter index (0 = macro / type).
+    pub parameter: u8,
+    /// The new value.
+    pub value: i32,
+}
+
+/// The effect kind for an `effectChange` event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EffectKind {
+    Reverb,
+    Chorus,
+    Delay,
+    Insertion,
 }
 
 /// All synthesizer processor events (discriminated union).
@@ -181,13 +189,22 @@ pub enum SynthProcessorEvent {
     PolyPressure(PolyPressureCallback),
     DrumChange(DrumChangeCallback),
     StopAll(StopAllCallback),
-    NewChannel,
+    /// Equivalent to: channelAdded (renamed from newChannel in TS 4.3.0)
+    ChannelAdded,
     MuteChannel(MuteChannelCallback),
     PresetListChange(PresetList),
-    AllControllerReset,
+    /// Equivalent to: reset (renamed from allControllerReset in TS 4.3.0; now carries the
+    /// MIDI system the synthesizer was reset to)
+    Reset(MIDISystem),
     SoundBankError(SoundBankErrorCallback),
-    SynthDisplay(SynthDisplayCallback),
-    MasterParameterChange(MasterParameterChangeCallback),
+    /// Equivalent to: displayMessage (renamed from synthDisplay in TS 4.3.0)
+    DisplayMessage(SynthDisplayCallback),
+    /// Equivalent to: globalParamChange (replaces masterParameterChange in TS 4.3.0; fired
+    /// only for global MIDI parameters — system-parameter changes fire no event)
+    GlobalParamChange(GlobalMIDIParameterChangeCallback),
+    /// Equivalent to: effectChange
+    EffectChange(EffectChangeCallback),
+    /// Kept from 4.2.0 until Task 21 (TS 4.3.0: channelParamChange) — see module doc.
     ChannelPropertyChange(ChannelPropertyChangeCallback),
 }
 
@@ -211,23 +228,32 @@ pub type CachedVoiceList =
 
 /// Synthesizer processor options.
 /// Equivalent to: SynthProcessorOptions
+///
+/// Note: TS 4.3.0's optional `reverbProcessor`/`chorusProcessor`/`delayProcessor` fields are
+/// not ported — the Rust core always constructs the default effect processors internally
+/// (equivalent to TS's `options.reverbProcessor ?? new SpessaSynthReverb(...)` with the
+/// option always absent).
 #[derive(Clone, Debug)]
 pub struct SynthProcessorOptions {
-    /// Whether the event system is enabled.
-    pub enable_event_system: bool,
-    /// Initial synthesizer time in seconds.
+    /// The maximum buffer size the synthesizer can render at once.
+    /// Attempting to render more samples than this will result in a panic.
+    /// Defaults to 128.
+    /// Equivalent to: maxBufferSize
+    pub max_buffer_size: usize,
+    /// If the synthesizer processes the audio effects. This can be changed later.
+    /// Equivalent to: effectsEnabled (renamed from enableEffects in TS 4.3.0)
+    pub effects_enabled: bool,
+    /// If the event system is enabled. This can be changed later.
+    /// Equivalent to: eventsEnabled (renamed from enableEventSystem in TS 4.3.0)
+    pub events_enabled: bool,
+    /// The initial time of the synth, in seconds.
+    /// Equivalent to: initialTime
     pub initial_time: f64,
-    /// Whether effects are enabled.
-    pub enable_effects: bool,
 }
 
 impl Default for SynthProcessorOptions {
     fn default() -> Self {
-        Self {
-            enable_event_system: true,
-            initial_time: 0.0,
-            enable_effects: true,
-        }
+        crate::synthesizer::audio_engine::synth_processor_options::DEFAULT_SYNTH_OPTIONS
     }
 }
 
@@ -235,7 +261,6 @@ impl Default for SynthProcessorOptions {
 mod tests {
     use super::*;
     use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
-    use crate::synthesizer::enums::interpolation_types;
 
     // --- MIDISystem ---
 
@@ -270,21 +295,24 @@ mod tests {
     #[test]
     fn test_synth_processor_options_default() {
         let opts = SynthProcessorOptions::default();
-        assert!(opts.enable_event_system);
+        assert!(opts.events_enabled);
         assert_eq!(opts.initial_time, 0.0);
-        assert!(opts.enable_effects);
+        assert!(opts.effects_enabled);
+        assert_eq!(opts.max_buffer_size, 128);
     }
 
     #[test]
     fn test_synth_processor_options_custom() {
         let opts = SynthProcessorOptions {
-            enable_event_system: false,
+            events_enabled: false,
             initial_time: 2.0,
-            enable_effects: false,
+            effects_enabled: false,
+            max_buffer_size: 256,
         };
-        assert!(!opts.enable_event_system);
+        assert!(!opts.events_enabled);
         assert_eq!(opts.initial_time, 2.0);
-        assert!(!opts.enable_effects);
+        assert!(!opts.effects_enabled);
+        assert_eq!(opts.max_buffer_size, 256);
     }
 
     // --- SampleLoopingMode ---
@@ -369,44 +397,21 @@ mod tests {
         assert_eq!(cb.channel, 3);
     }
 
-    // --- MasterParameterType ---
+    // --- GlobalMIDIParameterChangeCallback ---
 
     #[test]
-    fn test_master_parameter_type_fields() {
-        let mp = MasterParameterType {
-            master_gain: 1.0,
-            master_pan: 0.0,
-            voice_cap: 350,
-            interpolation_type: interpolation_types::LINEAR,
-            midi_system: MIDISystem::Gs,
-            monophonic_retrigger_mode: false,
-            reverb_gain: 1.0,
-            chorus_gain: 1.0,
-            black_midi_mode: false,
-            transposition: 0.0,
-            device_id: -1,
-            delay_gain: 1.0,
-        };
-        assert_eq!(mp.voice_cap, 350);
-        assert_eq!(mp.device_id, -1);
-        assert_eq!(mp.midi_system, MIDISystem::Gs);
-    }
+    fn test_global_midi_parameter_change_callback_variants() {
+        let v1 = GlobalMIDIParameterChangeCallback::Gain(1.5);
+        let v2 = GlobalMIDIParameterChangeCallback::Pan(-0.5);
+        let v3 = GlobalMIDIParameterChangeCallback::System(MIDISystem::Xg);
+        let v4 = GlobalMIDIParameterChangeCallback::KeyShift(2.0);
+        let v5 = GlobalMIDIParameterChangeCallback::FineTune(-10.0);
 
-    // --- MasterParameterChangeCallback ---
-
-    #[test]
-    fn test_master_parameter_change_callback_variants() {
-        let v1 = MasterParameterChangeCallback::MasterGain(1.5);
-        let v2 = MasterParameterChangeCallback::VoiceCap(256);
-        let v3 = MasterParameterChangeCallback::MidiSystem(MIDISystem::Xg);
-        let v4 = MasterParameterChangeCallback::DeviceId(-1);
-        let v5 = MasterParameterChangeCallback::BlackMidiMode(true);
-
-        matches!(v1, MasterParameterChangeCallback::MasterGain(_));
-        matches!(v2, MasterParameterChangeCallback::VoiceCap(_));
-        matches!(v3, MasterParameterChangeCallback::MidiSystem(_));
-        matches!(v4, MasterParameterChangeCallback::DeviceId(_));
-        matches!(v5, MasterParameterChangeCallback::BlackMidiMode(_));
+        assert!(matches!(v1, GlobalMIDIParameterChangeCallback::Gain(_)));
+        assert!(matches!(v2, GlobalMIDIParameterChangeCallback::Pan(_)));
+        assert!(matches!(v3, GlobalMIDIParameterChangeCallback::System(_)));
+        assert!(matches!(v4, GlobalMIDIParameterChangeCallback::KeyShift(_)));
+        assert!(matches!(v5, GlobalMIDIParameterChangeCallback::FineTune(_)));
     }
 
     // --- ChannelProperty ---
@@ -429,15 +434,15 @@ mod tests {
     // --- SynthProcessorEvent variants ---
 
     #[test]
-    fn test_synth_processor_event_new_channel() {
-        let ev = SynthProcessorEvent::NewChannel;
-        matches!(ev, SynthProcessorEvent::NewChannel);
+    fn test_synth_processor_event_channel_added() {
+        let ev = SynthProcessorEvent::ChannelAdded;
+        assert!(matches!(ev, SynthProcessorEvent::ChannelAdded));
     }
 
     #[test]
-    fn test_synth_processor_event_all_controller_reset() {
-        let ev = SynthProcessorEvent::AllControllerReset;
-        matches!(ev, SynthProcessorEvent::AllControllerReset);
+    fn test_synth_processor_event_reset_carries_system() {
+        let ev = SynthProcessorEvent::Reset(MIDISystem::Gs);
+        assert!(matches!(ev, SynthProcessorEvent::Reset(MIDISystem::Gs)));
     }
 
     #[test]

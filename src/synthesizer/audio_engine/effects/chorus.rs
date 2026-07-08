@@ -1,6 +1,6 @@
 use std::f64::consts::PI;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ChorusSnapshot {
     pub level: u8,
     pub pre_lowpass: u8,

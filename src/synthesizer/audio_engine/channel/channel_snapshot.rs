@@ -172,8 +172,8 @@ impl ChannelSnapshot {
     /// accept `&mut SynthesizerCore` directly so that `processor.rs` is not needed.
     pub fn apply(&self, core: &mut SynthesizerCore) {
         let channel_idx = self.channel_number as usize;
-        let current_system = core.master_parameters.midi_system;
-        let enable_event_system = core.enable_event_system;
+        let current_system = core.midi_parameters.system;
+        let enable_event_system = core.system_parameters.events_enabled;
 
         // Restore mute flag (set directly; notes should be stopped by the caller)
         core.midi_channels[channel_idx].is_muted = self.is_muted;
@@ -258,7 +258,7 @@ use crate::soundbank::types::MIDISystem;
             },
             44100.0,
             SynthProcessorOptions {
-                enable_event_system: true,
+                events_enabled: true,
                 ..Default::default()
             },
         );

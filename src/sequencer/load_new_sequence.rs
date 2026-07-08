@@ -78,7 +78,7 @@ impl SpessaSynthSequencer {
         self.is_finished = false;
 
         // Clear old embedded bank if exists
-        self.synth.clear_embedded_bank();
+        self.synth.clear_embedded_sound_bank();
 
         // Check for embedded soundfont
         if self.songs[song_index].embedded_sound_bank.is_some() {

@@ -1,8 +1,17 @@
 /// enums.rs
 /// purpose: Synthesizer enumeration constants.
-/// Ported from: src/synthesizer/enums.ts
+/// Ported from: src/synthesizer/enums.ts (spessasynth_core 4.3.0)
+///
+/// Changes from 4.2.0 (reviewed against the 4.3.0 diff): TS 4.3.0 keeps only
+/// `InterpolationTypes` (renamed from `interpolationTypes` — TS casing convention only, no
+/// Rust-side change) and removed `dataEntryStates` and `customControllers` entirely (both
+/// belong to the pre-4.3.0 channel data-entry/custom-controller machinery, replaced by the
+/// new channel architecture). TODO(Task 21, channel restructuring): `data_entry_states` and
+/// `custom_controllers` below are still used by the current (pre-4.3.0) Rust channel code
+/// (`data_entry.rs`, `midi_channel.rs`, ...) and are kept until that code is restructured;
+/// remove them together with their last callers.
 /// Sample interpolation type constants.
-/// Equivalent to: interpolationTypes
+/// Equivalent to: InterpolationTypes
 pub mod interpolation_types {
     pub const LINEAR: u8 = 0;
     pub const NEAREST_NEIGHBOR: u8 = 1;
@@ -13,7 +22,7 @@ pub mod interpolation_types {
 pub type InterpolationType = u8;
 
 /// MIDI data entry state machine states.
-/// Equivalent to: dataEntryStates
+/// Equivalent to: dataEntryStates (removed in TS 4.3.0 — see module doc TODO)
 pub mod data_entry_states {
     pub const IDLE: u8 = 0;
     pub const RP_COARSE: u8 = 1;
@@ -28,7 +37,7 @@ pub mod data_entry_states {
 pub type DataEntryState = u8;
 
 /// Extended (custom) controller indices used internally by the synthesizer.
-/// Equivalent to: customControllers
+/// Equivalent to: customControllers (removed in TS 4.3.0 — see module doc TODO)
 pub mod custom_controllers {
     /// Cents, RPN for fine tuning
     pub const CHANNEL_TUNING: u8 = 0;

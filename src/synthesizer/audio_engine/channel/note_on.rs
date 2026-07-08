@@ -37,7 +37,7 @@ impl SynthesizerCore {
         if velocity == 0 {
             // velocity 0 = note off (per MIDI spec)
             let current_time = self.current_time;
-            let black_midi = self.master_parameters.black_midi_mode;
+            let black_midi = self.system_parameters.black_midi_mode;
             let evs = self.midi_channels[channel].note_off(
                 midi_note,
                 &mut self.voices,
@@ -53,10 +53,10 @@ impl SynthesizerCore {
 
         // Black MIDI mode: drop low-velocity notes when voice count is high
         let voice_count_total = self.voice_count;
-        if (self.master_parameters.black_midi_mode
+        if (self.system_parameters.black_midi_mode
             && voice_count_total > 200
             && velocity < 40)
-            || (self.master_parameters.black_midi_mode && velocity < 10)
+            || (self.system_parameters.black_midi_mode && velocity < 10)
             || self.midi_channels[channel].is_muted
         {
             return;
@@ -94,7 +94,7 @@ impl SynthesizerCore {
         }
 
         // Monophonic retrigger: kill any current note before starting new one
-        if self.master_parameters.monophonic_retrigger_mode {
+        if self.system_parameters.monophonic_retrigger {
             let current_time = self.current_time;
             self.midi_channels[channel].kill_note(
                 midi_note,
@@ -148,8 +148,8 @@ impl SynthesizerCore {
             }
             // Update portamento control to current note
             let current_time = self.current_time;
-            let current_system = self.master_parameters.midi_system;
-            let enable = self.enable_event_system;
+            let current_system = self.midi_parameters.system;
+            let enable = self.system_parameters.events_enabled;
             let evs = self.midi_channels[channel].controller_change(
                 midi_controllers::PORTAMENTO_CONTROL,
                 internal_midi_note,
@@ -201,7 +201,7 @@ impl SynthesizerCore {
             // Find the bank index for the override patch
             if let Some((_, bank_idx)) = self
                 .sound_bank_manager
-                .get_preset_and_bank_idx(patch, self.master_parameters.midi_system)
+                .get_preset_and_bank_idx(patch, self.midi_parameters.system)
             {
                 // Get a preset clone from the bank so we can release the borrow
                 let preset_clone = self.sound_bank_manager.sound_bank_list[bank_idx]
@@ -328,7 +328,7 @@ impl SynthesizerCore {
 
             // Select the active oscillator type
             self.voices[voice_idx].oscillator_type =
-                self.master_parameters.interpolation_type;
+                self.system_parameters.interpolation_type;
 
             // Copy unmodulated generators from cache
             if cached.generators.len() == GENERATORS_AMOUNT {
@@ -556,7 +556,7 @@ impl SynthesizerCore {
         // -----------------------------------------------------------------------
         self.midi_channels[channel].voice_count += num_cached as u32;
 
-        let enable = self.enable_event_system;
+        let enable = self.system_parameters.events_enabled;
         if let Some(ev) = self.midi_channels[channel].build_channel_property_event(enable) {
             self.call_event(ev);
         }
@@ -683,7 +683,7 @@ mod tests {
             },
             44100.0,
             SynthProcessorOptions {
-                enable_event_system: true,
+                events_enabled: true,
                 ..Default::default()
             },
         );
@@ -836,7 +836,7 @@ mod tests {
     #[test]
     fn test_black_midi_very_low_velocity_ignored() {
         let (mut core, _events) = make_core_with_channel();
-        core.master_parameters.black_midi_mode = true;
+        core.system_parameters.black_midi_mode = true;
         // velocity 9 < 10 → always filtered in black MIDI mode
         core.note_on(0, 60, 9);
         assert_eq!(
@@ -848,7 +848,7 @@ mod tests {
     #[test]
     fn test_black_midi_high_voice_count_low_velocity_ignored() {
         let (mut core, _events) = make_core_with_channel();
-        core.master_parameters.black_midi_mode = true;
+        core.system_parameters.black_midi_mode = true;
         // Simulate high total voice count (> 200) + velocity 39 < 40
         core.voice_count = 201;
         core.note_on(0, 60, 39);
@@ -868,7 +868,7 @@ mod tests {
         // Velocity 50 with black MIDI mode should not be filtered by the black MIDI guard,
         // but will bail at the preset check (no sound bank loaded).
         let (mut core, _events) = make_core_with_channel();
-        core.master_parameters.black_midi_mode = true;
+        core.system_parameters.black_midi_mode = true;
         core.voice_count = 201;
         core.note_on(0, 60, 50); // velocity 50 >= 40 → passes black MIDI guard
         // No preset → voice_count remains 0 (bailed at preset check)
@@ -879,7 +879,7 @@ mod tests {
     fn test_black_midi_velocity_exactly_10_not_filtered() {
         // velocity == 10 must NOT be filtered by the "velocity < 10" rule
         let (mut core, _events) = make_core_with_channel();
-        core.master_parameters.black_midi_mode = true;
+        core.system_parameters.black_midi_mode = true;
         core.voice_count = 0; // Low voice count so only the velocity rule applies
         core.note_on(0, 60, 10); // velocity 10 → not filtered; bails at preset check
         assert_eq!(core.midi_channels[0].voice_count, 0); // no preset, but reached preset guard
