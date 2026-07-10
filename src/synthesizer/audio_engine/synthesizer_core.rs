@@ -535,8 +535,9 @@ impl SynthesizerCore {
         let chorus_gain = self.system_parameters.chorus_gain;
         let delay_gain = self.system_parameters.delay_gain;
         let midi_volume = self.midi_volume;
-        let pan_left = self.pan_left;
-        let pan_right = self.pan_right;
+        // 4.3.0: global master pan normalized to [-1, 1] (globalSystem.pan + globalMIDI.pan),
+        // folded additively into the per-voice pan index inside render_voice.
+        let global_pan = self.system_parameters.pan + self.midi_parameters.pan;
         let pan_smoothing_factor = self.pan_smoothing_factor;
         let current_time = self.current_time;
         let delay_active = self.delay_active;
@@ -600,8 +601,7 @@ impl SynthesizerCore {
                 chorus_gain,
                 delay_gain,
                 midi_volume,
-                pan_left,
-                pan_right,
+                global_pan,
                 effects_enabled,
                 delay_active,
                 pan_smoothing_factor,

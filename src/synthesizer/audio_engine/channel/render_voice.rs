@@ -64,8 +64,9 @@ impl MidiChannel {
     /// - `sample_count`: Number of samples to render.
     /// - `sample_rate`: Output sample rate in Hz (used for the phase-based LFOs).
     /// - `master_gain`, `reverb_gain`, `chorus_gain`, `delay_gain`: Global gain values.
-    /// - `midi_volume`: Global MIDI volume scale.
-    /// - `pan_left`, `pan_right`: Global pan (master pan) multipliers.
+    /// - `midi_volume`: Global MIDI volume scale (globalMIDI.gain, legacy curve).
+    /// - `global_pan`: Global master pan normalized to [-1, 1]
+    ///   (globalSystem.pan + globalMIDI.pan); folded additively into the pan index.
     /// - `enable_effects`: Whether to write to effect buffers.
     /// - `delay_active`: Whether delay effect is active.
     /// - `pan_smoothing_factor`: Smoothing coefficient for pan changes.
@@ -88,8 +89,7 @@ impl MidiChannel {
         chorus_gain: f64,
         delay_gain: f64,
         midi_volume: f64,
-        pan_left: f64,
-        pan_right: f64,
+        global_pan: f64,
         enable_effects: bool,
         delay_active: bool,
         pan_smoothing_factor: f64,
@@ -160,8 +160,11 @@ impl MidiChannel {
         // LFO + envelope modulation accumulators
         let mut lowpass_excursion = 0.0f64;
         let mut volume_excursion_centibels = 0.0f64;
-        // Amplitude-depth multiplier applied to the voice gain by the LFOs (base 1.0).
-        let mut voice_gain = 1.0f64;
+        // Voice gain multiplier. TS 4.3.0 initializes voiceGain to
+        //   voice.gainModifier * (1 + modulated[amplitude] / 1000)
+        // and then multiplies in the LFO amplitude-depth products below.
+        let mut voice_gain = voice.gain_modifier as f64
+            * (1.0 + voice.modulated_generators[gt::AMPLITUDE as usize] as f64 / 1000.0);
 
         // --- Vibrato LFO (phase-based, 4.3.0) ---
         // The LFO start time equals `start_time + timecentsToSeconds(delayVibLFO)`.
@@ -347,16 +350,24 @@ impl MidiChannel {
             voice.current_pan
         };
 
-        // `voice_gain` carries the LFO amplitude-depth multiplier (TS folds it into voiceGain).
-        let gain = master_gain * midi_volume * voice.gain_modifier as f64 * voice_gain;
-        // Match TS: (pan + 500) | 0 — add first (f64), then truncate to i32
-        let index = ((pan + 500.0) as i32).clamp(0, PAN_RESOLUTION as i32) as usize;
+        // 4.3.0 additive channel gain/pan model.
+        // currentGain = SPESSASYNTH_GAIN_FACTOR * globalSystem.gain * globalMIDI.gain * channelSystem.gain.
+        // `self.current_gain` already holds SPESSASYNTH_GAIN_FACTOR * channelSystem.gain; fold in the
+        // global gain: master_gain = globalSystem.gain, midi_volume = globalMIDI.gain (legacy curve).
+        let current_gain = master_gain * midi_volume * self.current_gain();
+        // outputGain = currentGain * voiceGain (voiceGain already carries gainModifier + amplitude + LFOs).
+        let output_gain = current_gain * voice_gain;
+        // currentPan = (globalSystem.pan + globalMIDI.pan + channelSystem.pan) * 500.
+        // `self.current_pan` already holds channelSystem.pan * 500; add the global pan part.
+        let channel_pan = self.current_pan() + global_pan * 500.0;
+        // index = (min(max(-500, pan + currentPan), 500) + 500) | 0 — ADDITIVE voice+channel pan.
+        let index = ((pan + channel_pan).clamp(MIN_PAN as f64, MAX_PAN as f64) + 500.0) as i32 as usize;
         let pan_left_table = get_pan_table_left();
         let pan_right_table = get_pan_table_right();
         // Keep gain_left/gain_right as f64 to match JS Float32Array behavior:
         // JS computes gainLeft * buffer[i] in f64, then truncates when writing to Float32Array.
-        let gain_left = pan_left_table[index] as f64 * gain * pan_left;
-        let gain_right = pan_right_table[index] as f64 * gain * pan_right;
+        let gain_left = pan_left_table[index] as f64 * output_gain;
+        let gain_right = pan_right_table[index] as f64 * output_gain;
 
         let buffer = &voice.buffer;
 
@@ -385,7 +396,7 @@ impl MidiChannel {
         let reverb_send_gen = voice.modulated_generators[gt::REVERB_EFFECTS_SEND as usize] as f64
             * voice.reverb_send;
         if reverb_send_gen > 0.0 {
-            let reverb_gain_total = reverb_gain * gain * (reverb_send_gen / 1000.0);
+            let reverb_gain_total = reverb_gain * output_gain * (reverb_send_gen / 1000.0);
             for (i, &samp) in buffer.iter().enumerate().take(sample_count) {
                 reverb_input[i] = (reverb_input[i] as f64 + reverb_gain_total * samp as f64) as f32;
             }
@@ -395,7 +406,7 @@ impl MidiChannel {
         let chorus_send_gen = voice.modulated_generators[gt::CHORUS_EFFECTS_SEND as usize] as f64
             * voice.chorus_send;
         if chorus_send_gen > 0.0 {
-            let chorus_gain_total = chorus_gain * gain * (chorus_send_gen / 1000.0);
+            let chorus_gain_total = chorus_gain * output_gain * (chorus_send_gen / 1000.0);
             for (i, &samp) in buffer.iter().enumerate().take(sample_count) {
                 chorus_input[i] = (chorus_input[i] as f64 + chorus_gain_total * samp as f64) as f32;
             }
@@ -406,7 +417,7 @@ impl MidiChannel {
             let delay_send_cc = self.midi_controllers[midi_controllers::VARIATION_DEPTH as usize] as f64
                 * voice.delay_send;
             if delay_send_cc > 0.0 {
-                let delay_gain_total = gain * delay_gain * ((delay_send_cc as i32 >> 7) as f64 / 127.0);
+                let delay_gain_total = output_gain * delay_gain * ((delay_send_cc as i32 >> 7) as f64 / 127.0);
                 for (i, &samp) in buffer.iter().enumerate().take(sample_count) {
                     delay_input[i] = (delay_input[i] as f64 + delay_gain_total * samp as f64) as f32;
                 }
