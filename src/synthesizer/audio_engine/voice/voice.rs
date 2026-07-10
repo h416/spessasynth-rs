@@ -194,6 +194,14 @@ pub struct Voice {
 
     /// Pitch offset in cents (used by drum parameters).
     pub pitch_offset: f64,
+
+    /// Current phase (0..1) of the vibrato LFO triangle wave.
+    /// Equivalent to: vibLfoPhase
+    pub vib_lfo_phase: f64,
+
+    /// Current phase (0..1) of the modulation LFO triangle wave.
+    /// Equivalent to: modLfoPhase
+    pub mod_lfo_phase: f64,
 }
 
 impl Voice {
@@ -248,6 +256,8 @@ impl Voice {
             chorus_send: 1.0,
             delay_send: 1.0,
             pitch_offset: 0.0,
+            vib_lfo_phase: 0.0,
+            mod_lfo_phase: 0.0,
         }
     }
 
@@ -316,6 +326,9 @@ impl Voice {
         self.override_release_vol_env = 0;
         self.portamento_duration = 0.0;
         self.portamento_from_key = -1;
+        // Important, these start at 1/4 way there!
+        self.vib_lfo_phase = 0.25;
+        self.mod_lfo_phase = 0.25;
     }
 }
 

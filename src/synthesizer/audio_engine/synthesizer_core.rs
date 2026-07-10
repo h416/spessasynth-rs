@@ -594,6 +594,7 @@ impl SynthesizerCore {
                 dly_slice,
                 start_index,
                 quantum_size,
+                self.sample_rate,
                 master_gain,
                 reverb_gain,
                 chorus_gain,

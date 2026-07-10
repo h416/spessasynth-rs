@@ -5,13 +5,12 @@ use std::sync::OnceLock;
 
 use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
-use crate::synthesizer::audio_engine::voice::lfo::{get_lfo_value, get_lfo_value_sine};
+use crate::synthesizer::audio_engine::voice::lfo::get_lfo_value_sine;
 use crate::synthesizer::audio_engine::voice::unit_converter::{
     abs_cents_to_hz, cb_attenuation_to_gain, cb_attenuation_to_gain_f64, timecents_to_seconds,
 };
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
-use crate::synthesizer::enums::custom_controllers;
 use crate::utils::loggin::spessa_synth_warn;
 
 const HALF_PI: f64 = std::f64::consts::PI / 2.0;
@@ -63,6 +62,7 @@ impl MidiChannel {
     /// - `reverb_input`, `chorus_input`, `delay_input`: Mono effect send buffers (zero-indexed).
     /// - `start_index`: Starting sample index in the output buffers.
     /// - `sample_count`: Number of samples to render.
+    /// - `sample_rate`: Output sample rate in Hz (used for the phase-based LFOs).
     /// - `master_gain`, `reverb_gain`, `chorus_gain`, `delay_gain`: Global gain values.
     /// - `midi_volume`: Global MIDI volume scale.
     /// - `pan_left`, `pan_right`: Global pan (master pan) multipliers.
@@ -82,6 +82,7 @@ impl MidiChannel {
         delay_input: &mut [f32],
         start_index: usize,
         sample_count: usize,
+        sample_rate: f64,
         master_gain: f64,
         reverb_gain: f64,
         chorus_gain: f64,
@@ -159,49 +160,87 @@ impl MidiChannel {
         // LFO + envelope modulation accumulators
         let mut lowpass_excursion = 0.0f64;
         let mut volume_excursion_centibels = 0.0f64;
+        // Amplitude-depth multiplier applied to the voice gain by the LFOs (base 1.0).
+        let mut voice_gain = 1.0f64;
 
-        // --- Vibrato LFO ---
-        let vib_pitch_depth = voice.modulated_generators[gt::VIB_LFO_TO_PITCH as usize];
-        // Note: 4.2.0 `vibLfoToVolume` semantics retained in slot 61 (renamed `amplitude`
-        // in TS 4.3.0). The AWE32 controller-matrix rework of render_voice.ts is ported
-        // in a later channel-engine task.
-        let vib_vol_depth = voice.modulated_generators[gt::AMPLITUDE as usize];
-        let vib_filter_depth = voice.modulated_generators[gt::VIB_LFO_TO_FILTER_FC as usize];
-        if vib_pitch_depth != 0 || vib_vol_depth != 0 || vib_filter_depth != 0 {
-            let vib_start = voice.start_time
-                + timecents_to_seconds(
-                    voice.modulated_generators[gt::DELAY_VIB_LFO as usize] as i32,
-                ) as f64;
-            let vib_freq_hz =
-                abs_cents_to_hz(voice.modulated_generators[gt::FREQ_VIB_LFO as usize] as i32)
-                    as f64;
-            let vib_lfo_value = get_lfo_value(vib_start, vib_freq_hz, time_now);
-            let mod_mult =
-                self.custom_controllers[custom_controllers::MODULATION_MULTIPLIER as usize];
-            cents += vib_lfo_value * vib_pitch_depth as f64 * mod_mult as f64;
-            // Negate because Audigy starts with an increase rather than decrease
-            volume_excursion_centibels += -vib_lfo_value * vib_vol_depth as f64;
-            lowpass_excursion += vib_lfo_value * vib_filter_depth as f64;
+        // --- Vibrato LFO (phase-based, 4.3.0) ---
+        // The LFO start time equals `start_time + timecentsToSeconds(delayVibLFO)`.
+        // TS caches it as `voice.vibLfoStartTime`; we compute it on the fly (same value)
+        // to avoid touching note_on.
+        let vib_lfo_start_time = voice.start_time
+            + timecents_to_seconds(
+                voice.modulated_generators[gt::DELAY_VIB_LFO as usize] as i32,
+            ) as f64;
+        if time_now >= vib_lfo_start_time {
+            let vib_pitch_depth =
+                voice.modulated_generators[gt::VIB_LFO_TO_PITCH as usize] as f64;
+            let vib_filter_depth =
+                voice.modulated_generators[gt::VIB_LFO_TO_FILTER_FC as usize] as f64;
+            let vib_amplitude_depth =
+                voice.modulated_generators[gt::VIB_LFO_AMPLITUDE_DEPTH as usize] as f64;
+            if vib_pitch_depth != 0.0 || vib_filter_depth != 0.0 || vib_amplitude_depth != 0.0 {
+                let vib_freq_hz = (abs_cents_to_hz(
+                    voice.modulated_generators[gt::FREQ_VIB_LFO as usize] as i32,
+                ) as f64
+                    + voice.modulated_generators[gt::VIB_LFO_RATE as usize] as f64 / 100.0)
+                    .max(0.0);
+                let rate_inc = vib_freq_hz * sample_count as f64 / sample_rate;
+                // Triangle wave in [-1, 1] from the current phase, then advance and wrap.
+                let vib_lfo_value = 1.0 - 4.0 * (voice.vib_lfo_phase - 0.5).abs();
+                voice.vib_lfo_phase += rate_inc;
+                if voice.vib_lfo_phase >= 1.0 {
+                    voice.vib_lfo_phase -= 1.0;
+                }
+                cents += vib_lfo_value * vib_pitch_depth;
+                // Low pass frequency
+                lowpass_excursion += vib_lfo_value * vib_filter_depth;
+                // Amplitude depth
+                voice_gain *=
+                    1.0 - ((vib_lfo_value + 1.0) / 2.0) * (vib_amplitude_depth / 1000.0);
+            }
         }
 
-        // --- Mod LFO ---
-        let mod_pitch_depth = voice.modulated_generators[gt::MOD_LFO_TO_PITCH as usize];
-        let mod_vol_depth = voice.modulated_generators[gt::MOD_LFO_TO_VOLUME as usize];
-        let mod_filter_depth = voice.modulated_generators[gt::MOD_LFO_TO_FILTER_FC as usize];
-        if mod_pitch_depth != 0 || mod_filter_depth != 0 || mod_vol_depth != 0 {
-            let mod_start = voice.start_time
-                + timecents_to_seconds(
-                    voice.modulated_generators[gt::DELAY_MOD_LFO as usize] as i32,
-                ) as f64;
-            let mod_freq_hz =
-                abs_cents_to_hz(voice.modulated_generators[gt::FREQ_MOD_LFO as usize] as i32)
-                    as f64;
-            let mod_lfo_value = get_lfo_value(mod_start, mod_freq_hz, time_now);
-            let mod_mult =
-                self.custom_controllers[custom_controllers::MODULATION_MULTIPLIER as usize];
-            cents += mod_lfo_value * mod_pitch_depth as f64 * mod_mult as f64;
-            volume_excursion_centibels += -mod_lfo_value * mod_vol_depth as f64;
-            lowpass_excursion += mod_lfo_value * mod_filter_depth as f64;
+        // --- Mod LFO (phase-based, 4.3.0) ---
+        let mod_lfo_start_time = voice.start_time
+            + timecents_to_seconds(
+                voice.modulated_generators[gt::DELAY_MOD_LFO as usize] as i32,
+            ) as f64;
+        if time_now >= mod_lfo_start_time {
+            let mod_pitch_depth =
+                voice.modulated_generators[gt::MOD_LFO_TO_PITCH as usize] as f64;
+            let mod_vol_depth =
+                voice.modulated_generators[gt::MOD_LFO_TO_VOLUME as usize] as f64;
+            let mod_filter_depth =
+                voice.modulated_generators[gt::MOD_LFO_TO_FILTER_FC as usize] as f64;
+            let mod_amplitude_depth =
+                voice.modulated_generators[gt::MOD_LFO_AMPLITUDE_DEPTH as usize] as f64;
+            // Don't compute mod lfo unless necessary
+            if mod_pitch_depth != 0.0
+                || mod_filter_depth != 0.0
+                || mod_vol_depth != 0.0
+                || mod_amplitude_depth != 0.0
+            {
+                let mod_freq_hz = (abs_cents_to_hz(
+                    voice.modulated_generators[gt::FREQ_MOD_LFO as usize] as i32,
+                ) as f64
+                    + voice.modulated_generators[gt::MOD_LFO_RATE as usize] as f64 / 100.0)
+                    .max(0.0);
+                let rate_inc = mod_freq_hz * sample_count as f64 / sample_rate;
+                let mod_lfo_value = 1.0 - 4.0 * (voice.mod_lfo_phase - 0.5).abs();
+                voice.mod_lfo_phase += rate_inc;
+                if voice.mod_lfo_phase >= 1.0 {
+                    voice.mod_lfo_phase -= 1.0;
+                }
+                cents += mod_lfo_value * mod_pitch_depth;
+                // Vol env volume offset.
+                // Negate the lfo value because Audigy starts with increase rather than decrease
+                volume_excursion_centibels += -mod_lfo_value * mod_vol_depth;
+                // Low pass frequency
+                lowpass_excursion += mod_lfo_value * mod_filter_depth;
+                // Amplitude depth
+                voice_gain *=
+                    1.0 - ((mod_lfo_value + 1.0) / 2.0) * (mod_amplitude_depth / 1000.0);
+            }
         }
 
         // --- Channel vibrato (GS NRPN) ---
@@ -308,7 +347,8 @@ impl MidiChannel {
             voice.current_pan
         };
 
-        let gain = master_gain * midi_volume * voice.gain_modifier as f64;
+        // `voice_gain` carries the LFO amplitude-depth multiplier (TS folds it into voiceGain).
+        let gain = master_gain * midi_volume * voice.gain_modifier as f64 * voice_gain;
         // Match TS: (pan + 500) | 0 — add first (f64), then truncate to i32
         let index = ((pan + 500.0) as i32).clamp(0, PAN_RESOLUTION as i32) as usize;
         let pan_left_table = get_pan_table_left();
