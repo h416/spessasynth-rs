@@ -7,7 +7,7 @@ use crate::synthesizer::audio_engine::synth_constants::{
 };
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
-use crate::synthesizer::enums::{custom_controllers, data_entry_states};
+use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::{ControllerChangeCallback, SynthProcessorEvent};
 use crate::soundbank::types::MIDISystem;
 use crate::utils::midi_hacks::BankSelectHacks;
@@ -42,11 +42,10 @@ impl MidiChannel {
 
         let mut events = Vec::new();
 
-        // LSB controllers (33–45, excluding dataEntryLSB = 38):
-        // append as lower 7 bits of the 14-bit main controller value.
+        // LSB controllers (33–63): append them as the lower 7 bits of the 14-bit
+        // main controller value. Bank select is handled separately above the range.
         if (midi_controllers::MODULATION_WHEEL_LSB..=midi_controllers::EFFECT_CONTROL2_LSB)
             .contains(&controller)
-            && controller != midi_controllers::DATA_ENTRY_LSB
         {
             let actual_cc = (controller - 32) as usize;
             if self.locked_controllers[actual_cc] {
@@ -61,8 +60,11 @@ impl MidiChannel {
             return events;
         }
 
-        // Apply CC to table (14-bit, MSB in upper bits)
-        self.midi_controllers[controller as usize] = (value as i16) << 7;
+        // Apply the CC to the table (top 7 bits only, to not override the LSB).
+        // For consistency this is also technically applied to the LSB controllers,
+        // but they are unused (except Parameter Numbers).
+        self.midi_controllers[controller as usize] =
+            ((value as i16) << 7) | (self.midi_controllers[controller as usize] & 0x7f);
 
         // Interpret special CCs
         match controller {
@@ -109,18 +111,21 @@ impl MidiChannel {
             }
 
             // RPN / NRPN state machine
-            midi_controllers::REGISTERED_PARAMETER_LSB => {
-                self.data_entry_state = data_entry_states::RP_FINE;
-            }
-
-            midi_controllers::REGISTERED_PARAMETER_MSB => {
-                self.data_entry_state = data_entry_states::RP_COARSE;
+            midi_controllers::REGISTERED_PARAMETER_LSB
+            | midi_controllers::REGISTERED_PARAMETER_MSB => {
+                // Clear and set state. This is technically not MIDI behavior,
+                // but some MIDI files only send MSB data:
+                // https://github.com/spessasus/spessasynth_core/pull/78#discussion_r3233413622
+                self.midi_controllers[midi_controllers::DATA_ENTRY_MSB as usize] = 0;
+                self.last_parameter_is_registered = true;
             }
 
             midi_controllers::NON_REGISTERED_PARAMETER_MSB => {
                 // SF2 spec section 9.6.2: reset SF2 NRPN generator LSB on new NRPN
                 self.custom_controllers[custom_controllers::SF2_NPRN_GENERATOR_LSB as usize] = 0.0;
-                self.data_entry_state = data_entry_states::NRP_COARSE;
+                // Clear and set state (some MIDI files only send MSB data).
+                self.midi_controllers[midi_controllers::DATA_ENTRY_MSB as usize] = 0;
+                self.last_parameter_is_registered = false;
             }
 
             midi_controllers::NON_REGISTERED_PARAMETER_LSB => {
@@ -158,24 +163,19 @@ impl MidiChannel {
                         _ => {}
                     }
                 }
-                self.data_entry_state = data_entry_states::NRP_FINE;
+                // Clear and set state (some MIDI files only send MSB data).
+                self.midi_controllers[midi_controllers::DATA_ENTRY_MSB as usize] = 0;
+                self.last_parameter_is_registered = false;
             }
 
-            // Data entry MSB → process via dataEntryCoarse
-            midi_controllers::DATA_ENTRY_MSB => {
-                let mut sub = self.data_entry_coarse(
-                    value,
+            // Data entry MSB or LSB → process the (now 14-bit) data entry value.
+            midi_controllers::DATA_ENTRY_MSB | midi_controllers::DATA_ENTRY_LSB => {
+                let mut sub = self.data_entry(
                     voices,
                     current_time,
                     current_system,
                     enable_event_system,
                 );
-                events.append(&mut sub);
-            }
-
-            // Data entry LSB → process via dataEntryFine
-            midi_controllers::DATA_ENTRY_LSB => {
-                let mut sub = self.data_entry_fine(value, voices);
                 events.append(&mut sub);
             }
 
@@ -207,6 +207,13 @@ impl MidiChannel {
                         }
                     }
                 }
+            }
+
+            // Portamento control: force portamento once (MIDI 1.0 spec, page 16),
+            // even if portamento on/off (CC#65) is off.
+            midi_controllers::PORTAMENTO_CONTROL => {
+                self.last_note = value as i32;
+                self.portamento_force = true;
             }
 
             // Default: compute modulators for all active voices

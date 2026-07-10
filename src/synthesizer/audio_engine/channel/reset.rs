@@ -9,7 +9,7 @@ use crate::synthesizer::audio_engine::channel::parameters::midi::{
 };
 use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
 use crate::synthesizer::audio_engine::voice::voice::Voice;
-use crate::synthesizer::enums::{custom_controllers, data_entry_states};
+use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::SynthProcessorEvent;
 use crate::soundbank::types::MIDISystem;
 use crate::utils::midi_hacks::BankSelectHacks;
@@ -52,29 +52,15 @@ pub fn is_non_resettable(cc: u8) -> bool {
 }
 
 impl MidiChannel {
-    /// Resets portamento control to the XG default (60) or 0 for other systems.
+    /// Resets portamento state.
     ///
-    /// Equivalent to: resetPortamento(sendCC)
-    fn reset_portamento(
-        &mut self,
-        send_cc: bool,
-        voices: &mut [Voice],
-        current_time: f64,
-        current_system: MIDISystem,
-    ) -> Vec<SynthProcessorEvent> {
-        if self.locked_controllers[midi_controllers::PORTAMENTO_CONTROL as usize] {
-            return Vec::new();
-        }
+    /// Portamento has a quirk: for XG the last note is set to 60, for others it
+    /// is set to none (-1), so no portamento happens on the first note-on.
+    ///
+    /// Equivalent to: resetPortamento()
+    fn reset_portamento(&mut self, current_system: MIDISystem) {
         let ch_system = self.channel_system(current_system);
-        let value = if ch_system == MIDISystem::Xg { 60 } else { 0 };
-        self.controller_change(
-            midi_controllers::PORTAMENTO_CONTROL,
-            value,
-            voices,
-            current_time,
-            current_system,
-            send_cc,
-        )
+        self.last_note = if ch_system == MIDISystem::Xg { 60 } else { -1 };
     }
 
     /// Resets all controllers to their default values (full reset).
@@ -129,13 +115,7 @@ impl MidiChannel {
         }
 
         // Reset portamento
-        let mut sub = self.reset_portamento(
-            send_event && enable_event_system,
-            voices,
-            current_time,
-            current_system,
-        );
-        events.append(&mut sub);
+        self.reset_portamento(current_system);
 
         // Reset custom vibrato
         self.channel_vibrato.rate = 0.0;
@@ -258,7 +238,7 @@ impl MidiChannel {
     ///
     /// Equivalent to: resetParameters()
     pub fn reset_parameters(&mut self) {
-        self.data_entry_state = data_entry_states::IDLE;
+        self.last_parameter_is_registered = true;
         self.midi_controllers[midi_controllers::NON_REGISTERED_PARAMETER_LSB as usize] = 127 << 7;
         self.midi_controllers[midi_controllers::NON_REGISTERED_PARAMETER_MSB as usize] = 127 << 7;
         self.midi_controllers[midi_controllers::REGISTERED_PARAMETER_LSB as usize] = 127 << 7;

@@ -26,7 +26,7 @@ use crate::synthesizer::audio_engine::synth_constants::{
     GENERATOR_OVERRIDE_NO_CHANGE_VALUE, MIN_NOTE_LENGTH,
 };
 use crate::synthesizer::audio_engine::voice::voice::Voice;
-use crate::synthesizer::enums::{DataEntryState, custom_controllers, data_entry_states};
+use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::{ChannelProperty, ChannelPropertyChangeCallback, SynthProcessorEvent};
 use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::spessa_synth_info;
@@ -95,9 +95,21 @@ pub struct MidiChannel {
     /// Equivalent to: randomPan
     pub random_pan: bool,
 
-    /// Current MIDI data entry state (RPN/NRPN).
-    /// Equivalent to: dataEntryState: DataEntryState
-    pub data_entry_state: DataEntryState,
+    /// If the last selected parameter was Registered (RPN). If false, the last
+    /// parameter was Non-Registered (NRPN). Replaces the pre-4.3.0 `dataEntryState`.
+    /// Equivalent to: lastParameterIsRegistered
+    pub last_parameter_is_registered: bool,
+
+    /// The last pressed note on this channel. -1 means none.
+    /// Strictly internal (not a MIDI parameter); set by Portamento Control CC
+    /// and by the sequencer for accurate portamento recreation.
+    /// Equivalent to: lastNote
+    pub last_note: i32,
+
+    /// If the portamento should be executed once regardless of Portamento on/off.
+    /// Per the MIDI spec, CC#84 (Portamento Control) ignores on/off.
+    /// Equivalent to: portamentoForce
+    pub portamento_force: bool,
 
     /// The currently selected MIDI patch (program/bank).
     /// Equivalent to: patch: MIDIPatch
@@ -199,7 +211,9 @@ impl MidiChannel {
             sys_ex_modulators: DynamicModulatorSystem::new(),
             drum_channel: false,
             random_pan: false,
-            data_entry_state: data_entry_states::IDLE,
+            last_parameter_is_registered: true,
+            last_note: -1,
+            portamento_force: false,
             patch: MidiPatch {
                 program: 0,
                 bank_msb: 0,
@@ -325,6 +339,13 @@ impl MidiChannel {
             (semitones - key_shift as f64) * 100.0,
         );
         self.build_channel_property_event(enable_event_system)
+    }
+
+    /// Sets the last pressed note. Strictly internal, used by the sequencer for
+    /// very accurate portamento recreation.
+    /// Equivalent to: setLastNote(midiNote)
+    pub fn set_last_note(&mut self, midi_note: i32) {
+        self.last_note = midi_note;
     }
 
     /// Sets the octave tuning for all 128 notes (repeated from 12-element array).
@@ -813,8 +834,7 @@ impl MidiChannel {
     // controller_change is implemented in channel/controller_change.rs
     // reset_controllers, reset_preset, reset_controllers_rp15, reset_parameters
     //   are implemented in channel/reset.rs
-    // data_entry_coarse is implemented in channel/data_entry.rs
-    // data_entry_fine is implemented in channel/data_entry.rs
+    // data_entry is implemented in channel/data_entry.rs
 
     // render_voice is implemented in channel/render_voice.rs
 }

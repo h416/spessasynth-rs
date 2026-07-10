@@ -1,36 +1,42 @@
 /// data_entry.rs
-/// purpose: MIDI data entry coarse (MSB) and fine (LSB) handlers for MidiChannel.
-/// Ported from:
-///   - src/synthesizer/audio_engine/engine_methods/controller_control/data_entry/data_entry_coarse.ts
-///   - src/synthesizer/audio_engine/engine_methods/controller_control/data_entry/data_entry_fine.ts
+/// purpose: Unified MIDI data entry (RPN/NRPN) handler for MidiChannel.
+/// Ported from: src/synthesizer/audio_engine/channel/data_entry.ts
+///
+/// # 4.3.0 notes
+/// TS 4.3.0 merged the previous `dataEntryCoarse`/`dataEntryFine` pair into a single
+/// `dataEntry()` that is invoked for both the Data Entry MSB and LSB controllers and
+/// reads the full 14-bit value stored in the Data Entry MSB slot. RPN vs NRPN is now
+/// selected by `lastParameterIsRegistered` instead of the old 4-state machine.
+///
+/// The 4.3.0 channel-parameter migration (pitchWheelRange/keyShift/fineTune/modulationDepth
+/// as `_midiParameters`) and the custom-vibrato removal are handled in later tasks; here the
+/// existing Rust primitives (`set_tuning`, `set_modulation_depth`, `set_custom_controller`,
+/// `midi_controllers[NON_CC + ...]`, `channel_vibrato`) are reused, so the numeric fixes
+/// (LSB retention, fractional fine-tuning, 14-bit modulation depth, fractional pitch wheel
+/// range) are applied without touching the LFO/pan rendering path.
 use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::GeneratorType;
 use crate::soundbank::enums::modulator_sources;
+use crate::soundbank::types::MIDISystem;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
 use crate::synthesizer::audio_engine::channel::parameters::midi::NON_CC_INDEX_OFFSET;
 use crate::synthesizer::audio_engine::voice::voice::Voice;
-use crate::synthesizer::enums::{custom_controllers, data_entry_states};
+use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::SynthProcessorEvent;
-use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::spessa_synth_info;
 
-// Merged from data_entry_fine.ts: `use super::data_entry_coarse::{non_registered_msb, registered_parameter_types as rpt};`
-// `non_registered_msb` is a sibling item declared below and needs no import.
-// `registered_parameter_types` is aliased here for use in `data_entry_fine`'s body.
-use registered_parameter_types as rpt;
-
 /// Registered parameter number types (RPN).
-/// Equivalent to: registeredParameterTypes
+/// Equivalent to: RegisteredParameterTypes
 pub mod registered_parameter_types {
-    pub const PITCH_WHEEL_RANGE: u16 = 0x00_00;
-    pub const FINE_TUNING: u16 = 0x00_01;
-    pub const COARSE_TUNING: u16 = 0x00_02;
-    pub const MODULATION_DEPTH: u16 = 0x00_05;
-    pub const RESET_PARAMETERS: u16 = 0x3f_ff;
+    pub const PITCH_WHEEL_RANGE: i32 = 0x00_00;
+    pub const FINE_TUNING: i32 = 0x00_01;
+    pub const COARSE_TUNING: i32 = 0x00_02;
+    pub const MODULATION_DEPTH: i32 = 0x00_05;
+    pub const RESET_PARAMETERS: i32 = 0x3f_ff;
 }
 
 /// Non-registered parameter MSB values.
-/// Equivalent to: nonRegisteredMSB
+/// Equivalent to: NonRegisteredMSB
 pub mod non_registered_msb {
     pub const PART_PARAMETER: u8 = 0x01;
     pub const DRUM_PITCH: u8 = 0x18;
@@ -70,188 +76,220 @@ fn add_default_vibrato(chan: &mut MidiChannel) {
 }
 
 impl MidiChannel {
-    /// Handles MIDI data entry coarse (MSB) change for the current channel.
+    /// Executes a data entry change for the current channel.
     ///
-    /// Processes RPN and NRPN messages based on the current data entry state.
+    /// Reads the full 14-bit Data Entry value and dispatches to RPN or NRPN
+    /// handling depending on `last_parameter_is_registered`.
     ///
-    /// Equivalent to: dataEntryCoarse(dataValue)
-    pub fn data_entry_coarse(
+    /// Equivalent to: dataEntry()
+    pub fn data_entry(
         &mut self,
-        data_value: u8,
         voices: &mut [Voice],
         current_time: f64,
         current_system: MIDISystem,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
-        // Store in cc table
-        self.midi_controllers[midi_controllers::DATA_ENTRY_MSB as usize] = (data_value as i16) << 7;
-
         let mut events = Vec::new();
 
-        match self.data_entry_state {
-            data_entry_states::IDLE => {
-                // No-op
-            }
+        // Stored in the cc table as a 14-bit value.
+        let data_value = self.midi_controllers[midi_controllers::DATA_ENTRY_MSB as usize] as i32;
 
-            data_entry_states::NRP_FINE => {
-                if self.lock_gs_nrpn_params {
-                    return events;
+        // --- RPN handling ---
+        if self.last_parameter_is_registered {
+            let rpn_value = (self.midi_controllers
+                [midi_controllers::REGISTERED_PARAMETER_MSB as usize]
+                as i32)
+                | ((self.midi_controllers[midi_controllers::REGISTERED_PARAMETER_LSB as usize] >> 7)
+                    as i32);
+
+            use registered_parameter_types as rpt;
+            match rpn_value {
+                // Pitch wheel range: may be fractional, so store the full 14-bit value
+                // (the consumer divides by 128 to obtain the semitone amount).
+                rpt::PITCH_WHEEL_RANGE => {
+                    self.midi_controllers
+                        [NON_CC_INDEX_OFFSET + modulator_sources::PITCH_WHEEL_RANGE as usize] =
+                        data_value as i16;
+                    spessa_synth_info(&format!(
+                        "Pitch Wheel Range for {}: {} semitones",
+                        self.channel,
+                        data_value as f64 / 128.0
+                    ));
                 }
-                let nrpn_coarse = (self.midi_controllers
-                    [midi_controllers::NON_REGISTERED_PARAMETER_MSB as usize]
-                    >> 7) as u8;
-                let nrpn_fine = (self.midi_controllers
-                    [midi_controllers::NON_REGISTERED_PARAMETER_LSB as usize]
-                    >> 7) as u8;
-                let data_entry_fine =
-                    (self.midi_controllers[midi_controllers::DATA_ENTRY_LSB as usize] >> 7) as u8;
 
-                match nrpn_coarse {
-                    non_registered_msb::PART_PARAMETER => {
-                        let mut sub_events = self.handle_nrpn_part_parameter(
-                            nrpn_fine,
-                            data_value,
-                            voices,
-                            current_time,
-                            current_system,
-                            enable_event_system,
-                        );
-                        events.append(&mut sub_events);
-                    }
+                // Coarse tuning: semitones, discard the LSB.
+                rpt::COARSE_TUNING => {
+                    let semitones = (data_value >> 7) - 64;
+                    self.set_custom_controller(
+                        custom_controllers::CHANNEL_TUNING_SEMITONES,
+                        semitones as f64,
+                    );
+                    spessa_synth_info(&format!(
+                        "Coarse tuning for {}: {} semitones",
+                        self.channel, semitones
+                    ));
+                }
 
-                    non_registered_msb::DRUM_PITCH => {
-                        if self.drum_channel && (nrpn_fine as usize) < 128 {
-                            let pitch = if self.channel_system(current_system) == MIDISystem::Xg {
-                                (data_value as i32 - 64) * 100
-                            } else {
-                                (data_value as i32 - 64) * 50
-                            };
-                            self.drum_params[nrpn_fine as usize].pitch = pitch as f64;
-                            spessa_synth_info(&format!(
-                                "Drum pitch for note {} on ch {}: {} cents",
-                                nrpn_fine, self.channel, pitch
-                            ));
-                        }
-                    }
+                // Fine-tuning: resolution is 100/8192 cents.
+                rpt::FINE_TUNING => {
+                    let final_tuning = data_value - 8192;
+                    self.set_tuning(final_tuning as f64 / 81.92, true);
+                }
 
-                    non_registered_msb::DRUM_PITCH_FINE => {
-                        if self.drum_channel && (nrpn_fine as usize) < 128 {
-                            let fine = data_value as i32 - 64;
-                            self.drum_params[nrpn_fine as usize].pitch += fine as f64;
-                            spessa_synth_info(&format!(
-                                "Drum pitch fine for note {} on ch {}: {} cents",
-                                nrpn_fine, self.channel, fine
-                            ));
-                        }
-                    }
+                // Modulation depth: cents, so data / 128 * 100 == data / 1.28.
+                rpt::MODULATION_DEPTH => {
+                    self.set_modulation_depth(data_value as f64 / 1.28);
+                }
 
-                    non_registered_msb::DRUM_LEVEL => {
-                        if self.drum_channel && (nrpn_fine as usize) < 128 {
-                            self.drum_params[nrpn_fine as usize].gain = data_value as f64 / 120.0;
-                            spessa_synth_info(&format!(
-                                "Drum level for note {} on ch {}: {}",
-                                nrpn_fine, self.channel, data_value
-                            ));
-                        }
-                    }
+                rpt::RESET_PARAMETERS => {
+                    self.reset_parameters();
+                }
 
-                    non_registered_msb::DRUM_PAN => {
-                        if self.drum_channel && (nrpn_fine as usize) < 128 {
-                            self.drum_params[nrpn_fine as usize].pan = data_value;
-                            spessa_synth_info(&format!(
-                                "Drum pan for note {} on ch {}: {}",
-                                nrpn_fine, self.channel, data_value
-                            ));
-                        }
-                    }
-
-                    non_registered_msb::DRUM_REVERB => {
-                        if self.drum_channel && (nrpn_fine as usize) < 128 {
-                            self.drum_params[nrpn_fine as usize].reverb_gain =
-                                data_value as f64 / 127.0;
-                            spessa_synth_info(&format!(
-                                "Drum reverb for note {} on ch {}: {}",
-                                nrpn_fine, self.channel, data_value
-                            ));
-                        }
-                    }
-
-                    non_registered_msb::DRUM_CHORUS => {
-                        if self.drum_channel && (nrpn_fine as usize) < 128 {
-                            self.drum_params[nrpn_fine as usize].chorus_gain =
-                                data_value as f64 / 127.0;
-                            spessa_synth_info(&format!(
-                                "Drum chorus for note {} on ch {}: {}",
-                                nrpn_fine, self.channel, data_value
-                            ));
-                        }
-                    }
-
-                    non_registered_msb::DRUM_DELAY => {
-                        if self.drum_channel && (nrpn_fine as usize) < 128 {
-                            self.drum_params[nrpn_fine as usize].delay_gain =
-                                data_value as f64 / 127.0;
-                            spessa_synth_info(&format!(
-                                "Drum delay for note {} on ch {}: {}",
-                                nrpn_fine, self.channel, data_value
-                            ));
-                        }
-                    }
-
-                    non_registered_msb::AWE32 => {
-                        // AWE32 is handled via data_entry_fine (LSB), not coarse
-                    }
-
-                    non_registered_msb::SF2 => {
-                        if nrpn_fine <= 100 {
-                            let r#gen = self.custom_controllers
-                                [custom_controllers::SF2_NPRN_GENERATOR_LSB as usize]
-                                as GeneratorType;
-                            let offset =
-                                (((data_value as i32) << 7) | data_entry_fine as i32) - 8192;
-                            self.set_generator_offset(r#gen, offset as i16, voices);
-                        }
-                    }
-
-                    _ => {
-                        if data_value != 64 {
-                            spessa_synth_info(&format!(
-                                "Unrecognized NRPN for ch {}: (0x{:02X} 0x{:02X}) data value: {}",
-                                self.channel, nrpn_coarse, nrpn_fine, data_value
-                            ));
-                        }
-                    }
+                _ => {
+                    spessa_synth_info(&format!(
+                        "Unrecognized RPN for ch {}: (0x{:04X}) data value: {}",
+                        self.channel, rpn_value, data_value
+                    ));
                 }
             }
+            return events;
+        }
 
-            // RPCoarse or RPFine
-            _ => {
-                let rpn_value = (self.midi_controllers
-                    [midi_controllers::REGISTERED_PARAMETER_MSB as usize]
-                    as u16)
-                    | ((self.midi_controllers[midi_controllers::REGISTERED_PARAMETER_LSB as usize]
-                        >> 7) as u16);
+        // --- NRPN handling ---
+        // Keep the existing Rust GS-NRPN lock gate (equivalent to the drumLock/nrpnParamLock
+        // gating used by TS; consolidating to the exact TS system parameters is deferred to
+        // the channel-parameter migration).
+        if self.lock_gs_nrpn_params {
+            return events;
+        }
 
-                let mut sub_events = self.handle_rpn_coarse(
-                    rpn_value,
-                    data_value,
+        let param_coarse = (self.midi_controllers
+            [midi_controllers::NON_REGISTERED_PARAMETER_MSB as usize]
+            >> 7) as u8;
+        let param_fine = (self.midi_controllers
+            [midi_controllers::NON_REGISTERED_PARAMETER_LSB as usize]
+            >> 7) as u8;
+        let data_coarse = (data_value >> 7) as u8;
+
+        match param_coarse {
+            // Part parameters (vibrato and EG)
+            non_registered_msb::PART_PARAMETER => {
+                let mut sub = self.handle_nrpn_part_parameter(
+                    param_fine,
+                    data_coarse,
                     voices,
                     current_time,
                     current_system,
                     enable_event_system,
                 );
-                events.append(&mut sub_events);
+                events.append(&mut sub);
+            }
+
+            // Drum pitch: it is actually 50 cents (not for XG, and not when the SC-55
+            // preset is explicitly requested via MAP1 / bank LSB 1, where it is 100 cents).
+            // https://github.com/spessasus/spessasynth_core/pull/58#issuecomment-3893343073
+            non_registered_msb::DRUM_PITCH => {
+                let pitch = if self.channel_system(current_system) == MIDISystem::Xg
+                    || self.patch.bank_lsb == 1
+                {
+                    (data_coarse as i32 - 64) * 100
+                } else {
+                    (data_coarse as i32 - 64) * 50
+                };
+                self.drum_params[param_fine as usize].pitch = pitch as f64;
+                spessa_synth_info(&format!(
+                    "Drum {} pitch for {}: {} cents",
+                    param_fine, self.channel, pitch
+                ));
+            }
+
+            non_registered_msb::DRUM_PITCH_FINE => {
+                let pitch = data_coarse as i32 - 64;
+                self.drum_params[param_fine as usize].pitch += pitch as f64;
+                spessa_synth_info(&format!(
+                    "Drum {} pitch fine for {}: {} cents",
+                    param_fine, self.channel, self.drum_params[param_fine as usize].pitch
+                ));
+            }
+
+            non_registered_msb::DRUM_LEVEL => {
+                self.drum_params[param_fine as usize].gain = data_coarse as f64 / 120.0;
+                spessa_synth_info(&format!(
+                    "Drum {} level for {}: {}",
+                    param_fine, self.channel, data_coarse
+                ));
+            }
+
+            non_registered_msb::DRUM_PAN => {
+                self.drum_params[param_fine as usize].pan = data_coarse;
+                spessa_synth_info(&format!(
+                    "Drum {} pan for {}: {}",
+                    param_fine, self.channel, data_coarse
+                ));
+            }
+
+            non_registered_msb::DRUM_REVERB => {
+                self.drum_params[param_fine as usize].reverb_gain = data_coarse as f64 / 127.0;
+                spessa_synth_info(&format!(
+                    "Drum {} reverb level for {}: {}",
+                    param_fine, self.channel, data_coarse
+                ));
+            }
+
+            non_registered_msb::DRUM_CHORUS => {
+                self.drum_params[param_fine as usize].chorus_gain = data_coarse as f64 / 127.0;
+                spessa_synth_info(&format!(
+                    "Drum {} chorus level for {}: {}",
+                    param_fine, self.channel, data_coarse
+                ));
+            }
+
+            non_registered_msb::DRUM_DELAY => {
+                self.drum_params[param_fine as usize].delay_gain = data_coarse as f64 / 127.0;
+                spessa_synth_info(&format!(
+                    "Drum {} delay level for {}: {}",
+                    param_fine, self.channel, data_value
+                ));
+            }
+
+            // SoundBlaster AWE32 NRPN
+            non_registered_msb::AWE32 => {
+                self.handle_awe32_nrpn(param_fine as usize, data_value, voices);
+            }
+
+            // SF2 NRPN
+            non_registered_msb::SF2 => {
+                // Per SF spec, NRPN Select LSB > 100 is for setup only and should not
+                // be used on its own to select a generator parameter.
+                if param_fine <= 100 {
+                    let r#gen = self.custom_controllers
+                        [custom_controllers::SF2_NPRN_GENERATOR_LSB as usize]
+                        as GeneratorType;
+                    let offset = data_value - 8192;
+                    self.set_generator_offset(r#gen, offset as i16, voices);
+                }
+            }
+
+            _ => {
+                spessa_synth_info(&format!(
+                    "Unrecognized NRPN for ch {}: (0x{:02X} 0x{:02X}) data value: {}",
+                    self.channel, param_coarse, param_fine, data_coarse
+                ));
             }
         }
 
         events
     }
 
-    /// Processes NRPN part parameter messages (NRPNCoarse = 0x01).
+    /// Processes NRPN part parameter messages (NRPN MSB = 0x01): custom vibrato and EG.
+    ///
+    /// The custom channel vibrato is a pre-4.3.0 mechanism retained until the LFO rework;
+    /// the filter/EG cases route through the corresponding CCs as in TS.
+    #[allow(clippy::too_many_arguments)]
     fn handle_nrpn_part_parameter(
         &mut self,
         nrpn_fine: u8,
-        data_value: u8,
+        data_coarse: u8,
         voices: &mut [Voice],
         current_time: f64,
         current_system: MIDISystem,
@@ -262,45 +300,45 @@ impl MidiChannel {
 
         match nrpn_fine {
             nrl::VIBRATO_RATE => {
-                if data_value == 64 {
+                if data_coarse == 64 {
                     return events;
                 }
                 add_default_vibrato(self);
-                self.channel_vibrato.rate = (data_value as f64 / 64.0) * 8.0;
+                self.channel_vibrato.rate = (data_coarse as f64 / 64.0) * 8.0;
                 spessa_synth_info(&format!(
                     "Vibrato rate for {}: {} = {} Hz",
-                    self.channel, data_value, self.channel_vibrato.rate
+                    self.channel, data_coarse, self.channel_vibrato.rate
                 ));
             }
 
             nrl::VIBRATO_DEPTH => {
-                if data_value == 64 {
+                if data_coarse == 64 {
                     return events;
                 }
                 add_default_vibrato(self);
-                self.channel_vibrato.depth = data_value as f64 / 2.0;
+                self.channel_vibrato.depth = data_coarse as f64 / 2.0;
                 spessa_synth_info(&format!(
                     "Vibrato depth for {}: {} = {} cents",
-                    self.channel, data_value, self.channel_vibrato.depth
+                    self.channel, data_coarse, self.channel_vibrato.depth
                 ));
             }
 
             nrl::VIBRATO_DELAY => {
-                if data_value == 64 {
+                if data_coarse == 64 {
                     return events;
                 }
                 add_default_vibrato(self);
-                self.channel_vibrato.delay = data_value as f64 / 64.0 / 3.0;
+                self.channel_vibrato.delay = data_coarse as f64 / 64.0 / 3.0;
                 spessa_synth_info(&format!(
                     "Vibrato delay for {}: {} = {} seconds",
-                    self.channel, data_value, self.channel_vibrato.delay
+                    self.channel, data_coarse, self.channel_vibrato.delay
                 ));
             }
 
             nrl::TVF_FILTER_CUTOFF => {
                 let mut sub = self.controller_change(
                     midi_controllers::BRIGHTNESS,
-                    data_value,
+                    data_coarse,
                     voices,
                     current_time,
                     current_system,
@@ -309,14 +347,14 @@ impl MidiChannel {
                 events.append(&mut sub);
                 spessa_synth_info(&format!(
                     "Filter cutoff for {}: {}",
-                    self.channel, data_value
+                    self.channel, data_coarse
                 ));
             }
 
             nrl::TVF_FILTER_RESONANCE => {
                 let mut sub = self.controller_change(
                     midi_controllers::FILTER_RESONANCE,
-                    data_value,
+                    data_coarse,
                     voices,
                     current_time,
                     current_system,
@@ -325,14 +363,14 @@ impl MidiChannel {
                 events.append(&mut sub);
                 spessa_synth_info(&format!(
                     "Filter resonance for {}: {}",
-                    self.channel, data_value
+                    self.channel, data_coarse
                 ));
             }
 
             nrl::EG_ATTACK_TIME => {
                 let mut sub = self.controller_change(
                     midi_controllers::ATTACK_TIME,
-                    data_value,
+                    data_coarse,
                     voices,
                     current_time,
                     current_system,
@@ -341,14 +379,14 @@ impl MidiChannel {
                 events.append(&mut sub);
                 spessa_synth_info(&format!(
                     "EG attack time for {}: {}",
-                    self.channel, data_value
+                    self.channel, data_coarse
                 ));
             }
 
             nrl::EG_DECAY_TIME => {
                 let mut sub = self.controller_change(
                     midi_controllers::DECAY_TIME,
-                    data_value,
+                    data_coarse,
                     voices,
                     current_time,
                     current_system,
@@ -357,14 +395,14 @@ impl MidiChannel {
                 events.append(&mut sub);
                 spessa_synth_info(&format!(
                     "EG decay time for {}: {}",
-                    self.channel, data_value
+                    self.channel, data_coarse
                 ));
             }
 
             nrl::EG_RELEASE_TIME => {
                 let mut sub = self.controller_change(
                     midi_controllers::RELEASE_TIME,
-                    data_value,
+                    data_coarse,
                     voices,
                     current_time,
                     current_system,
@@ -373,185 +411,18 @@ impl MidiChannel {
                 events.append(&mut sub);
                 spessa_synth_info(&format!(
                     "EG release time for {}: {}",
-                    self.channel, data_value
+                    self.channel, data_coarse
                 ));
             }
 
             _ => {
-                if data_value != 64 {
-                    spessa_synth_info(&format!(
-                        "Unrecognized NRPN for ch {}: (0x01 0x{:02X}) data value: {}",
-                        self.channel, nrpn_fine, data_value
-                    ));
-                }
+                spessa_synth_info(&format!(
+                    "Unrecognized NRPN for ch {}: (0x01 0x{:02X}) data value: {}",
+                    self.channel, nrpn_fine, data_coarse
+                ));
             }
         }
 
         events
-    }
-
-    /// Processes RPN coarse/fine messages (registeredParameterTypes).
-    fn handle_rpn_coarse(
-        &mut self,
-        rpn_value: u16,
-        data_value: u8,
-        voices: &mut [Voice],
-        current_time: f64,
-        current_system: MIDISystem,
-        enable_event_system: bool,
-    ) -> Vec<SynthProcessorEvent> {
-        use registered_parameter_types as rpt;
-        let mut events = Vec::new();
-
-        match rpn_value {
-            rpt::PITCH_WHEEL_RANGE => {
-                self.midi_controllers
-                    [NON_CC_INDEX_OFFSET + modulator_sources::PITCH_WHEEL_RANGE as usize] =
-                    (data_value as i16) << 7;
-                spessa_synth_info(&format!(
-                    "Pitch wheel range for {}: {} semitones",
-                    self.channel, data_value
-                ));
-            }
-
-            rpt::COARSE_TUNING => {
-                let semitones = data_value as i32 - 64;
-                self.set_custom_controller(
-                    custom_controllers::CHANNEL_TUNING_SEMITONES,
-                    semitones as f64,
-                );
-                spessa_synth_info(&format!(
-                    "Coarse tuning for {}: {} semitones",
-                    self.channel, semitones
-                ));
-            }
-
-            rpt::FINE_TUNING => {
-                // Store raw value; LSB will be adjusted in data_entry_fine
-                self.set_tuning(data_value as f64 - 64.0, false);
-            }
-
-            rpt::MODULATION_DEPTH => {
-                self.set_modulation_depth(data_value as f64 * 100.0);
-            }
-
-            rpt::RESET_PARAMETERS => {
-                self.reset_parameters();
-            }
-
-            _ => {
-                spessa_synth_info(&format!(
-                    "Unrecognized RPN for ch {}: (0x{:04X}) data value: {}",
-                    self.channel, rpn_value, data_value
-                ));
-            }
-        }
-
-        let _ = (voices, current_time, current_system, enable_event_system); // consumed via sub-calls
-        events
-    }
-}
-
-impl MidiChannel {
-    /// Handles MIDI data entry fine (LSB) change for the current channel.
-    ///
-    /// Processes RPN fine-tuning and AWE32 NRPN messages.
-    ///
-    /// Equivalent to: dataEntryFine(dataValue)
-    pub fn data_entry_fine(
-        &mut self,
-        data_value: u8,
-        voices: &mut [Voice],
-    ) -> Vec<SynthProcessorEvent> {
-        // Store in cc table
-        self.midi_controllers[midi_controllers::DATA_ENTRY_LSB as usize] = (data_value as i16) << 7;
-
-        match self.data_entry_state {
-            data_entry_states::RP_COARSE | data_entry_states::RP_FINE => {
-                let rpn_value = (self.midi_controllers
-                    [midi_controllers::REGISTERED_PARAMETER_MSB as usize]
-                    as u16)
-                    | ((self.midi_controllers[midi_controllers::REGISTERED_PARAMETER_LSB as usize]
-                        >> 7) as u16);
-
-                match rpn_value {
-                    rpt::PITCH_WHEEL_RANGE => {
-                        if data_value != 0 {
-                            // 14-bit value: upper 7 bits are coarse, lower 7 are fine
-                            let idx =
-                                NON_CC_INDEX_OFFSET + modulator_sources::PITCH_WHEEL_RANGE as usize;
-                            self.midi_controllers[idx] |= data_value as i16;
-                            let actual_tune = (self.midi_controllers[idx] >> 7) as f64
-                                + data_value as f64 / 128.0;
-                            spessa_synth_info(&format!(
-                                "Channel {} pitch wheel range: {} semitones",
-                                self.channel, actual_tune
-                            ));
-                        }
-                    }
-
-                    rpt::FINE_TUNING => {
-                        // Combine coarse (stored in custom_controllers[CHANNEL_TUNING]) with fine
-                        let coarse =
-                            self.custom_controllers[custom_controllers::CHANNEL_TUNING as usize];
-                        let final_tuning = ((coarse as i32) << 7) | data_value as i32;
-                        // Multiply by 8192/100 to get cent increments: 0.01220703125
-                        self.set_tuning(final_tuning as f64 * 0.012_207_031, true);
-                    }
-
-                    rpt::MODULATION_DEPTH => {
-                        let current_cents = self.custom_controllers
-                            [custom_controllers::MODULATION_MULTIPLIER as usize]
-                            * 50.0;
-                        let cents = current_cents as f64 + (data_value as f64 / 128.0) * 100.0;
-                        self.set_modulation_depth(cents);
-                    }
-
-                    rpt::RESET_PARAMETERS => {
-                        self.reset_parameters();
-                    }
-
-                    _ => {
-                        // Unrecognized RPN LSB; no-op
-                    }
-                }
-            }
-
-            data_entry_states::NRP_FINE => {
-                let nrpn_coarse = (self.midi_controllers
-                    [midi_controllers::NON_REGISTERED_PARAMETER_MSB as usize]
-                    >> 7) as u8;
-                let nrpn_fine = (self.midi_controllers
-                    [midi_controllers::NON_REGISTERED_PARAMETER_LSB as usize]
-                    >> 7) as u8;
-
-                // SF2 NRPN: fine is not used here; coarse handles the full value
-                if nrpn_coarse == non_registered_msb::SF2 {
-                    return Vec::new();
-                }
-
-                match nrpn_coarse {
-                    non_registered_msb::AWE32 => {
-                        let data_msb = (self.midi_controllers
-                            [midi_controllers::DATA_ENTRY_MSB as usize]
-                            >> 7) as u8;
-                        self.handle_awe32_nrpn(nrpn_fine as usize, data_value, data_msb, voices);
-                    }
-
-                    _ => {
-                        spessa_synth_info(&format!(
-                            "Unrecognized NRPN LSB for ch {}: (0x{:02X} 0x{:02X}) data value: {}",
-                            self.channel, nrpn_coarse, nrpn_fine, data_value
-                        ));
-                    }
-                }
-            }
-
-            _ => {
-                // Idle or other state: no-op
-            }
-        }
-
-        Vec::new()
     }
 }

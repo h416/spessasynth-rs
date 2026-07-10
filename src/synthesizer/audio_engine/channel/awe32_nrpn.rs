@@ -61,24 +61,17 @@ fn hz_to_cents(hz: f64) -> i16 {
 impl MidiChannel {
     /// Emulates AWE32 NRPN generator changes, similarly to FluidSynth.
     ///
-    /// `awe_gen`: NRPN fine value (index into AWE_NRPN_GENERATOR_MAPPINGS)
-    /// `data_lsb`: data entry LSB (0-127)
-    /// `data_msb`: data entry MSB (0-127)
+    /// `param_lsb`: NRPN LSB value (index into AWE_NRPN_GENERATOR_MAPPINGS)
+    /// `data_value`: 14-bit data entry value
     ///
-    /// Equivalent to: handleAWE32NRPN(aweGen, dataLSB, dataMSB)
-    pub fn handle_awe32_nrpn(
-        &mut self,
-        awe_gen: usize,
-        data_lsb: u8,
-        data_msb: u8,
-        voices: &mut [Voice],
-    ) {
-        let mut data_value = ((data_msb as i32) << 7) | (data_lsb as i32);
-        // Center the value (reported range 0..127 uses only LSB; full 14-bit range centered at 8192)
-        data_value -= 8192;
+    /// Equivalent to: handleAWE32NRPN(paramLSB, dataValue)
+    pub fn handle_awe32_nrpn(&mut self, param_lsb: usize, data_value: i32, voices: &mut [Voice]) {
+        // Center the value (ranges reported as 0..127 use only the LSB).
+        let data_lsb = (data_value & 0x7f) as u8;
+        let data_value = data_value - 8192;
 
-        let Some(&generator) = AWE_NRPN_GENERATOR_MAPPINGS.get(awe_gen) else {
-            spessa_synth_warn(&format!("Invalid AWE32 LSB: {}", awe_gen));
+        let Some(&generator) = AWE_NRPN_GENERATOR_MAPPINGS.get(param_lsb) else {
+            spessa_synth_warn(&format!("Invalid AWE32 LSB: {}", param_lsb));
             return;
         };
 
