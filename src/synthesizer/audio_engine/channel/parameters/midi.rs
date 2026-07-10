@@ -80,6 +80,119 @@ const fn build_custom_reset_array() -> [f32; CUSTOM_CONTROLLER_TABLE_SIZE] {
 /// Equivalent to: customResetArray
 pub const CUSTOM_RESET_ARRAY: [f32; CUSTOM_CONTROLLER_TABLE_SIZE] = build_custom_reset_array();
 
+// ---------------------------------------------------------------------------
+// ChannelMidiParameter
+// ---------------------------------------------------------------------------
+
+use crate::midi::enums::MidiController;
+
+/// Per-channel MIDI parameters (state driven by MIDI messages / SysEx).
+/// Ported from: src/synthesizer/audio_engine/channel/parameters/midi.ts
+/// Equivalent to: interface ChannelMIDIParameter
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChannelMidiParameter {
+    /// The current pressure (aftertouch) of this channel.
+    /// Equivalent to: pressure
+    pub pressure: i32,
+
+    /// The current pitch wheel value (0-16,383) of this channel.
+    /// Equivalent to: pitchWheel
+    pub pitch_wheel: i32,
+
+    /// The current pitch wheel range, in semitones.
+    /// Equivalent to: pitchWheelRange
+    pub pitch_wheel_range: f64,
+
+    /// The multiplier of the modulation wheel modulator.
+    /// The MIDI spec assumes the default modulation depth is 50 cents, but it
+    /// may vary for different sound banks.
+    /// Equivalent to: modulationDepth
+    pub modulation_depth: f64,
+
+    /// The channel's receiving number (0-based index).
+    /// Only used when customChannelNumbers is enabled.
+    /// Equivalent to: rxChannel
+    pub rx_channel: u8,
+
+    /// If the channel is in the poly mode.
+    /// - `true` - POLY ON - regular playback.
+    /// - `false` - MONO ON - one note per channel, others are killed on Note On.
+    /// Equivalent to: polyMode
+    pub poly_mode: bool,
+
+    /// The key shift of the channel (in semitones). Drum channels ignore this.
+    /// Equivalent to: keyShift
+    pub key_shift: f64,
+
+    /// Cents, RPN/SysEx for fine-tuning. Drum channels ignore this value.
+    /// Equivalent to: fineTune
+    pub fine_tune: f64,
+
+    /// Enables random panning for every note played on this channel.
+    /// Equivalent to: randomPan
+    pub random_pan: bool,
+
+    /// Assign mode for the channel (voice assignment behavior on overlap).
+    /// 0 = Single, 1 = LimitedMulti, 2 = FullMulti.
+    /// Equivalent to: assignMode
+    pub assign_mode: u8,
+
+    /// Indicates whether this channel uses the insertion EFX processor.
+    /// Equivalent to: efxAssign
+    pub efx_assign: bool,
+
+    /// CC1 for GS controller matrix (arbitrary MIDI controller). Default 16.
+    /// Equivalent to: cc1
+    pub cc1: MidiController,
+
+    /// CC2 for GS controller matrix (arbitrary MIDI controller). Default 17.
+    /// Equivalent to: cc2
+    pub cc2: MidiController,
+
+    /// Drum map for GS system exclusive tracking (0 melodic, 1 or 2 drum).
+    /// Equivalent to: drumMap
+    pub drum_map: u8,
+}
+
+/// A typed (parameter, value) pair for `MidiChannel::set_midi_parameter`.
+/// Rust equivalent of the TS generic `setMIDIParameter<P>(parameter, value)`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ChannelMidiParameterValue {
+    Pressure(i32),
+    PitchWheel(i32),
+    PitchWheelRange(f64),
+    ModulationDepth(f64),
+    RxChannel(u8),
+    PolyMode(bool),
+    KeyShift(f64),
+    FineTune(f64),
+    RandomPan(bool),
+    AssignMode(u8),
+    EfxAssign(bool),
+    Cc1(MidiController),
+    Cc2(MidiController),
+    DrumMap(u8),
+}
+
+/// The default MIDI parameters of a channel.
+/// Equivalent to: DEFAULT_CHANNEL_MIDI_PARAMETERS
+pub const DEFAULT_CHANNEL_MIDI_PARAMETERS: ChannelMidiParameter = ChannelMidiParameter {
+    pressure: 0,
+    pitch_wheel: 8192,
+    pitch_wheel_range: 2.0,
+    modulation_depth: 1.0,
+    rx_channel: 0,
+    poly_mode: true,
+    key_shift: 0.0,
+    fine_tune: 0.0,
+    random_pan: false,
+    assign_mode: 2,
+    efx_assign: false,
+    cc1: 0x10,
+    cc2: 0x11,
+    drum_map: 0,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;

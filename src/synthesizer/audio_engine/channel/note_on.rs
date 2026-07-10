@@ -164,7 +164,7 @@ impl SynthesizerCore {
         }
 
         // Mono mode: release all active voices on this channel
-        if !self.midi_channels[channel].poly_mode {
+        if !self.midi_channels[channel].midi_parameters.poly_mode {
             let ch_channel = self.midi_channels[channel].channel;
             let voice_count_ch = self.midi_channels[channel].voice_count;
             let current_time = self.current_time;
@@ -299,7 +299,7 @@ impl SynthesizerCore {
             if voice_gain == 1.0 {
                 voice_gain = p.gain;
             }
-        } else if self.midi_channels[channel].random_pan {
+        } else if self.midi_channels[channel].midi_parameters.random_pan {
             // Non-drum random pan
             let bits = self.current_time.to_bits();
             let h = bits
@@ -428,7 +428,7 @@ impl SynthesizerCore {
                 self.voices[voice_idx].exclusive_class = exclusive_override;
             }
             let excl_class = self.voices[voice_idx].exclusive_class;
-            if excl_class != 0 && self.midi_channels[channel].poly_mode {
+            if excl_class != 0 && self.midi_channels[channel].midi_parameters.poly_mode {
                 let ch_channel = self.midi_channels[channel].channel;
                 let voice_count_ch = self.midi_channels[channel].voice_count;
                 let current_time = self.current_time;

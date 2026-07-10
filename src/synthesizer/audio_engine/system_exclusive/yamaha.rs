@@ -3,6 +3,7 @@
 /// Ported from: src/synthesizer/audio_engine/engine_methods/system_exclusive/handle_xg.ts
 /// Reference: http://www.studio4all.de/htmle/main91.html
 use crate::midi::enums::midi_controllers;
+use crate::synthesizer::audio_engine::channel::parameters::midi::ChannelMidiParameterValue;
 use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::sys_ex_not_recognized;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::enums::custom_controllers;
@@ -204,7 +205,8 @@ impl SynthesizerCore {
                     let pan = value;
                     if pan == 0 {
                         // 0 means random
-                        self.midi_channels[channel].random_pan = true;
+                        self.midi_channels[channel]
+                            .set_midi_parameter(ChannelMidiParameterValue::RandomPan(true));
                         spessa_synth_info(&format!("Random pan is set to ON for {}", channel));
                     } else {
                         let evs = self.midi_channels[channel].controller_change(

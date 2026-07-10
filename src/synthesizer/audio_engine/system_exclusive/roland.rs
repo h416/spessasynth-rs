@@ -7,7 +7,9 @@
 use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::generator_types;
 use crate::soundbank::enums::modulator_sources;
-use crate::synthesizer::audio_engine::channel::parameters::midi::NON_CC_INDEX_OFFSET;
+use crate::synthesizer::audio_engine::channel::parameters::midi::{
+    ChannelMidiParameterValue, NON_CC_INDEX_OFFSET,
+};
 use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::{
     sys_ex_logging, sys_ex_not_recognized,
 };
@@ -83,13 +85,15 @@ impl SynthesizerCore {
                                 // Pan position: 0 is random
                                 let pan_position = message_value;
                                 if pan_position == 0 {
-                                    self.midi_channels[channel].random_pan = true;
+                                    self.midi_channels[channel]
+                                        .set_midi_parameter(ChannelMidiParameterValue::RandomPan(true));
                                     spessa_synth_info(&format!(
                                         "Random pan is set to ON for {}",
                                         channel
                                     ));
                                 } else {
-                                    self.midi_channels[channel].random_pan = false;
+                                    self.midi_channels[channel]
+                                        .set_midi_parameter(ChannelMidiParameterValue::RandomPan(false));
                                     let voices = &mut self.voices;
                                     let evs = self.midi_channels[channel].controller_change(
                                         midi_controllers::PAN,

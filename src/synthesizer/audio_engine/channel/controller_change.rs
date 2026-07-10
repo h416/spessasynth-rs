@@ -7,6 +7,7 @@ use crate::synthesizer::audio_engine::synth_constants::{
 };
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
+use crate::synthesizer::audio_engine::channel::parameters::midi::ChannelMidiParameterValue;
 use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::{ControllerChangeCallback, SynthProcessorEvent};
 use crate::soundbank::types::MIDISystem;
@@ -84,13 +85,13 @@ impl MidiChannel {
             midi_controllers::POLY_MODE_ON => {
                 let mut sub = self.stop_all_notes(voices, current_time, true);
                 events.append(&mut sub);
-                self.poly_mode = true;
+                self.set_midi_parameter(ChannelMidiParameterValue::PolyMode(true));
             }
 
             midi_controllers::MONO_MODE_ON => {
                 let mut sub = self.stop_all_notes(voices, current_time, true);
                 events.append(&mut sub);
-                self.poly_mode = false;
+                self.set_midi_parameter(ChannelMidiParameterValue::PolyMode(false));
             }
 
             // Bank select MSB

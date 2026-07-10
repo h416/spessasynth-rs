@@ -17,13 +17,17 @@ use crate::synthesizer::audio_engine::channel::drum_parameters::DrumParameters;
 use crate::synthesizer::audio_engine::channel::dynamic_modulator_system::DynamicModulatorSystem;
 use crate::synthesizer::audio_engine::channel::parameters::midi::{
     CONTROLLER_TABLE_SIZE, CUSTOM_CONTROLLER_TABLE_SIZE, CUSTOM_RESET_ARRAY,
+    ChannelMidiParameter, ChannelMidiParameterValue, DEFAULT_CHANNEL_MIDI_PARAMETERS,
     DEFAULT_MIDI_CONTROLLER_VALUES, NON_CC_INDEX_OFFSET,
+};
+use crate::synthesizer::audio_engine::channel::parameters::system::{
+    ChannelSystemParameter, ChannelSystemParameterValue, DEFAULT_CHANNEL_SYSTEM_PARAMETERS,
 };
 use crate::synthesizer::audio_engine::voice::compute_modulator::{
     ChannelContext, SourceFilter, compute_modulators,
 };
 use crate::synthesizer::audio_engine::synth_constants::{
-    GENERATOR_OVERRIDE_NO_CHANGE_VALUE, MIN_NOTE_LENGTH,
+    GENERATOR_OVERRIDE_NO_CHANGE_VALUE, MIN_NOTE_LENGTH, SPESSASYNTH_GAIN_FACTOR,
 };
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::enums::custom_controllers;
@@ -91,9 +95,16 @@ pub struct MidiChannel {
     /// Per-drum-note parameters (128 entries, one per MIDI note).
     pub drum_params: Vec<DrumParameters>,
 
-    /// True if random panning is enabled for every note played.
-    /// Equivalent to: randomPan
-    pub random_pan: bool,
+    /// All MIDI parameters of this channel (state driven by MIDI/SysEx).
+    /// Source of truth for values such as `poly_mode` and `random_pan`.
+    /// Writes that must refresh the cached `current_*` values should go through
+    /// `set_midi_parameter`.
+    /// Equivalent to: _midiParameters (with the `midiParameters` getter)
+    pub midi_parameters: ChannelMidiParameter,
+
+    /// All system parameters of this channel (API-controlled).
+    /// Equivalent to: _systemParameters (with the `systemParameters` getter)
+    pub system_parameters: ChannelSystemParameter,
 
     /// If the last selected parameter was Registered (RPN). If false, the last
     /// parameter was Non-Registered (NRPN). Replaces the pre-4.3.0 `dataEntryState`.
@@ -141,9 +152,21 @@ pub struct MidiChannel {
     /// Equivalent to: channelVibrato
     pub channel_vibrato: ChannelVibrato,
 
-    /// True = polyphonic (POLY ON), False = monophonic (MONO ON).
-    /// Equivalent to: polyMode
-    pub poly_mode: bool,
+    /// Current pan in range [-500;500], cached from `update_internal_params`.
+    /// Equivalent to: currentPan (protected)
+    current_pan: f64,
+
+    /// Current tuning in cents, cached from `update_internal_params`.
+    /// Equivalent to: currentTuning (protected)
+    current_tuning: f64,
+
+    /// Current key-shift, cached from `update_internal_params`.
+    /// Equivalent to: currentKeyShift (protected)
+    current_key_shift: i32,
+
+    /// Current gain, cached from `update_internal_params`.
+    /// Equivalent to: currentGain (protected)
+    current_gain: f64,
 
     /// Current voice count for this channel.
     /// Equivalent to: voiceCount
@@ -210,7 +233,16 @@ impl MidiChannel {
             channel_octave_tuning: [0i8; 128],
             sys_ex_modulators: DynamicModulatorSystem::new(),
             drum_channel: false,
-            random_pan: false,
+            midi_parameters: ChannelMidiParameter {
+                // Rx Channel is initialized to the channel number.
+                rx_channel: channel,
+                ..DEFAULT_CHANNEL_MIDI_PARAMETERS
+            },
+            system_parameters: DEFAULT_CHANNEL_SYSTEM_PARAMETERS,
+            current_pan: 0.0,
+            current_tuning: 0.0,
+            current_key_shift: 0,
+            current_gain: 0.0,
             last_parameter_is_registered: true,
             last_note: -1,
             portamento_force: false,
@@ -226,7 +258,6 @@ impl MidiChannel {
             locked_system: MIDISystem::Gs,
             lock_gs_nrpn_params: false,
             channel_vibrato: ChannelVibrato::default(),
-            poly_mode: true,
             voice_count: 0,
             channel,
             per_note_pitch: false,
@@ -241,6 +272,7 @@ impl MidiChannel {
             insertion_enabled: false,
         };
         ch.update_channel_tuning();
+        ch.update_internal_params();
         ch
     }
 
@@ -822,6 +854,124 @@ impl MidiChannel {
         self.set_drum_flag(is_drum);
         let program = self.patch.program;
         self.program_change(program, sound_bank_manager, current_system, enable_event_system)
+    }
+
+    // -----------------------------------------------------------------------
+    // Channel parameter infrastructure (TS 4.3.0)
+    // -----------------------------------------------------------------------
+
+    /// Sets a channel MIDI parameter and refreshes the cached `current_*` values.
+    /// Equivalent to: setMIDIParameter(parameter, value)
+    ///
+    /// # Note
+    /// The TS version additionally recomputes modulators for `pitchWheel`/`pressure`
+    /// and fires a `channelParamChange` event. In this stage those two parameters are
+    /// still handled by the dedicated `pitch_wheel`/`channel_pressure` methods (which
+    /// keep their storage in the `midi_controllers` table and recompute modulators),
+    /// so no voice recompute is done here. The event has no effect on rendering.
+    pub fn set_midi_parameter(&mut self, value: ChannelMidiParameterValue) {
+        use ChannelMidiParameterValue::*;
+        match value {
+            Pressure(v) => self.midi_parameters.pressure = v,
+            PitchWheel(v) => self.midi_parameters.pitch_wheel = v,
+            PitchWheelRange(v) => self.midi_parameters.pitch_wheel_range = v,
+            ModulationDepth(v) => self.midi_parameters.modulation_depth = v,
+            RxChannel(v) => self.midi_parameters.rx_channel = v,
+            PolyMode(v) => self.midi_parameters.poly_mode = v,
+            KeyShift(v) => self.midi_parameters.key_shift = v,
+            FineTune(v) => self.midi_parameters.fine_tune = v,
+            RandomPan(v) => self.midi_parameters.random_pan = v,
+            AssignMode(v) => self.midi_parameters.assign_mode = v,
+            EfxAssign(v) => self.midi_parameters.efx_assign = v,
+            Cc1(v) => self.midi_parameters.cc1 = v,
+            Cc2(v) => self.midi_parameters.cc2 = v,
+            DrumMap(v) => self.midi_parameters.drum_map = v,
+        }
+        self.update_internal_params();
+    }
+
+    /// Sets a channel system parameter and refreshes the cached `current_*` values.
+    /// Equivalent to: setSystemParameterInternal(parameter, value)
+    ///
+    /// # Note
+    /// The TS version has additional per-parameter side effects (e.g. `presetLock`
+    /// records the locked system, `isMuted`/`keyShift` stop all notes). Those side
+    /// effects require access to voices / the current system and their callers are
+    /// migrated in a later stage; this stage keeps them on the existing dedicated
+    /// paths (`set_preset_lock`, `mute_channel`, `transpose_channel`).
+    pub fn set_system_parameter(&mut self, value: ChannelSystemParameterValue) {
+        use ChannelSystemParameterValue::*;
+        match value {
+            PresetLock(v) => self.system_parameters.preset_lock = v,
+            IsMuted(v) => self.system_parameters.is_muted = v,
+            Gain(v) => self.system_parameters.gain = v,
+            Pan(v) => self.system_parameters.pan = v,
+            KeyShift(v) => self.system_parameters.key_shift = v,
+            FineTune(v) => self.system_parameters.fine_tune = v,
+            InterpolationType(v) => self.system_parameters.interpolation_type = v,
+            NrpnParamLock(v) => self.system_parameters.nrpn_param_lock = v,
+            MonophonicRetrigger(v) => self.system_parameters.monophonic_retrigger = v,
+        }
+        self.update_internal_params();
+    }
+
+    /// Recomputes the cached `current_pan/current_gain/current_tuning/current_key_shift`
+    /// from the channel's system and MIDI parameters.
+    /// Equivalent to: updateInternalParams()
+    ///
+    /// # Note
+    /// The global (synth-wide) system/MIDI parameters are not yet plumbed into the
+    /// channel. They default to identity (keyShift 0, fineTune 0, gain 1, pan 0) in
+    /// the current engine, so they are omitted from the sums below — this makes the
+    /// cached values equal to the 4.2.0 behavior. The consumers in `render_voice`/
+    /// `compute_modulator` are still on the old fields and are migrated in a later
+    /// stage (see module docs); these cached values are exposed via getters for that.
+    pub fn update_internal_params(&mut self) {
+        let channel_system = &self.system_parameters;
+        let channel_midi = &self.midi_parameters;
+
+        // Only Channel System is processed for drum channels.
+        let current_key_shift = if self.drum_channel {
+            channel_system.key_shift
+        } else {
+            channel_system.key_shift + channel_midi.key_shift
+        };
+        // Ensure integer.
+        self.current_key_shift = current_key_shift.trunc() as i32;
+
+        // Only Channel System is processed for drum channels.
+        self.current_tuning = if self.drum_channel {
+            channel_system.fine_tune
+        } else {
+            channel_system.fine_tune + channel_midi.fine_tune
+        };
+
+        // [-1;1] normalized (Channel MIDI is the pan controller, handled elsewhere).
+        let current_pan_normalized = channel_system.pan;
+        // For faster render_voice calculation.
+        self.current_pan = current_pan_normalized * 500.0;
+
+        self.current_gain = SPESSASYNTH_GAIN_FACTOR * channel_system.gain;
+    }
+
+    /// Current pan in range [-500;500]. Equivalent to: currentPan
+    pub fn current_pan(&self) -> f64 {
+        self.current_pan
+    }
+
+    /// Current tuning in cents. Equivalent to: currentTuning
+    pub fn current_tuning(&self) -> f64 {
+        self.current_tuning
+    }
+
+    /// Current key-shift. Equivalent to: currentKeyShift
+    pub fn current_key_shift(&self) -> i32 {
+        self.current_key_shift
+    }
+
+    /// Current gain. Equivalent to: currentGain
+    pub fn current_gain(&self) -> f64 {
+        self.current_gain
     }
 
     // -----------------------------------------------------------------------

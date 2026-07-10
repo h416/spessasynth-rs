@@ -5,7 +5,7 @@ use crate::midi::enums::midi_controllers;
 use crate::synthesizer::audio_engine::channel::drum_parameters::reset_drum_params;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
 use crate::synthesizer::audio_engine::channel::parameters::midi::{
-    CUSTOM_RESET_ARRAY, DEFAULT_MIDI_CONTROLLER_VALUES,
+    ChannelMidiParameterValue, CUSTOM_RESET_ARRAY, DEFAULT_MIDI_CONTROLLER_VALUES,
 };
 use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
 use crate::synthesizer::audio_engine::voice::voice::Voice;
@@ -121,13 +121,13 @@ impl MidiChannel {
         self.channel_vibrato.rate = 0.0;
         self.channel_vibrato.depth = 0.0;
         self.channel_vibrato.delay = 0.0;
-        self.random_pan = false;
+        self.set_midi_parameter(ChannelMidiParameterValue::RandomPan(false));
 
         // Restore poly mode
         if !self.locked_controllers[midi_controllers::MONO_MODE_ON as usize]
             && !self.locked_controllers[midi_controllers::POLY_MODE_ON as usize]
         {
-            self.poly_mode = true;
+            self.set_midi_parameter(ChannelMidiParameterValue::PolyMode(true));
         }
 
         // Reset pitch wheel
