@@ -7,7 +7,7 @@ use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 use crate::synthesizer::audio_engine::voice::lfo::{get_lfo_value, get_lfo_value_sine};
 use crate::synthesizer::audio_engine::voice::unit_converter::{
-    abs_cents_to_hz, cb_attenuation_to_gain, timecents_to_seconds,
+    abs_cents_to_hz, cb_attenuation_to_gain, cb_attenuation_to_gain_f64, timecents_to_seconds,
 };
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
@@ -239,6 +239,14 @@ impl MidiChannel {
         let gain_target = cb_attenuation_to_gain(
             voice.modulated_generators[gt::INITIAL_ATTENUATION as usize] as i32,
         ) as f64;
+        // The 4.3.0 volume envelope's process() no longer takes a centibel offset argument;
+        // the volume excursion (mod LFO to volume, resonance) is folded into the gain target,
+        // matching TS 4.3.0 render_voice:
+        //   gainTarget = cbAttenuationToGain(initialAttenuation) * cbAttenuationToGain(excursion)
+        // (initial-attenuation source is kept unchanged; the channel-gain / additive-pan
+        // model change is a later stage.)
+        let env_gain_target =
+            gain_target * cb_attenuation_to_gain_f64(volume_excursion_centibels) as f64;
 
         // --- SYNTHESIS ---
         // Resize buffer if necessary (should be rare)
@@ -253,12 +261,7 @@ impl MidiChannel {
 
         // Looping mode 2: start-on-release. Only process vol env, no oscillator.
         if voice.looping_mode == 2 && !voice.is_in_release {
-            voice.is_active = voice.vol_env.process(
-                sample_count,
-                &mut voice.buffer,
-                gain_target,
-                volume_excursion_centibels,
-            );
+            voice.is_active = voice.vol_env.process(sample_count, env_gain_target);
             return;
         }
 
@@ -278,13 +281,19 @@ impl MidiChannel {
             lowpass_excursion,
         );
 
-        // Volume envelope
-        let env_active = voice.vol_env.process(
-            sample_count,
-            &mut voice.buffer,
-            gain_target,
-            volume_excursion_centibels,
-        );
+        // Volume envelope (4.3.0): process() advances the envelope one quantum and computes the
+        // block's target output gain, no longer touching the buffer. We linearly interpolate the
+        // gain from the previous block's output gain to the new one across this block, matching
+        // TS 4.3.0 render_voice (gain += gainInc per sample, applied after the filter).
+        let prev_gain = voice.vol_env.output_gain;
+        let env_active = voice.vol_env.process(sample_count, env_gain_target);
+        let gain_inc = (voice.vol_env.output_gain - prev_gain) / sample_count as f64;
+        let mut gain = prev_gain;
+        // Emulate JS Float32Array *= semantics: f32 → f64, multiply in f64, store back as f32.
+        for s in voice.buffer[..sample_count].iter_mut() {
+            *s = (*s as f64 * gain) as f32;
+            gain += gain_inc;
+        }
 
         // Both oscillator AND envelope must be active for voice to continue
         voice.is_active &= env_active;

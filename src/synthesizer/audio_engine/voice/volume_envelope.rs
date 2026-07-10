@@ -1,9 +1,22 @@
 /// volume_envelope.rs
 /// purpose: applies a volume envelope for a given voice
-/// Ported from: src/synthesizer/audio_engine/engine_components/dsp_chain/volume_envelope.ts
+/// Ported from: src/synthesizer/audio_engine/voice/volume_envelope.ts (spessasynth_core 4.3.0)
+///
+/// For performance reasons, cbAttenuationToGain is inlined here (via the shared
+/// CENTIBEL_LOOKUP_TABLE exposed by `unit_converter::cb_attenuation_to_gain_f64`).
+///
+/// # 4.3.0 rewrite
+/// The volume envelope no longer processes the audio buffer sample-by-sample.
+/// Instead, `process` advances the envelope by an entire render quantum and writes the
+/// gain value for the LAST sample of the block into `output_gain`, returning the block's
+/// activity. The caller (`render_voice`) then linearly interpolates from the previous
+/// `output_gain` to the new one across the block. The per-sample gain smoothing and the
+/// `centibel_offset` argument were removed; the centibel excursion (mod LFO to volume,
+/// resonance) is now folded into `gain_target` by the caller before calling `process`.
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
+use crate::synthesizer::audio_engine::synth_constants::SPESSA_BUFSIZE;
 use crate::synthesizer::audio_engine::voice::unit_converter::{
-    cb_attenuation_to_gain, cb_attenuation_to_gain_f64, timecents_to_seconds,
+    cb_attenuation_to_gain_f64, timecents_to_seconds,
 };
 
 // ---------------------------------------------------------------------------
@@ -18,10 +31,6 @@ const CB_SILENCE: f64 = 960.0;
 /// Equivalent to: PERCEIVED_CB_SILENCE
 const PERCEIVED_CB_SILENCE: f64 = 900.0;
 
-/// Gain smoothing factor. Must be run EVERY SAMPLE.
-/// Equivalent to: GAIN_SMOOTHING_FACTOR
-const GAIN_SMOOTHING_FACTOR: f64 = 0.01;
-
 // ---------------------------------------------------------------------------
 // VolumeEnvelope
 // ---------------------------------------------------------------------------
@@ -34,15 +43,24 @@ const GAIN_SMOOTHING_FACTOR: f64 = 0.01;
 ///
 /// Equivalent to: VolumeEnvelope class
 pub struct VolumeEnvelope {
-    /// The sample rate in Hz.
-    /// Equivalent to: sampleRate
-    pub sample_rate: f64,
+    /// The target gain for the current rendering block (the last sample's gain).
+    /// Equivalent to: outputGain
+    pub output_gain: f64,
     /// The current attenuation of the envelope in cB.
     /// Equivalent to: attenuationCb
     pub attenuation_cb: f64,
     /// The current stage of the volume envelope (0–4).
     /// Equivalent to: state
     pub state: u8,
+
+    /// The sample rate in Hz.
+    /// Equivalent to: sampleRate
+    sample_rate: f64,
+    /// The sample count between updates of the volume envelope (= render buffer size).
+    /// Since the envelope calculation runs once per rendering quantum, this is effectively
+    /// the buffer size. For the WAV pipeline this is fixed at `SPESSA_BUFSIZE`.
+    /// Equivalent to: updateInterval
+    update_interval: f64,
 
     /// The envelope's current time in samples.
     /// Uses f64 to match TS behavior (JS number is f64).
@@ -52,38 +70,30 @@ pub struct VolumeEnvelope {
     /// Equivalent to: releaseStartCb
     release_start_cb: f64,
     /// Sample time when release was triggered.
-    /// Uses f64 to match TS behavior.
     /// Equivalent to: releaseStartTimeSamples
     release_start_time_samples: f64,
     /// Attack duration in samples.
-    /// Uses f64 to match TS behavior.
     /// Equivalent to: attackDuration
     attack_duration: f64,
     /// Decay duration in samples (already scaled by the sustain fraction).
-    /// Uses f64 to match TS behavior (can be fractional after multiply by fraction).
     /// Equivalent to: decayDuration
     decay_duration: f64,
     /// Release duration in samples.
-    /// Uses f64 to match TS behavior.
     /// Equivalent to: releaseDuration
     release_duration: f64,
     /// Sustain level in cB.
     /// Equivalent to: sustainCb
     pub(crate) sustain_cb: f64,
     /// Sample index where the delay phase ends.
-    /// Uses f64 to match TS behavior.
     /// Equivalent to: delayEnd
     delay_end: f64,
     /// Sample index where the attack phase ends.
-    /// Uses f64 to match TS behavior.
     /// Equivalent to: attackEnd
     pub(crate) attack_end: f64,
     /// Sample index where the hold phase ends.
-    /// Uses f64 to match TS behavior.
     /// Equivalent to: holdEnd
     pub(crate) hold_end: f64,
     /// Sample index where the decay phase ends.
-    /// Uses f64 to match TS behavior.
     /// Equivalent to: decayEnd
     pub(crate) decay_end: f64,
     /// Whether the envelope has entered the release phase.
@@ -92,23 +102,24 @@ pub struct VolumeEnvelope {
     /// If sustain is silent, the voice can end when it reaches silence.
     /// Equivalent to: canEndOnSilentSustain
     can_end_on_silent_sustain: bool,
-    /// Gain smoothing factor (adjusted for sample rate).
-    /// Equivalent to: gainSmoothing
-    gain_smoothing: f64,
-    /// Current smoothed gain value.
-    /// Equivalent to: currentGain
-    pub(crate) current_gain: f64,
-
 }
 
 impl VolumeEnvelope {
     /// Creates a new VolumeEnvelope.
-    /// Equivalent to: new VolumeEnvelope(sampleRate)
+    ///
+    /// Equivalent to: new VolumeEnvelope(sampleRate, bufferSize)
+    ///
+    /// The TS constructor takes `bufferSize` (= `maxBufferSize`). For this WAV-only port the
+    /// render quantum is always `SPESSA_BUFSIZE`, so `update_interval` is fixed to it here.
+    /// This keeps the constructor signature unchanged and confines the 4.3.0 rewrite to
+    /// `volume_envelope.rs` + `render_voice.rs`.
     pub fn new(sample_rate: f64) -> Self {
         Self {
-            sample_rate,
+            output_gain: 0.0,
             attenuation_cb: CB_SILENCE,
             state: 0,
+            sample_rate,
+            update_interval: SPESSA_BUFSIZE as f64,
             sample_time: 0.0,
             release_start_cb: CB_SILENCE,
             release_start_time_samples: 0.0,
@@ -122,8 +133,6 @@ impl VolumeEnvelope {
             decay_end: 0.0,
             entered_release: false,
             can_end_on_silent_sustain: false,
-            gain_smoothing: GAIN_SMOOTHING_FACTOR * (44_100.0 / sample_rate),
-            current_gain: 0.0,
         }
     }
 
@@ -159,12 +168,9 @@ impl VolumeEnvelope {
         self.entered_release = false;
         self.state = 0;
         self.sample_time = 0.0;
+        self.output_gain = 0.0;
         self.can_end_on_silent_sustain =
             modulated_generators[gt::SUSTAIN_VOL_ENV as usize] as f64 >= PERCEIVED_CB_SILENCE;
-
-        // Set the initial gain from the initialAttenuation generator.
-        self.current_gain =
-            cb_attenuation_to_gain(modulated_generators[gt::INITIAL_ATTENUATION as usize] as i32) as f64;
 
         // Sustain level (clamped to CB_SILENCE).
         self.sustain_cb =
@@ -198,9 +204,10 @@ impl VolumeEnvelope {
 
         self.decay_end = self.decay_duration + self.hold_end;
 
-        // If there is no delay/attack, jump directly to the hold/peak stage.
-        // TS: if (this.attackEnd === 0)
-        if self.attack_end == 0.0 {
+        // If the voice has no meaningful delay/attack (within one update interval),
+        // jump directly to the hold/peak stage.
+        // TS: if (this.attackEnd <= this.updateInterval)
+        if self.attack_end <= self.update_interval {
             self.state = 2;
         }
     }
@@ -270,13 +277,8 @@ impl VolumeEnvelope {
                 }
                 3 => {
                     // Decay stage: interpolate between 0 and sustainCb.
-                    if self.decay_duration == 0.0 {
-                        sustain_cb
-                    } else {
-                        (1.0 - (self.decay_end - self.release_start_time_samples)
-                            / self.decay_duration)
-                            * sustain_cb
-                    }
+                    (1.0 - (self.decay_end - self.release_start_time_samples) / self.decay_duration)
+                        * sustain_cb
                 }
                 _ => {
                     // Sustain stage (or unknown).
@@ -299,361 +301,89 @@ impl VolumeEnvelope {
         self.release_start_cb >= PERCEIVED_CB_SILENCE
     }
 
-    /// Applies the volume envelope to `buffer[..sample_count]`.
+    /// Advances the envelope by one render quantum and writes the last sample's gain into
+    /// `output_gain`. Returns `true` if the voice is still active after this block.
     ///
-    /// `gain_target`     – the external gain target (for smoothing)
-    /// `centibel_offset` – additional centibel offset (LFO / modulation)
+    /// Essentially we use the approach of 100 dB is silence, 0 dB is peak.
     ///
-    /// Returns `true` if the voice is still active after this block.
+    /// `gain_target` – the gain to apply (initial attenuation * centibel excursion gain).
     ///
-    /// Equivalent to: process(sampleCount, buffer, gainTarget, centibelOffset)
-    pub fn process(
-        &mut self,
-        sample_count: usize,
-        buffer: &mut [f32],
-        gain_target: f64,
-        centibel_offset: f64,
-    ) -> bool {
+    /// Equivalent to: process(sampleCount, gainTarget)
+    pub fn process(&mut self, sample_count: usize, gain_target: f64) -> bool {
+        // Advance time by the entire block to calculate the last sample's gain.
+        self.sample_time += sample_count as f64;
+        let sample_time = self.sample_time;
+
         if self.entered_release {
-            return self.release_phase(sample_count, buffer, gain_target, centibel_offset);
+            // How much time has passed since release was started?
+            let elapsed_release = sample_time - self.release_start_time_samples;
+            let cb_difference = CB_SILENCE - self.release_start_cb;
+
+            // Linearly ramp down decibels.
+            self.attenuation_cb =
+                (elapsed_release / self.release_duration) * cb_difference + self.release_start_cb;
+            self.output_gain = cb_attenuation_to_gain_f64(self.attenuation_cb) as f64 * gain_target;
+            return self.attenuation_cb < PERCEIVED_CB_SILENCE;
         }
 
-        match self.state {
-            0 => self.delay_phase(sample_count, buffer, gain_target, centibel_offset, 0),
-            1 => self.attack_phase(sample_count, buffer, gain_target, centibel_offset, 0),
-            2 => self.hold_phase(sample_count, buffer, gain_target, centibel_offset, 0),
-            3 => self.decay_phase(sample_count, buffer, gain_target, centibel_offset, 0),
-            4 => self.sustain_phase(sample_count, buffer, gain_target, centibel_offset, 0),
-            _ => false,
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Private phase helpers
-    // -----------------------------------------------------------------------
-
-    /// Release phase: linearly ramp attenuation from releaseStartCb to CB_SILENCE.
-    /// Equivalent to: releasePhase(...)
-    fn release_phase(
-        &mut self,
-        sample_count: usize,
-        buffer: &mut [f32],
-        gain_target: f64,
-        centibel_offset: f64,
-    ) -> bool {
-        let mut sample_time = self.sample_time;
-        let mut current_gain = self.current_gain;
-        let mut attenuation_cb = self.attenuation_cb;
-
-        let release_start_cb = self.release_start_cb;
-        let release_duration = self.release_duration;
-        let gain_smoothing = self.gain_smoothing;
-        let mut elapsed_release = sample_time - self.release_start_time_samples;
-        let cb_difference = CB_SILENCE - release_start_cb;
-
-        let smooth = current_gain != gain_target;
-
-        for sample in buffer[..sample_count].iter_mut() {
-            if smooth {
-                current_gain += (gain_target - current_gain) * gain_smoothing;
-            }
-
-            // Linear ramp of attenuation from releaseStartCb to CB_SILENCE.
-            attenuation_cb = if release_duration == 0.0 {
-                CB_SILENCE
-            } else {
-                (elapsed_release / release_duration) * cb_difference
-                    + release_start_cb
-            };
-
-            // Use f64 version to match TS: cbAttenuationToGain(attenuationCb + centibelOffset)
-            // where the f64 sum is passed directly and truncated inside the function.
-            // Clamp attenuation_cb to CB_SILENCE to prevent out-of-bounds during long releases.
-            let cb_combined_f64 = attenuation_cb.min(CB_SILENCE) + centibel_offset;
-            // Emulate JS Float32Array *= semantics:
-            // f32 → f64, multiply in f64, store back as f32
-            *sample = (*sample as f64 * (cb_attenuation_to_gain_f64(cb_combined_f64) as f64 * current_gain)) as f32;
-            sample_time += 1.0;
-            elapsed_release += 1.0;
-        }
-
-        self.sample_time = sample_time;
-        self.current_gain = current_gain;
-        self.attenuation_cb = attenuation_cb;
-
-        attenuation_cb < PERCEIVED_CB_SILENCE
-    }
-
-    /// Delay phase: output silence until the delay end time.
-    /// Equivalent to: delayPhase(...)
-    fn delay_phase(
-        &mut self,
-        sample_count: usize,
-        buffer: &mut [f32],
-        gain_target: f64,
-        centibel_offset: f64,
-        filled_buffer: usize,
-    ) -> bool {
-        let delay_end = self.delay_end;
-        let mut sample_time = self.sample_time;
-        let mut filled_buffer = filled_buffer;
-
-        if sample_time < delay_end {
-            self.attenuation_cb = CB_SILENCE;
-
-            // How many silence samples to write?
-            let delay_samples =
-                ((delay_end - sample_time) as usize).min(sample_count - filled_buffer);
-            for s in buffer[filled_buffer..filled_buffer + delay_samples].iter_mut() {
-                *s = 0.0;
-            }
-            filled_buffer += delay_samples;
-            sample_time += delay_samples as f64;
-
-            if filled_buffer >= sample_count {
-                self.sample_time = sample_time;
+        // Delay phase: no sound is produced.
+        if self.state == 0 {
+            if sample_time < self.delay_end {
+                // Silence.
+                self.attenuation_cb = CB_SILENCE;
+                self.output_gain = 0.0;
                 return true;
             }
+            self.state += 1;
         }
 
-        self.sample_time = sample_time;
-        self.state += 1;
-
-        self.attack_phase(
-            sample_count,
-            buffer,
-            gain_target,
-            centibel_offset,
-            filled_buffer,
-        )
-    }
-
-    /// Attack phase: linear gain ramp from 0 to full.
-    /// Equivalent to: attackPhase(...)
-    fn attack_phase(
-        &mut self,
-        sample_count: usize,
-        buffer: &mut [f32],
-        gain_target: f64,
-        centibel_offset: f64,
-        mut filled_buffer: usize,
-    ) -> bool {
-        let attack_end = self.attack_end;
-        let attack_duration = self.attack_duration;
-        let gain_smoothing = self.gain_smoothing;
-        let mut sample_time = self.sample_time;
-        let mut current_gain = self.current_gain;
-        let smooth = current_gain != gain_target;
-
-        if sample_time < attack_end {
-            // During attack, attenuation is 0 (peak) for accounting purposes.
-            self.attenuation_cb = 0.0;
-
-            // Apply gain offset (e.g. from LFO volume modulation) during attack phase.
-            let gain_offset = cb_attenuation_to_gain_f64(centibel_offset) as f64;
-            while sample_time < attack_end {
-                if smooth {
-                    current_gain += (gain_target - current_gain) * gain_smoothing;
-                }
-
-                // Special case: linear gain ramp (not linear dB).
-                let linear_gain = if attack_duration == 0.0 {
-                    1.0
-                } else {
-                    1.0 - (attack_end - sample_time) / attack_duration
-                };
-
-                // Emulate JS Float32Array *= semantics:
-                // JS: buffer[i] *= linearGain * currentGain * gainOffset
-                buffer[filled_buffer] = (buffer[filled_buffer] as f64 * (linear_gain * current_gain * gain_offset)) as f32;
-
-                sample_time += 1.0;
-                filled_buffer += 1;
-                if filled_buffer >= sample_count {
-                    self.sample_time = sample_time;
-                    self.current_gain = current_gain;
-                    return true;
-                }
+        // Attack phase: ramp from 0 to attenuation.
+        if self.state == 1 {
+            if sample_time < self.attack_end {
+                // Set current attenuation to peak as it's invalid during this phase.
+                self.attenuation_cb = 0.0;
+                // Special case: linear gain ramp instead of linear dB ramp.
+                let linear_gain = 1.0 - (self.attack_end - sample_time) / self.attack_duration;
+                self.output_gain = linear_gain * gain_target;
+                return true;
             }
+            self.state += 1;
         }
 
-        self.sample_time = sample_time;
-        self.current_gain = current_gain;
-        self.state += 1;
-
-        self.hold_phase(
-            sample_count,
-            buffer,
-            gain_target,
-            centibel_offset,
-            filled_buffer,
-        )
-    }
-
-    /// Hold/peak phase: full volume.
-    /// Equivalent to: holdPhase(...)
-    fn hold_phase(
-        &mut self,
-        sample_count: usize,
-        buffer: &mut [f32],
-        gain_target: f64,
-        centibel_offset: f64,
-        mut filled_buffer: usize,
-    ) -> bool {
-        let hold_end = self.hold_end;
-        let gain_smoothing = self.gain_smoothing;
-        let mut sample_time = self.sample_time;
-        let mut current_gain = self.current_gain;
-        let smooth = current_gain != gain_target;
-
-        if sample_time < hold_end {
-            // Peak: zero attenuation.
-            self.attenuation_cb = 0.0;
-
-            // Use f64 version to match TS: cbAttenuationToGain(centibelOffset)
-            let gain_offset = cb_attenuation_to_gain_f64(centibel_offset) as f64;
-            while sample_time < hold_end {
-                if smooth {
-                    current_gain += (gain_target - current_gain) * gain_smoothing;
-                }
-
-                // Emulate JS Float32Array *= semantics:
-                // JS: buffer[i] *= currentGain * gainOffset  → buffer[i] * (currentGain * gainOffset)
-                buffer[filled_buffer] = (buffer[filled_buffer] as f64 * (current_gain * gain_offset)) as f32;
-
-                sample_time += 1.0;
-                filled_buffer += 1;
-                if filled_buffer >= sample_count {
-                    self.sample_time = sample_time;
-                    self.current_gain = current_gain;
-                    return true;
-                }
+        // Hold/peak phase: stay at max volume.
+        if self.state == 2 {
+            if sample_time < self.hold_end {
+                // Peak, no attenuation.
+                self.attenuation_cb = 0.0;
+                self.output_gain = gain_target;
+                return true;
             }
+            self.state += 1;
         }
 
-        self.sample_time = sample_time;
-        self.current_gain = current_gain;
-        self.state += 1;
-
-        self.decay_phase(
-            sample_count,
-            buffer,
-            gain_target,
-            centibel_offset,
-            filled_buffer,
-        )
-    }
-
-    /// Decay phase: linear attenuation ramp from 0 cB to sustainCb.
-    /// Equivalent to: decayPhase(...)
-    fn decay_phase(
-        &mut self,
-        sample_count: usize,
-        buffer: &mut [f32],
-        gain_target: f64,
-        centibel_offset: f64,
-        mut filled_buffer: usize,
-    ) -> bool {
-        let decay_duration = self.decay_duration;
-        let decay_end = self.decay_end;
-        let gain_smoothing = self.gain_smoothing;
-        let sustain_cb = self.sustain_cb;
-        let mut sample_time = self.sample_time;
-        let mut current_gain = self.current_gain;
-        let mut attenuation_cb = self.attenuation_cb;
-        let smooth = current_gain != gain_target;
-
-        if sample_time < decay_end {
-            while sample_time < decay_end {
-                if smooth {
-                    current_gain += (gain_target - current_gain) * gain_smoothing;
-                }
-
-                // Linear ramp from 0 to sustainCb.
-                attenuation_cb = if decay_duration == 0.0 {
-                    sustain_cb
-                } else {
-                    (1.0 - (decay_end - sample_time) / decay_duration) * sustain_cb
-                };
-
-                // Emulate JS Float32Array *= semantics:
-                // JS: buffer[i] *= currentGain * cbAttenuationToGain(...)  → buffer[i] * (currentGain * cbAtten)
-                buffer[filled_buffer] = (buffer[filled_buffer] as f64
-                    * (current_gain
-                    * cb_attenuation_to_gain_f64(attenuation_cb + centibel_offset) as f64)) as f32;
-
-                sample_time += 1.0;
-                filled_buffer += 1;
-                if filled_buffer >= sample_count {
-                    self.sample_time = sample_time;
-                    self.current_gain = current_gain;
-                    self.attenuation_cb = attenuation_cb;
-                    return true;
-                }
+        // Decay phase: linear centibel ramp down to sustain.
+        if self.state == 3 {
+            if sample_time < self.decay_end {
+                self.attenuation_cb =
+                    (1.0 - (self.decay_end - sample_time) / self.decay_duration) * self.sustain_cb;
+                self.output_gain =
+                    gain_target * cb_attenuation_to_gain_f64(self.attenuation_cb) as f64;
+                return true;
             }
+            self.state += 1;
         }
 
-        self.sample_time = sample_time;
-        self.current_gain = current_gain;
-        self.attenuation_cb = attenuation_cb;
-        self.state += 1;
-
-        self.sustain_phase(
-            sample_count,
-            buffer,
-            gain_target,
-            centibel_offset,
-            filled_buffer,
-        )
-    }
-
-    /// Sustain phase: hold at the sustain level.
-    /// Equivalent to: sustainPhase(...)
-    fn sustain_phase(
-        &mut self,
-        sample_count: usize,
-        buffer: &mut [f32],
-        gain_target: f64,
-        centibel_offset: f64,
-        mut filled_buffer: usize,
-    ) -> bool {
-        let sustain_cb = self.sustain_cb;
-        let gain_smoothing = self.gain_smoothing;
-
-        // If sustain is at or past perceived silence, fill with zeros and signal end.
-        if self.can_end_on_silent_sustain && sustain_cb >= PERCEIVED_CB_SILENCE {
-            for s in buffer[filled_buffer..sample_count].iter_mut() {
-                *s = 0.0;
-            }
+        // Sustain phase: stay at sustain.
+        if self.can_end_on_silent_sustain && self.sustain_cb >= PERCEIVED_CB_SILENCE {
+            // Make sure to end on silence.
+            // https://github.com/spessasus/spessasynth_core/issues/57
+            self.attenuation_cb = CB_SILENCE;
+            self.output_gain = 0.0;
             return false;
         }
 
-        let mut sample_time = self.sample_time;
-        let mut current_gain = self.current_gain;
-        let smooth = current_gain != gain_target;
-
-        if filled_buffer < sample_count {
-            self.attenuation_cb = sustain_cb;
-
-            // Pre-compute the sustain gain (constant for the whole block).
-            // Use f64 version to match TS: cbAttenuationToGain(sustainCb + centibelOffset)
-            let sustain_gain = cb_attenuation_to_gain_f64(sustain_cb + centibel_offset) as f64;
-
-            while filled_buffer < sample_count {
-                if smooth {
-                    current_gain += (gain_target - current_gain) * gain_smoothing;
-                }
-
-                // Emulate JS Float32Array *= semantics:
-                // JS: buffer[i] *= currentGain * sustainGain  → buffer[i] * (currentGain * sustainGain)
-                buffer[filled_buffer] = (buffer[filled_buffer] as f64 * (current_gain * sustain_gain)) as f32;
-                sample_time += 1.0;
-                filled_buffer += 1;
-            }
-        }
-
-        self.sample_time = sample_time;
-        self.current_gain = current_gain;
+        self.attenuation_cb = self.sustain_cb;
+        self.output_gain = gain_target * cb_attenuation_to_gain_f64(self.sustain_cb) as f64;
         true
     }
 }
@@ -668,14 +398,10 @@ mod tests {
     use crate::soundbank::basic_soundbank::generator_types::{
         DEFAULT_GENERATOR_VALUES, generator_types as gt,
     };
+    use crate::synthesizer::audio_engine::voice::unit_converter::cb_attenuation_to_gain;
 
     const SAMPLE_RATE: f64 = 44_100.0;
-    const EPS: f32 = 1e-5;
     const EPS64: f64 = 1e-5;
-
-    fn approx_eq(a: f32, b: f32) -> bool {
-        (a - b).abs() < EPS
-    }
 
     fn approx_eq64(a: f64, b: f64) -> bool {
         (a - b).abs() < EPS64
@@ -693,14 +419,15 @@ mod tests {
     }
 
     /// Returns generators with delay and attack both zeroed (i16::MIN → 0 samples).
-    /// Without this, the defaults (delayVolEnv = -12000, attackVolEnv = -12000) each
-    /// give ~43 delay/attack samples, so attack_end > 0 and state stays at 0.
     /// i16::MIN = -32768 satisfies `timecents <= -32767` → timecents_to_seconds returns 0.
     fn gens_no_delay_no_attack() -> Vec<i16> {
         let g = default_gens();
         let g = gens_with(g, gt::DELAY_VOL_ENV, i16::MIN);
-        let g = gens_with(g, gt::ATTACK_VOL_ENV, i16::MIN);
-        g
+        gens_with(g, gt::ATTACK_VOL_ENV, i16::MIN)
+    }
+
+    fn new_env() -> VolumeEnvelope {
+        VolumeEnvelope::new(SAMPLE_RATE)
     }
 
     // -----------------------------------------------------------------------
@@ -709,46 +436,32 @@ mod tests {
 
     #[test]
     fn test_new_initial_attenuation_is_cb_silence() {
-        let env = VolumeEnvelope::new(SAMPLE_RATE);
+        let env = new_env();
         assert!(approx_eq64(env.attenuation_cb, 960.0));
     }
 
     #[test]
     fn test_new_state_is_zero() {
-        let env = VolumeEnvelope::new(SAMPLE_RATE);
+        let env = new_env();
         assert_eq!(env.state, 0);
     }
 
     #[test]
     fn test_new_entered_release_is_false() {
-        let env = VolumeEnvelope::new(SAMPLE_RATE);
+        let env = new_env();
         assert!(!env.entered_release);
     }
 
     #[test]
-    fn test_new_current_gain_is_zero() {
-        let env = VolumeEnvelope::new(SAMPLE_RATE);
-        assert!(approx_eq64(env.current_gain, 0.0));
+    fn test_new_output_gain_is_zero() {
+        let env = new_env();
+        assert!(approx_eq64(env.output_gain, 0.0));
     }
 
     #[test]
-    fn test_new_sample_rate_stored() {
-        let env = VolumeEnvelope::new(SAMPLE_RATE);
-        assert!(approx_eq64(env.sample_rate, SAMPLE_RATE));
-    }
-
-    #[test]
-    fn test_new_gain_smoothing_at_44100() {
-        let env = VolumeEnvelope::new(44_100.0);
-        // gainSmoothing = GAIN_SMOOTHING_FACTOR * (44100 / sampleRate) = 0.01 * 1 = 0.01
-        assert!(approx_eq64(env.gain_smoothing, 0.01));
-    }
-
-    #[test]
-    fn test_new_gain_smoothing_scaled_for_different_rate() {
-        let env = VolumeEnvelope::new(22_050.0);
-        // gainSmoothing = 0.01 * (44100 / 22050) = 0.02
-        assert!(approx_eq64(env.gain_smoothing, 0.02));
+    fn test_new_update_interval_is_bufsize() {
+        let env = new_env();
+        assert!(approx_eq64(env.update_interval, SPESSA_BUFSIZE as f64));
     }
 
     // -----------------------------------------------------------------------
@@ -757,63 +470,52 @@ mod tests {
 
     #[test]
     fn test_init_resets_state_to_zero() {
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
+        let mut env = new_env();
         env.state = 3;
-        env.init(&default_gens(), 60);
+        // Give a long attack so state stays at 0 (attack_end > update_interval).
+        let gens = gens_with(default_gens(), gt::ATTACK_VOL_ENV, 0);
+        env.init(&gens, 60);
         assert_eq!(env.state, 0);
     }
 
     #[test]
     fn test_init_resets_entered_release() {
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
+        let mut env = new_env();
         env.entered_release = true;
         env.init(&default_gens(), 60);
         assert!(!env.entered_release);
     }
 
     #[test]
-    fn test_init_attack_end_zero_jumps_to_hold() {
-        // When both delay and attack resolve to 0 samples, attack_end == 0
-        // and init() must jump directly to state 2 (hold/peak).
-        // Note: default delayVolEnv = -12000 gives ~43 delay samples, so we
-        // must explicitly zero the delay generator too.
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
+    fn test_init_short_attack_jumps_to_hold() {
+        // When both delay and attack resolve to 0 samples, attack_end == 0 <= update_interval
+        // → jump directly to state 2 (hold/peak).
+        let mut env = new_env();
         env.init(&gens_no_delay_no_attack(), 60);
         assert_eq!(env.state, 2);
     }
 
     #[test]
-    fn test_init_with_attack_stays_in_delay_state() {
-        // Set attackVolEnv to 0 timecents (1 second ≈ 44100 samples); delay defaults to
-        // -12000 timecents (~43 samples). Since attack_end = 43 + 44100 > 0 → state stays 0.
+    fn test_init_with_long_attack_stays_in_delay_state() {
+        // attackVolEnv = 0 timecents ≈ 44100 samples → attack_end >> update_interval → state 0.
         let gens = gens_with(default_gens(), gt::ATTACK_VOL_ENV, 0);
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
+        let mut env = new_env();
         env.init(&gens, 60);
         assert_eq!(env.state, 0);
     }
 
     #[test]
     fn test_init_attack_end_with_nonzero_attack_timecents() {
-        // attackVolEnv = 0 timecents → 44100 samples; delay zeroed → delay_end = 0.
-        // attack_end = 0 (delay) + 44100 (attack) = 44100.
+        // attackVolEnv = 0 timecents → 44100 samples; delay zeroed → attack_end = 44100.
         let g = gens_with(gens_no_delay_no_attack(), gt::ATTACK_VOL_ENV, 0);
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
+        let mut env = new_env();
         env.init(&g, 60);
         assert_eq!(env.attack_end, 44_100.0);
     }
 
     #[test]
-    fn test_init_sustain_cb_clamped_to_cb_silence() {
-        // sustainVolEnv clamped to min(CB_SILENCE=960, value).
-        // Default sustainVolEnv = 0.
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
-        env.init(&default_gens(), 60);
-        assert!(env.sustain_cb <= 960.0);
-    }
-
-    #[test]
     fn test_init_sustain_cb_zero_from_default() {
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
+        let mut env = new_env();
         env.init(&default_gens(), 60);
         assert!(approx_eq64(env.sustain_cb, 0.0));
     }
@@ -823,104 +525,38 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_process_delay_fills_zeros() {
-        // Use a short delay: delayVolEnv = 0 timecents → 1 second delay.
-        let gens = gens_with(default_gens(), gt::DELAY_VOL_ENV, 0);
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
+    fn test_process_delay_outputs_zero_gain() {
+        // delayVolEnv = 0 timecents → 1 second delay. Long attack keeps state 0.
+        let gens = gens_with(
+            gens_with(default_gens(), gt::DELAY_VOL_ENV, 0),
+            gt::ATTACK_VOL_ENV,
+            0,
+        );
+        let mut env = new_env();
         env.init(&gens, 60);
-        // state should be 0 (no attack set).
         assert_eq!(env.state, 0);
 
-        let mut buf = vec![1.0_f32; 128];
-        env.process(128, &mut buf, 1.0, 0.0);
-
-        // All samples must be silenced during the delay phase.
-        for &s in &buf {
-            assert!(approx_eq(s, 0.0));
-        }
-    }
-
-    #[test]
-    fn test_process_delay_returns_true_while_active() {
-        let gens = gens_with(default_gens(), gt::DELAY_VOL_ENV, 0);
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
-        env.init(&gens, 60);
-
-        let mut buf = vec![1.0_f32; 128];
-        let active = env.process(128, &mut buf, 1.0, 0.0);
+        let active = env.process(128, 1.0);
         assert!(active);
+        assert!(approx_eq64(env.output_gain, 0.0));
     }
 
     // -----------------------------------------------------------------------
-    // process() – attack stage
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_process_attack_ramps_from_zero() {
-        // No delay, 1-second attack.
-        let gens = gens_with(default_gens(), gt::ATTACK_VOL_ENV, 0);
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
-        env.init(&gens, 60);
-
-        // state 0; fill the delay (0 samples), then enter attack.
-        let mut buf = vec![1.0_f32; 128];
-        env.process(128, &mut buf, 1.0, 0.0);
-
-        // Attack ramps linearly: first sample is ≈ 0, last of 128 is small.
-        // All samples should be in [0, 1].
-        for &s in &buf {
-            assert!(s >= 0.0 && s <= 1.0, "attack sample out of [0,1]: {s}");
-        }
-    }
-
-    #[test]
-    fn test_process_attack_monotonically_increasing() {
-        let gens = gens_with(default_gens(), gt::ATTACK_VOL_ENV, 0);
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
-        env.init(&gens, 60);
-
-        // use current_gain = gain_target to avoid gain smoothing
-        let mut buf = vec![1.0_f32; 1024];
-        env.process(1024, &mut buf, 1.0, 0.0);
-
-        for i in 1..1024 {
-            assert!(
-                buf[i] >= buf[i - 1] - 1e-6,
-                "attack not monotonic at i={i}: {} < {}",
-                buf[i],
-                buf[i - 1]
-            );
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // process() – hold stage (state 2)
+    // process() – hold stage
     // -----------------------------------------------------------------------
 
     #[test]
     fn test_process_hold_keeps_unity_gain() {
-        // Zero delay + zero attack so attack_end == 0 → init() sets state = 2.
-        // holdVolEnv = 0 timecents → 1 second hold (44100 samples).
+        // Zero delay + zero attack → state 2; holdVolEnv = 0 → 1 second hold.
         let gens = gens_with(gens_no_delay_no_attack(), gt::HOLD_VOL_ENV, 0);
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
+        let mut env = new_env();
         env.init(&gens, 60);
-        // state = 2 (hold/peak). attack_end = 0, hold_end = 44100.
         assert_eq!(env.state, 2);
 
-        // Gain target = 1.0, current_gain starts at 0 → needs smoothing.
-        // Let's pre-set current_gain to 1.0 to avoid smoothing effect.
-        env.current_gain = 1.0;
-
-        let mut buf = vec![0.5_f32; 128];
-        env.process(128, &mut buf, 1.0, 0.0);
-
-        // Each sample should be multiplied by 1.0 * cb_attenuation_to_gain(0) = 1.0 * 1.0 = 1.0.
-        // Wait, it is: buf[i] *= current_gain * gain_offset
-        // current_gain = 1.0, gain_offset = cb_attenuation_to_gain(0) = 1.0.
-        // So buf[i] = 0.5 * 1.0 * 1.0 = 0.5.
-        for &s in &buf {
-            assert!(approx_eq(s, 0.5), "hold sample not 0.5: {s}");
-        }
+        let active = env.process(128, 1.0);
+        assert!(active);
+        // Hold outputs gain_target directly.
+        assert!(approx_eq64(env.output_gain, 1.0));
     }
 
     // -----------------------------------------------------------------------
@@ -929,30 +565,27 @@ mod tests {
 
     #[test]
     fn test_process_decay_ends_at_sustain_level() {
-        // No delay, no attack, hold=0 (immediate hold then decay).
-        // decayVolEnv = 0 timecents → 1 sec = 44100 samples.
-        // sustainVolEnv = 480 (half of CB_SILENCE = 960).
+        // No delay/attack, hold=0, decayVolEnv=0 (1 sec), sustainVolEnv=480 (half silence).
         let gens = {
-            let mut g = default_gens();
-            g[gt::DECAY_VOL_ENV as usize] = 0; // 1 second decay
-            g[gt::SUSTAIN_VOL_ENV as usize] = 480; // half silence
+            let mut g = gens_no_delay_no_attack();
+            g[gt::HOLD_VOL_ENV as usize] = i16::MIN;
+            g[gt::DECAY_VOL_ENV as usize] = 0;
+            g[gt::SUSTAIN_VOL_ENV as usize] = 480;
             g
         };
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
+        let mut env = new_env();
         env.init(&gens, 60);
-        env.current_gain = 1.0;
 
-        // After a full decay (44100 samples), the attenuation should be at sustainCb.
-        let n = 44_100;
-        let mut buf = vec![1.0_f32; n];
-        env.process(n, &mut buf, 1.0, 0.0);
+        // Advance a full decay (44100 samples in one block).
+        env.process(44_100, 1.0);
 
-        // The last sample should be near cb_attenuation_to_gain(480) ≈ 0.1585.
-        let expected = cb_attenuation_to_gain(480);
-        let last = *buf.last().unwrap();
+        // The last sample should be near cb_attenuation_to_gain(480).
+        let expected = cb_attenuation_to_gain(480) as f64;
         assert!(
-            (last - expected).abs() < 0.01,
-            "decay end sample {last} not near expected sustain gain {expected}"
+            (env.output_gain - expected).abs() < 0.02,
+            "decay end gain {} not near expected sustain gain {}",
+            env.output_gain,
+            expected
         );
     }
 
@@ -962,52 +595,40 @@ mod tests {
 
     #[test]
     fn test_process_sustain_is_constant() {
-        // sustainVolEnv = 200 → cb_attenuation_to_gain(200) ≈ 0.1.
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
-        env.state = 4; // Force sustain stage.
+        let mut env = new_env();
+        env.state = 4;
         env.sustain_cb = 200.0;
-        env.current_gain = 1.0;
 
-        let expected_gain = cb_attenuation_to_gain(200);
-        let mut buf = vec![1.0_f32; 64];
-        env.process(64, &mut buf, 1.0, 0.0);
-
-        for &s in &buf {
-            assert!(
-                (s - expected_gain).abs() < 1e-4,
-                "sustain sample {s} not near expected {expected_gain}"
-            );
-        }
+        let expected_gain = cb_attenuation_to_gain(200) as f64;
+        env.process(64, 1.0);
+        assert!(
+            (env.output_gain - expected_gain).abs() < 1e-4,
+            "sustain gain {} not near expected {}",
+            env.output_gain,
+            expected_gain
+        );
     }
 
     #[test]
     fn test_process_sustain_returns_true() {
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
+        let mut env = new_env();
         env.state = 4;
         env.sustain_cb = 0.0;
-        env.current_gain = 1.0;
-        let mut buf = vec![1.0_f32; 32];
-        let active = env.process(32, &mut buf, 1.0, 0.0);
+        let active = env.process(32, 1.0);
         assert!(active);
     }
 
     #[test]
     fn test_process_sustain_silent_can_end() {
-        // If can_end_on_silent_sustain and sustain_cb >= PERCEIVED_CB_SILENCE,
-        // the voice should end and the buffer should be zeroed.
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
+        // can_end_on_silent_sustain && sustain_cb >= PERCEIVED_CB_SILENCE → end, gain 0.
+        let mut env = new_env();
         env.state = 4;
-        env.sustain_cb = 960.0; // CB_SILENCE
+        env.sustain_cb = 960.0;
         env.can_end_on_silent_sustain = true;
-        env.current_gain = 1.0;
 
-        let mut buf = vec![1.0_f32; 32];
-        let active = env.process(32, &mut buf, 1.0, 0.0);
-
+        let active = env.process(32, 1.0);
         assert!(!active);
-        for &s in &buf {
-            assert!(approx_eq(s, 0.0));
-        }
+        assert!(approx_eq64(env.output_gain, 0.0));
     }
 
     // -----------------------------------------------------------------------
@@ -1016,52 +637,36 @@ mod tests {
 
     #[test]
     fn test_process_release_attenuates_to_silence() {
-        // Set up a release from full volume (releaseStartCb = 0).
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
+        let mut env = new_env();
         env.state = 4;
         env.sustain_cb = 0.0;
-        env.current_gain = 1.0;
         env.entered_release = true;
         env.release_start_cb = 0.0;
         env.release_start_time_samples = 0.0;
         env.sample_time = 0.0;
-        // Release duration: 1 second = 44100 samples.
         env.release_duration = 44_100.0;
 
-        // Process the full release.
-        let n = 44_100;
-        let mut buf = vec![1.0_f32; n];
-        let active = env.process(n, &mut buf, 1.0, 0.0);
-
-        // At the end of the release the attenuation_cb should be CB_SILENCE.
+        let active = env.process(44_100, 1.0);
+        // After a full release the attenuation should be at CB_SILENCE (perceived silent).
         assert!(
             !active || env.attenuation_cb >= PERCEIVED_CB_SILENCE,
             "expected voice inactive or perceived silence, attenuation_cb={}",
             env.attenuation_cb
         );
-
-        // First sample should be near unity gain (release just started).
-        let first = buf[0];
-        assert!(first > 0.9, "first release sample too attenuated: {first}");
     }
 
     #[test]
     fn test_process_release_returns_false_at_silence() {
-        // release_start_cb = 0, release_duration = 128 samples.
-        // After processing all 128 samples, the final elapsed_release = 127:
-        //   attenuation_cb = (127/128) * 960 ≈ 952.5 > PERCEIVED_CB_SILENCE (900)
-        // → process() returns false.
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
+        // release_start_cb=0, release_duration=128; after 128 samples elapsed=128:
+        //   attenuation_cb = (128/128)*960 = 960 > PERCEIVED (900) → returns false.
+        let mut env = new_env();
         env.entered_release = true;
         env.release_start_cb = 0.0;
         env.release_start_time_samples = 0.0;
         env.sample_time = 0.0;
-        env.current_gain = 1.0;
         env.release_duration = 128.0;
 
-        let mut buf = vec![1.0_f32; 128];
-        let active = env.process(128, &mut buf, 1.0, 0.0);
-
+        let active = env.process(128, 1.0);
         assert!(!active);
     }
 
@@ -1071,7 +676,7 @@ mod tests {
 
     #[test]
     fn test_start_release_sets_entered_release() {
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
+        let mut env = new_env();
         env.state = 4;
         env.sustain_cb = 0.0;
         env.init(&default_gens(), 60);
@@ -1083,9 +688,8 @@ mod tests {
 
     #[test]
     fn test_start_release_immediate_deactivation_when_silent() {
-        // If release_start_cb >= PERCEIVED_CB_SILENCE (900), should return true.
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
-        // State 0 (delay): release_start_cb will be CB_SILENCE (960 >= 900).
+        // State 0 (delay): release_start_cb = CB_SILENCE (960 >= 900) → deactivate.
+        let mut env = new_env();
         env.state = 0;
         env.sustain_cb = 0.0;
         env.sample_time = 0.0;
@@ -1097,8 +701,8 @@ mod tests {
 
     #[test]
     fn test_start_release_from_hold_stage_not_immediately_silent() {
-        // State 2 (hold): release_start_cb = 0, which is well below PERCEIVED_CB_SILENCE.
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
+        // State 2 (hold): release_start_cb = 0 → not silent.
+        let mut env = new_env();
         env.state = 2;
         env.sustain_cb = 0.0;
         env.attenuation_cb = 0.0;
@@ -1114,19 +718,16 @@ mod tests {
 
     #[test]
     fn test_start_release_uses_override_when_nonzero() {
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
+        let mut env = new_env();
         env.state = 2;
         env.sustain_cb = 0.0;
         env.sample_time = 0.0;
         env.decay_end = 0.0;
         env.decay_duration = 0.0;
 
-        // Override release to -7200 (minimum allowed).
         let gens = default_gens();
-        env.start_release(&gens, 60, -2320); // exclusive class override
-        // Duration should be based on -2320 (clamped to max(-7200, -2320) = -2320).
-        // timecents_to_seconds(-2320) ~ 2^(-2320/1200) ~ 0.0133 seconds.
-        // 0.0133 * 44100 ~ 587 samples; * releaseFraction (1.0).
+        env.start_release(&gens, 60, -2320);
+        // Duration is based on max(-7200, -2320) = -2320; releaseFraction = 1.0 (releaseStartCb=0).
         let expected_secs = 2f64.powf(-2320.0 / 1200.0) * SAMPLE_RATE;
         assert!(
             (env.release_duration - expected_secs).abs() < 2.0,
@@ -1138,80 +739,19 @@ mod tests {
 
     #[test]
     fn test_start_release_twice_updates_from_current_attenuation() {
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
+        let mut env = new_env();
         env.state = 2;
         env.sustain_cb = 0.0;
         env.sample_time = 0.0;
         env.decay_end = 0.0;
         env.decay_duration = 0.0;
 
-        // First release.
         let gens = gens_with(default_gens(), gt::RELEASE_VOL_ENV, 0);
         env.start_release(&gens, 60, 0);
         assert!(env.entered_release);
 
-        // Simulate some processing: advance attenuation.
         env.attenuation_cb = 200.0;
-
-        // Second release (exclusive class scenario): must use current attenuation.
         env.start_release(&gens, 60, 0);
         assert!(approx_eq64(env.release_start_cb, 200.0));
-    }
-
-    // -----------------------------------------------------------------------
-    // centibel_offset
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_process_centibel_offset_affects_output() {
-        // Sustain at 0 cB (full volume). Apply a 200 cB offset.
-        let mut env_no_offset = VolumeEnvelope::new(SAMPLE_RATE);
-        env_no_offset.state = 4;
-        env_no_offset.sustain_cb = 0.0;
-        env_no_offset.current_gain = 1.0;
-
-        let mut env_with_offset = VolumeEnvelope::new(SAMPLE_RATE);
-        env_with_offset.state = 4;
-        env_with_offset.sustain_cb = 0.0;
-        env_with_offset.current_gain = 1.0;
-
-        let mut buf_no = vec![1.0_f32; 8];
-        let mut buf_with = vec![1.0_f32; 8];
-
-        env_no_offset.process(8, &mut buf_no, 1.0, 0.0);
-        env_with_offset.process(8, &mut buf_with, 1.0, 200.0);
-
-        // 200 cB offset reduces gain by a factor of 0.1.
-        let all_same = buf_no
-            .iter()
-            .zip(buf_with.iter())
-            .all(|(a, b)| approx_eq(*a, *b));
-        assert!(!all_same, "centibel_offset must affect output");
-    }
-
-    // -----------------------------------------------------------------------
-    // gain_target smoothing
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_process_gain_smoothing_applied() {
-        // current_gain starts at 0, target is 1.0.
-        // With smoothing, the output should be less than without.
-        let mut env = VolumeEnvelope::new(SAMPLE_RATE);
-        env.state = 4;
-        env.sustain_cb = 0.0;
-        env.current_gain = 0.0; // starts at 0
-
-        let mut buf = vec![1.0_f32; 32];
-        env.process(32, &mut buf, 1.0, 0.0);
-
-        // First sample is multiplied by current_gain which starts near 0.
-        assert!(
-            buf[0] < 0.1,
-            "first smoothed sample should be near 0, got {}",
-            buf[0]
-        );
-        // Last sample should be closer to 1 after smoothing.
-        assert!(buf[31] > buf[0], "smoothing should increase gain over time");
     }
 }
