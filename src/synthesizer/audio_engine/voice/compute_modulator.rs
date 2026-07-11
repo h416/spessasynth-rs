@@ -71,6 +71,14 @@ pub trait ChannelContext {
     /// MIDI controller table (14-bit, `CONTROLLER_TABLE_SIZE` size).
     /// Equivalent to: `this.midiControllers`
     fn midi_controllers(&self) -> &[i16];
+
+    /// Global (non-per-note) pitch wheel value (14-bit, center 8192).
+    /// Equivalent to: `this._midiParameters.pitchWheel`
+    fn pitch_wheel(&self) -> i16;
+
+    /// Channel modulation depth multiplier (default 1.0), applied to mod-wheel modulators.
+    /// Equivalent to: `this._midiParameters.modulationDepth`
+    fn modulation_depth(&self) -> f64;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,6 +108,7 @@ pub trait VoiceContext {
         &mut self,
         midi_controllers: &[i16],
         pitch: i16,
+        modulation_depth: f64,
         index: usize,
     ) -> f64;
 
@@ -174,15 +183,13 @@ pub fn compute_modulators<C: ChannelContext, V: VoiceContext>(
         let key = voice.real_key();
         channel.pitch_wheels().get(key).copied().unwrap_or(0)
     } else {
-        let pitch_idx = modulator_sources::PITCH_WHEEL as usize + NON_CC_INDEX_OFFSET;
-        channel
-            .midi_controllers()
-            .get(pitch_idx)
-            .copied()
-            .unwrap_or(0)
+        // TS 4.3.0: the global pitch wheel now lives on the channel MIDI parameters
+        // (`this._midiParameters.pitchWheel`) instead of the controller table.
+        channel.pitch_wheel()
     };
 
     let midi_controllers = channel.midi_controllers();
+    let modulation_depth = channel.modulation_depth();
 
     match filter {
         // ---------------------------------------------------------------
@@ -221,7 +228,7 @@ pub fn compute_modulators<C: ChannelContext, V: VoiceContext>(
                 let dest = dest_raw as usize;
 
                 // Compute modulator value (separate borrow needed for &mut self)
-                let mod_val = voice.compute_single_modulator(midi_controllers, pitch, i);
+                let mod_val = voice.compute_single_modulator(midi_controllers, pitch, modulation_depth, i);
 
                 // Clamp and add (prevent i16 overflow)
                 // TS: modulatedGenerators[mod.destination] + voice.computeModulator(...)
@@ -294,7 +301,7 @@ pub fn compute_modulators<C: ChannelContext, V: VoiceContext>(
 
                 // Compute modulator (also writes to voice.modulatorValues[i])
                 // Equivalent to: voice.computeModulator(this.midiControllers, pitch, i)
-                voice.compute_single_modulator(midi_controllers, pitch, i);
+                voice.compute_single_modulator(midi_controllers, pitch, modulation_depth, i);
 
                 // Sum all modulator values for this destination
                 // Equivalent to:
@@ -364,6 +371,14 @@ mod tests {
     }
 
     impl ChannelContext for MockChannel {
+        fn pitch_wheel(&self) -> i16 {
+            // Preserve the pre-4.3.0 test behavior: global pitch came from the controller table.
+            let idx = modulator_sources::PITCH_WHEEL as usize + NON_CC_INDEX_OFFSET;
+            self.midi_controllers.get(idx).copied().unwrap_or(0)
+        }
+        fn modulation_depth(&self) -> f64 {
+            1.0
+        }
         fn generator_offsets_enabled(&self) -> bool {
             self.offsets_enabled
         }
@@ -422,6 +437,7 @@ mod tests {
             &mut self,
             _midi_controllers: &[i16],
             _pitch: i16,
+            _modulation_depth: f64,
             index: usize,
         ) -> f64 {
             // Store as i16 (matching TS Int16Array truncation), return full f64 value

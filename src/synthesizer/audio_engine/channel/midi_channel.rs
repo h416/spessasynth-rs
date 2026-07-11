@@ -396,7 +396,9 @@ impl MidiChannel {
             "Channel {} modulation depth. Cents: {}",
             self.channel, cents
         ));
-        self.set_custom_controller(custom_controllers::MODULATION_MULTIPLIER, cents / 50.0);
+        // TS 4.3.0: setMIDIParameter("modulationDepth", cents / 50). The depth multiplier now
+        // lives on the channel MIDI parameters and is applied in `compute_single_modulator`.
+        self.midi_parameters.modulation_depth = cents / 50.0;
     }
 
     /// Sets the channel's fine tuning in cents.
@@ -432,6 +434,9 @@ impl MidiChannel {
         if midi_note == -1 {
             self.per_note_pitch = false;
             self.midi_controllers[lock_idx] = pitch;
+            // TS 4.3.0: the global pitch wheel is mirrored on the channel MIDI parameters,
+            // where `compute_single_modulator` now reads it from.
+            self.midi_parameters.pitch_wheel = pitch as i32;
             self.compute_modulators_all_impl(voices, 0, modulator_sources::PITCH_WHEEL as usize);
             if let Some(ev) = self.build_channel_property_event(enable_event_system) {
                 events.push(ev);
@@ -1012,5 +1017,14 @@ impl ChannelContext for MidiChannel {
 
     fn midi_controllers(&self) -> &[i16] {
         &self.midi_controllers
+    }
+
+    fn pitch_wheel(&self) -> i16 {
+        // The pitch wheel is a 14-bit value (0..=16383), so it always fits in i16.
+        self.midi_parameters.pitch_wheel as i16
+    }
+
+    fn modulation_depth(&self) -> f64 {
+        self.midi_parameters.modulation_depth
     }
 }

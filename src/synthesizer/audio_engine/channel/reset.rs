@@ -143,6 +143,9 @@ impl MidiChannel {
             self.custom_controllers[custom_controllers::CHANNEL_TRANSPOSE_FINE as usize];
         self.custom_controllers.copy_from_slice(&CUSTOM_RESET_ARRAY);
         self.set_custom_controller(custom_controllers::CHANNEL_TRANSPOSE_FINE, transpose as f64);
+        // TS 4.3.0 reset.ts: this.modulationDepth(50, false) → modulationDepth = 1
+        // (log = false; set the value directly to avoid per-reset log spam).
+        self.midi_parameters.modulation_depth = 1.0;
         self.reset_parameters();
 
         // Reset drum parameters (SC-88 standard reverb values, etc.)

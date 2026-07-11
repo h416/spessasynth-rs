@@ -1,6 +1,8 @@
 /// voice.rs
 /// purpose: prepares Voices from sample and generator data
 /// Ported from: src/synthesizer/audio_engine/engine_components/voice.ts
+use crate::midi::enums::midi_controllers as cc;
+use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 use crate::soundbank::basic_soundbank::generator_types::GENERATORS_AMOUNT;
 use crate::soundbank::basic_soundbank::modulator::DecodedModulator;
 use crate::soundbank::basic_soundbank::modulator_source::VoiceModInputs;
@@ -368,6 +370,7 @@ impl VoiceContext for Voice {
         &mut self,
         midi_controllers: &[i16],
         pitch: i16,
+        modulation_depth: f64,
         index: usize,
     ) -> f64 {
         // Extract all data from the modulator before taking a mutable borrow.
@@ -376,17 +379,29 @@ impl VoiceContext for Voice {
             transform_type,
             is_effect_mod,
             is_resonant_mod,
+            is_mod_wheel_mod,
             primary_src,
             secondary_src,
         ) = {
             let modulator = &self.modulators[index];
+            let primary = modulator.primary_source();
+            let secondary = modulator.secondary_source();
+            // TS 4.3.0 `isModWheelModulator`: a CC-1 (modulation wheel) source driving
+            // the vibrato/mod LFO pitch depth. Its value is scaled by the channel
+            // modulation depth in `computeModulator`.
+            let is_mod_wheel_mod = ((primary.is_cc
+                && primary.index as u16 == cc::MODULATION_WHEEL as u16)
+                || (secondary.is_cc && secondary.index as u16 == cc::MODULATION_WHEEL as u16))
+                && (modulator.destination == gt::MOD_LFO_TO_PITCH
+                    || modulator.destination == gt::VIB_LFO_TO_PITCH);
             (
                 modulator.transform_amount,
                 modulator.transform_type,
                 modulator.is_effect_modulator,
                 modulator.is_default_resonant_modulator,
-                modulator.primary_source(), // returns a new ModulatorSource
-                modulator.secondary_source(), // returns a new ModulatorSource
+                is_mod_wheel_mod,
+                primary, // returns a new ModulatorSource
+                secondary, // returns a new ModulatorSource
             )
         };
 
@@ -432,6 +447,12 @@ impl VoiceContext for Voice {
         // Equivalent to: if (isDefaultResonantModulator) this.resonanceOffset = Math.max(0, computedValue / 2);
         if is_resonant_mod {
             self.resonance_offset = (computed_value / 2.0).max(0.0);
+        }
+
+        // Modulation depth: scale mod-wheel modulators by the channel modulation depth.
+        // Equivalent to: if (modulator.isModWheelModulator) computedValue *= this._midiParameters.modulationDepth;
+        if is_mod_wheel_mod {
+            computed_value *= modulation_depth;
         }
 
         // Store as i16 to match TypeScript's Int16Array truncation behavior.
@@ -784,7 +805,7 @@ mod tests {
         v.modulators = vec![make_no_controller_mod(gt::PAN, 0)];
         v.modulator_values = vec![99];
         let midi_controllers = vec![0i16; 147];
-        let result = v.compute_single_modulator(&midi_controllers, 0, 0);
+        let result = v.compute_single_modulator(&midi_controllers, 0, 1.0, 0);
         assert!((result - 0.0).abs() < 1e-5);
         assert_eq!(v.modulator_values[0], 0);
     }
@@ -797,7 +818,7 @@ mod tests {
         v.modulators = vec![make_no_controller_mod(gt::PAN, 100)];
         v.modulator_values = vec![0];
         let midi_controllers = vec![0i16; 147];
-        let result = v.compute_single_modulator(&midi_controllers, 0, 0);
+        let result = v.compute_single_modulator(&midi_controllers, 0, 1.0, 0);
         // result ≈ 100.0 (NO_CONTROLLER returns full scale)
         assert!(result.abs() > 0.0, "result should be nonzero, got {result}");
         // modulatorValues stores as i16 (matches TS Int16Array)
@@ -810,7 +831,7 @@ mod tests {
         v.modulators = vec![make_no_controller_mod(gt::PAN, 50)];
         v.modulator_values = vec![0];
         let midi_controllers = vec![0i16; 147];
-        let result = v.compute_single_modulator(&midi_controllers, 0, 0);
+        let result = v.compute_single_modulator(&midi_controllers, 0, 1.0, 0);
         assert_eq!(v.modulator_values[0], result as i16);
     }
 
@@ -823,7 +844,7 @@ mod tests {
         v.modulators = vec![mod_];
         v.modulator_values = vec![0];
         let midi_controllers = vec![0i16; 147];
-        let result = v.compute_single_modulator(&midi_controllers, 0, 0);
+        let result = v.compute_single_modulator(&midi_controllers, 0, 1.0, 0);
         assert!(
             result >= 0.0,
             "transform_type 2 should produce abs value, got {result}"
