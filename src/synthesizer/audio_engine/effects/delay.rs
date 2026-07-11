@@ -2,6 +2,8 @@ use std::f64::consts::PI;
 
 use super::delay_line::DelayLine;
 
+const DELAY_GAIN: f64 = 1.66;
+
 /// SC-8850 delay time segments (manual p.236).
 struct DelayTimeSegment {
     start: u8,
@@ -67,16 +69,15 @@ pub struct SpessaSynthDelay {
 }
 
 impl SpessaSynthDelay {
-    pub fn new(sample_rate: f64) -> Self {
+    pub fn new(sample_rate: f64, max_buffer_size: usize) -> Self {
         let sr = sample_rate as usize;
-        let buf_size = 128;
         Self {
             delay_left: DelayLine::new(sr),
             delay_right: DelayLine::new(sr),
             delay_center: DelayLine::new(sr),
             sample_rate,
-            delay_center_output: vec![0.0; buf_size],
-            delay_pre_lpf_buf: vec![0.0; buf_size],
+            delay_center_output: vec![0.0; max_buffer_size],
+            delay_pre_lpf_buf: vec![0.0; max_buffer_size],
             delay_center_time: 0.34 * sample_rate,
             delay_left_multiplier: 0.04,
             delay_right_multiplier: 0.04,
@@ -116,7 +117,7 @@ impl SpessaSynthDelay {
 
     pub fn set_level(&mut self, value: u8) {
         self.level = value;
-        self.gain = value as f64 / 127.0;
+        self.gain = (value as f64 / 127.0) * DELAY_GAIN;
     }
 
     pub fn set_level_center(&mut self, value: u8) {
@@ -182,12 +183,6 @@ impl SpessaSynthDelay {
         start_index: usize,
         sample_count: usize,
     ) {
-        // Ensure buffers
-        if self.delay_center_output.len() < sample_count {
-            self.delay_center_output.resize(sample_count, 0.0);
-            self.delay_pre_lpf_buf.resize(sample_count, 0.0);
-        }
-
         // Process pre-lowpass
         let use_lpf = self.pre_lowpass > 0;
         if use_lpf {
@@ -295,7 +290,7 @@ mod tests {
     #[test]
     fn delay_time_segment_first_entry() {
         // value=0x01: 0.1 + (1-1)*0.1 = 0.1 ms
-        let mut d = SpessaSynthDelay::new(SR);
+        let mut d = SpessaSynthDelay::new(SR, 128);
         d.set_time_center(0x01);
         let expected_samples = (SR * 0.1 / 1000.0).max(2.0);
         assert!(
@@ -312,7 +307,7 @@ mod tests {
         // seg0: start=0x01, end=0x14 → 0x14 is NOT in seg0 (value < end).
         // seg1: start=0x14, end=0x23 → 0x14 is in seg1.
         // delay_ms = 2.0 + (0x14-0x14)*0.2 = 2.0 ms
-        let mut d = SpessaSynthDelay::new(SR);
+        let mut d = SpessaSynthDelay::new(SR, 128);
         d.set_time_center(0x14);
         let expected = (SR * 2.0 / 1000.0).max(2.0);
         assert!(
@@ -327,7 +322,7 @@ mod tests {
     fn delay_time_segment_mid_range() {
         // value=0x37: seg4 (start=0x37, end=0x46), time_start=20.0, res=2.0
         // delay_ms = 20.0 + (0x37-0x37)*2.0 = 20.0 ms
-        let mut d = SpessaSynthDelay::new(SR);
+        let mut d = SpessaSynthDelay::new(SR, 128);
         d.set_time_center(0x37);
         let expected = (SR * 20.0 / 1000.0).max(2.0);
         assert!(
@@ -342,7 +337,7 @@ mod tests {
     fn delay_time_segment_last() {
         // value=0x73 (last valid in seg8): seg8 start=0x69, time_start=500.0, res=50.0
         // delay_ms = 500.0 + (0x73-0x69)*50.0 = 500 + 10*50 = 1000 ms
-        let mut d = SpessaSynthDelay::new(SR);
+        let mut d = SpessaSynthDelay::new(SR, 128);
         d.set_time_center(0x73);
         let expected = SR * 1000.0 / 1000.0; // 44100 samples
         assert!(
@@ -355,7 +350,7 @@ mod tests {
 
     #[test]
     fn delay_time_minimum_is_2_samples() {
-        let mut d = SpessaSynthDelay::new(SR);
+        let mut d = SpessaSynthDelay::new(SR, 128);
         d.set_time_center(0x01);
         assert!(d.delay_center_time >= 2.0);
     }
@@ -364,16 +359,16 @@ mod tests {
 
     #[test]
     fn set_level_calculates_gain() {
-        let mut d = SpessaSynthDelay::new(SR);
+        let mut d = SpessaSynthDelay::new(SR, 128);
         d.set_level(127);
-        assert!((d.gain - 1.0).abs() < EPS);
+        assert!((d.gain - DELAY_GAIN).abs() < EPS);
         d.set_level(0);
         assert!(d.gain.abs() < EPS);
     }
 
     #[test]
     fn set_feedback_calculates_center_feedback() {
-        let mut d = SpessaSynthDelay::new(SR);
+        let mut d = SpessaSynthDelay::new(SR, 128);
         d.set_feedback(64);
         // (64 - 64) / 66 = 0
         assert!(d.delay_center.feedback.abs() < EPS);
@@ -387,7 +382,7 @@ mod tests {
 
     #[test]
     fn set_feedback_zeroes_stereo_delays() {
-        let mut d = SpessaSynthDelay::new(SR);
+        let mut d = SpessaSynthDelay::new(SR, 128);
         d.delay_left.feedback = 1.0;
         d.delay_right.feedback = 1.0;
         d.set_feedback(64);
@@ -397,7 +392,7 @@ mod tests {
 
     #[test]
     fn set_time_ratio_left_calculates_multiplier() {
-        let mut d = SpessaSynthDelay::new(SR);
+        let mut d = SpessaSynthDelay::new(SR, 128);
         d.set_time_ratio_left(24);
         // 24 * (100/2400) = 1.0
         assert!((d.delay_left_multiplier - 1.0).abs() < EPS);
@@ -405,7 +400,7 @@ mod tests {
 
     #[test]
     fn set_time_ratio_right_calculates_multiplier() {
-        let mut d = SpessaSynthDelay::new(SR);
+        let mut d = SpessaSynthDelay::new(SR, 128);
         d.set_time_ratio_right(12);
         // 12 * (100/2400) = 0.5
         assert!((d.delay_right_multiplier - 0.5).abs() < EPS);
@@ -413,14 +408,14 @@ mod tests {
 
     #[test]
     fn set_send_level_to_reverb_gain() {
-        let mut d = SpessaSynthDelay::new(SR);
+        let mut d = SpessaSynthDelay::new(SR, 128);
         d.set_send_level_to_reverb(127);
         assert!((d.reverb_gain - 1.0).abs() < EPS);
     }
 
     #[test]
     fn set_pre_lowpass_coefficient() {
-        let mut d = SpessaSynthDelay::new(SR);
+        let mut d = SpessaSynthDelay::new(SR, 128);
         d.set_pre_lowpass(1);
         let fc = 8000.0 * 0.63_f64.powi(1);
         let decay = (-2.0 * PI * fc / SR).exp();
@@ -430,7 +425,7 @@ mod tests {
 
     #[test]
     fn snapshot_captures_parameters() {
-        let mut d = SpessaSynthDelay::new(SR);
+        let mut d = SpessaSynthDelay::new(SR, 128);
         d.set_level(100);
         d.set_feedback(80);
         d.set_time_center(0x20);

@@ -59,7 +59,11 @@ pub trait InsertionProcessor {
 }
 
 /// Creates an insertion processor for the given EFX type, or None if unsupported.
-pub fn create_insertion_processor(efx_type: u16, sample_rate: f64) -> Option<Box<dyn InsertionProcessor>> {
+pub fn create_insertion_processor(
+    efx_type: u16,
+    sample_rate: f64,
+    max_buffer_size: usize,
+) -> Option<Box<dyn InsertionProcessor>> {
     match efx_type {
         0x0000 => Some(Box::new(ThruFx::new(sample_rate))),
         0x0100 => Some(Box::new(StereoEqFx::new(sample_rate))),
@@ -67,7 +71,7 @@ pub fn create_insertion_processor(efx_type: u16, sample_rate: f64) -> Option<Box
         0x0121 => Some(Box::new(AutoWahFx::new(sample_rate))),
         0x0125 => Some(Box::new(TremoloFx::new(sample_rate))),
         0x0126 => Some(Box::new(AutoPanFx::new(sample_rate))),
-        0x1108 => Some(Box::new(PhAutoWahFx::new(sample_rate))),
+        0x1108 => Some(Box::new(PhAutoWahFx::new(sample_rate, max_buffer_size))),
         _ => None,
     }
 }

@@ -1,5 +1,7 @@
 use std::f64::consts::PI;
 
+const CHORUS_GAIN: f64 = 1.3;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChorusSnapshot {
     pub level: u8,
@@ -42,7 +44,9 @@ pub struct SpessaSynthChorus {
 }
 
 impl SpessaSynthChorus {
-    pub fn new(sample_rate: f64) -> Self {
+    pub fn new(sample_rate: f64, _max_buffer_size: usize) -> Self {
+        // For consistency across effects; the chorus delay buffers are sized to the
+        // sample rate, so max_buffer_size is intentionally unused (matches TS `void`).
         let buf_len = sample_rate as usize;
         let mut chorus = Self {
             left_delay_buffer: vec![0.0; buf_len],
@@ -50,7 +54,7 @@ impl SpessaSynthChorus {
             sample_rate,
             phase: 0.0,
             write: 0,
-            gain: 1.0,
+            gain: 0.5,
             reverb_gain: 0.0,
             delay_gain_value: 0.0,
             depth_samples: 0.0,
@@ -101,18 +105,22 @@ impl SpessaSynthChorus {
 
     pub fn set_feedback(&mut self, value: u8) {
         self.feedback = value;
-        self.feedback_gain = value as f64 / 128.0;
+        // GM2 section 4.5.4
+        self.feedback_gain = value as f64 * 0.007_63;
     }
 
     pub fn set_rate(&mut self, value: u8) {
         self.rate = value;
-        let rate_hz = 15.5 * (value as f64 / 127.0);
+        // GS Advanced Editor actually specifies the rate!
+        // 127 - 15.50Hz, 1 - 0.12 Hz
+        // And GM2 section 4.5.2 actually specifies the equation!
+        let rate_hz = value as f64 * 0.122;
         self.rate_inc = rate_hz / self.sample_rate;
     }
 
     pub fn set_level(&mut self, value: u8) {
         self.level = value;
-        self.gain = value as f64 / 127.0;
+        self.gain = (value as f64 / 127.0) * CHORUS_GAIN;
     }
 
     /// Process chorus effect.
@@ -241,25 +249,25 @@ mod tests {
 
     #[test]
     fn new_creates_valid_chorus() {
-        let c = SpessaSynthChorus::new(SR);
+        let c = SpessaSynthChorus::new(SR, 128);
         assert_eq!(c.sample_rate, SR);
         assert_eq!(c.left_delay_buffer.len(), SR as usize);
     }
 
     #[test]
     fn set_level_calculates_gain() {
-        let mut c = SpessaSynthChorus::new(SR);
+        let mut c = SpessaSynthChorus::new(SR, 128);
         c.set_level(127);
-        assert!((c.gain - 1.0).abs() < EPS);
+        assert!((c.gain - CHORUS_GAIN).abs() < EPS);
         c.set_level(0);
         assert!(c.gain.abs() < EPS);
         c.set_level(64);
-        assert!((c.gain - 64.0 / 127.0).abs() < EPS);
+        assert!((c.gain - (64.0 / 127.0) * CHORUS_GAIN).abs() < EPS);
     }
 
     #[test]
     fn set_depth_calculates_samples() {
-        let mut c = SpessaSynthChorus::new(SR);
+        let mut c = SpessaSynthChorus::new(SR, 128);
         c.set_depth(127);
         let expected = 0.025 * SR; // 1102.5
         assert!((c.depth_samples - expected).abs() < 1.0);
@@ -269,14 +277,14 @@ mod tests {
 
     #[test]
     fn set_delay_minimum_is_one() {
-        let mut c = SpessaSynthChorus::new(SR);
+        let mut c = SpessaSynthChorus::new(SR, 128);
         c.set_delay(0);
         assert!((c.delay_samples - 1.0).abs() < EPS, "Min delay should be 1.0, got {}", c.delay_samples);
     }
 
     #[test]
     fn set_delay_calculates_samples() {
-        let mut c = SpessaSynthChorus::new(SR);
+        let mut c = SpessaSynthChorus::new(SR, 128);
         c.set_delay(127);
         let expected = 0.025 * SR; // 1102.5
         assert!((c.delay_samples - expected).abs() < 1.0);
@@ -284,10 +292,10 @@ mod tests {
 
     #[test]
     fn set_rate_calculates_increment() {
-        let mut c = SpessaSynthChorus::new(SR);
+        let mut c = SpessaSynthChorus::new(SR, 128);
         c.set_rate(127);
-        // rate_hz = 15.5, rate_inc = 15.5 / 44100
-        let expected = 15.5 / SR;
+        // rate_hz = 127 * 0.122, rate_inc = rate_hz / 44100
+        let expected = (127.0 * 0.122) / SR;
         assert!((c.rate_inc - expected).abs() < EPS);
         c.set_rate(0);
         assert!(c.rate_inc.abs() < EPS);
@@ -295,30 +303,30 @@ mod tests {
 
     #[test]
     fn set_feedback_calculates_gain() {
-        let mut c = SpessaSynthChorus::new(SR);
-        c.set_feedback(128);
-        assert!((c.feedback_gain - 1.0).abs() < EPS);
+        let mut c = SpessaSynthChorus::new(SR, 128);
+        c.set_feedback(127);
+        assert!((c.feedback_gain - 127.0 * 0.007_63).abs() < EPS);
         c.set_feedback(0);
         assert!(c.feedback_gain.abs() < EPS);
     }
 
     #[test]
     fn set_send_level_to_reverb() {
-        let mut c = SpessaSynthChorus::new(SR);
+        let mut c = SpessaSynthChorus::new(SR, 128);
         c.set_send_level_to_reverb(127);
         assert!((c.reverb_gain - 1.0).abs() < EPS);
     }
 
     #[test]
     fn set_send_level_to_delay() {
-        let mut c = SpessaSynthChorus::new(SR);
+        let mut c = SpessaSynthChorus::new(SR, 128);
         c.set_send_level_to_delay(127);
         assert!((c.delay_gain_value - 1.0).abs() < EPS);
     }
 
     #[test]
     fn set_pre_lowpass_coefficient() {
-        let mut c = SpessaSynthChorus::new(SR);
+        let mut c = SpessaSynthChorus::new(SR, 128);
         c.set_pre_lowpass(0);
         // fc = 8000, decay = exp(-2*PI*8000/44100), a = 1-decay
         let fc = 8000.0;
@@ -329,7 +337,7 @@ mod tests {
 
     #[test]
     fn process_zero_input_produces_zero_output() {
-        let mut c = SpessaSynthChorus::new(SR);
+        let mut c = SpessaSynthChorus::new(SR, 128);
         c.set_level(127);
         c.set_depth(64);
         c.set_delay(64);
@@ -351,7 +359,7 @@ mod tests {
 
     #[test]
     fn snapshot_captures_parameters() {
-        let mut c = SpessaSynthChorus::new(SR);
+        let mut c = SpessaSynthChorus::new(SR, 128);
         c.set_level(100);
         c.set_depth(50);
         c.set_delay(30);

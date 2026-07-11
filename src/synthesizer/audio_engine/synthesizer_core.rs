@@ -288,9 +288,9 @@ impl SynthesizerCore {
             system_parameters,
             current_time: options.initial_time,
             midi_volume: 1.0,
-            reverb_processor: SpessaSynthReverb::new(sample_rate),
-            chorus_processor: SpessaSynthChorus::new(sample_rate),
-            delay_processor: SpessaSynthDelay::new(sample_rate),
+            reverb_processor: SpessaSynthReverb::new(sample_rate, buf_size),
+            chorus_processor: SpessaSynthChorus::new(sample_rate, buf_size),
+            delay_processor: SpessaSynthDelay::new(sample_rate, buf_size),
             delay_active: false,
             reverb_input: vec![0.0; buf_size],
             chorus_input: vec![0.0; buf_size],
@@ -1224,7 +1224,7 @@ impl SynthesizerCore {
     /// SysEx path via the insertion module's `create_insertion_processor`).
     #[allow(dead_code)]
     pub(crate) fn set_insertion_processor_by_type(&mut self, efx_type: u16) {
-        if let Some(proc) = insertion::create_insertion_processor(efx_type, self.sample_rate) {
+        if let Some(proc) = insertion::create_insertion_processor(efx_type, self.sample_rate, self.max_buffer_size) {
             self.insertion_processor = proc;
         } else {
             self.insertion_processor = Box::new(ThruFx::new(self.sample_rate));

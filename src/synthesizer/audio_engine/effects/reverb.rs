@@ -1,6 +1,8 @@
 use super::dattorro::DattorroReverb;
 use super::delay_line::DelayLine;
 
+const DELAY_GAIN: f64 = 1.5;
+
 #[derive(Clone, Debug)]
 pub struct ReverbSnapshot {
     pub level: u8,
@@ -44,16 +46,15 @@ pub struct SpessaSynthReverb {
 }
 
 impl SpessaSynthReverb {
-    pub fn new(sample_rate: f64) -> Self {
-        let buf_size = 128;
+    pub fn new(sample_rate: f64, max_buffer_size: usize) -> Self {
         let mut reverb = Self {
             dattorro: DattorroReverb::new(sample_rate),
             delay_left: DelayLine::new(sample_rate as usize),
             delay_right: DelayLine::new(sample_rate as usize),
-            delay_left_output: vec![0.0; buf_size],
-            delay_right_output: vec![0.0; buf_size],
-            delay_left_input: vec![0.0; buf_size],
-            delay_pre_lpf: vec![0.0; buf_size],
+            delay_left_output: vec![0.0; max_buffer_size],
+            delay_right_output: vec![0.0; max_buffer_size],
+            delay_left_input: vec![0.0; max_buffer_size],
+            delay_pre_lpf: vec![0.0; max_buffer_size],
             sample_rate,
             pre_lpf_a: 0.0,
             pre_lpf_z: 0.0,
@@ -91,13 +92,13 @@ impl SpessaSynthReverb {
                 // Room1
                 self.dattorro.damping = 0.85;
                 self.character_time_coefficient = 0.9;
-                self.character_gain_coefficient = 0.7;
+                self.character_gain_coefficient = 0.9;
                 self.character_lpf_coefficient = 0.2;
             }
             1 => {
                 // Room2
                 self.dattorro.damping = 0.2;
-                self.character_gain_coefficient = 0.5;
+                self.character_gain_coefficient = 0.7;
                 self.character_time_coefficient = 1.0;
                 self.dattorro.decay_diffusion2 = 0.64;
                 self.dattorro.decay_diffusion1 = 0.6;
@@ -106,7 +107,7 @@ impl SpessaSynthReverb {
             2 => {
                 // Room3
                 self.dattorro.damping = 0.56;
-                self.character_gain_coefficient = 0.55;
+                self.character_gain_coefficient = 0.75;
                 self.character_time_coefficient = 1.0;
                 self.dattorro.decay_diffusion2 = 0.64;
                 self.dattorro.decay_diffusion1 = 0.6;
@@ -114,21 +115,25 @@ impl SpessaSynthReverb {
             }
             3 => {
                 // Hall1
-                self.dattorro.damping = 0.6;
-                self.character_gain_coefficient = 1.0;
+                self.dattorro.damping = 0.3;
+                self.character_gain_coefficient = 1.25;
+                self.character_time_coefficient = 1.3;
                 self.character_lpf_coefficient = 0.0;
                 self.dattorro.decay_diffusion2 = 0.7;
                 self.dattorro.decay_diffusion1 = 0.66;
             }
             4 => {
                 // Hall2
-                self.character_gain_coefficient = 0.75;
-                self.dattorro.damping = 0.2;
-                self.character_lpf_coefficient = 0.2;
+                self.character_gain_coefficient = 1.0;
+                self.character_time_coefficient = 1.2;
+                self.character_lpf_coefficient = 0.1;
+                self.dattorro.damping = 0.1;
+                self.dattorro.decay_diffusion2 = 0.69;
+                self.dattorro.decay_diffusion1 = 0.67;
             }
             5 => {
                 // Plate
-                self.character_gain_coefficient = 0.55;
+                self.character_gain_coefficient = 0.75;
                 self.dattorro.damping = 0.65;
                 self.character_time_coefficient = 0.5;
             }
@@ -199,15 +204,6 @@ impl SpessaSynthReverb {
         }
     }
 
-    fn ensure_buffers(&mut self, sample_count: usize) {
-        if self.delay_left_output.len() < sample_count {
-            self.delay_left_output.resize(sample_count, 0.0);
-            self.delay_right_output.resize(sample_count, 0.0);
-            self.delay_left_input.resize(sample_count, 0.0);
-            self.delay_pre_lpf.resize(sample_count, 0.0);
-        }
-    }
-
     fn apply_pre_lpf<'a>(&mut self, input: &'a [f32], sample_count: usize) -> bool {
         if self.pre_lowpass > 0 {
             let a = self.pre_lpf_a;
@@ -231,7 +227,6 @@ impl SpessaSynthReverb {
         start_index: usize,
         sample_count: usize,
     ) {
-        self.ensure_buffers(sample_count);
         let used_lpf = self.apply_pre_lpf(input, sample_count);
         let delay_in: &[f32] = if used_lpf {
             &self.delay_pre_lpf[..sample_count]
@@ -262,7 +257,6 @@ impl SpessaSynthReverb {
         start_index: usize,
         sample_count: usize,
     ) {
-        self.ensure_buffers(sample_count);
         let used_lpf = self.apply_pre_lpf(input, sample_count);
 
         // Mix right output into left input
@@ -309,8 +303,8 @@ impl SpessaSynthReverb {
     }
 
     fn update_gain(&mut self) {
-        self.dattorro.gain = (self.level as f64 / 348.0) * self.character_gain_coefficient;
-        self.delay_gain = self.level as f64 / 127.0;
+        self.dattorro.gain = (self.level as f64 / 345.0) * self.character_gain_coefficient;
+        self.delay_gain = (self.level as f64 / 127.0) * DELAY_GAIN;
     }
 
     fn update_time(&mut self) {
@@ -339,63 +333,64 @@ mod tests {
 
     #[test]
     fn character_0_room1_coefficients() {
-        let mut r = SpessaSynthReverb::new(SR);
+        let mut r = SpessaSynthReverb::new(SR, 128);
         r.set_character(0);
         assert!((r.dattorro.damping - 0.85).abs() < EPS);
         assert!((r.character_time_coefficient - 0.9).abs() < EPS);
-        assert!((r.character_gain_coefficient - 0.7).abs() < EPS);
+        assert!((r.character_gain_coefficient - 0.9).abs() < EPS);
         assert!((r.character_lpf_coefficient - 0.2).abs() < EPS);
     }
 
     #[test]
     fn character_3_hall1_coefficients() {
-        let mut r = SpessaSynthReverb::new(SR);
+        let mut r = SpessaSynthReverb::new(SR, 128);
         r.set_character(3);
-        assert!((r.dattorro.damping - 0.6).abs() < EPS);
-        assert!((r.character_gain_coefficient - 1.0).abs() < EPS);
+        assert!((r.dattorro.damping - 0.3).abs() < EPS);
+        assert!((r.character_gain_coefficient - 1.25).abs() < EPS);
+        assert!((r.character_time_coefficient - 1.3).abs() < EPS);
         assert!((r.character_lpf_coefficient - 0.0).abs() < EPS);
     }
 
     #[test]
     fn character_5_plate_coefficients() {
-        let mut r = SpessaSynthReverb::new(SR);
+        let mut r = SpessaSynthReverb::new(SR, 128);
         r.set_character(5);
-        assert!((r.character_gain_coefficient - 0.55).abs() < EPS);
+        assert!((r.character_gain_coefficient - 0.75).abs() < EPS);
         assert!((r.dattorro.damping - 0.65).abs() < EPS);
         assert!((r.character_time_coefficient - 0.5).abs() < EPS);
     }
 
     #[test]
     fn character_resets_defaults_before_applying() {
-        let mut r = SpessaSynthReverb::new(SR);
+        let mut r = SpessaSynthReverb::new(SR, 128);
         r.set_character(0); // Room1 sets damping=0.85
-        r.set_character(3); // Hall1 sets damping=0.6
-        assert!((r.dattorro.damping - 0.6).abs() < EPS);
+        r.set_character(3); // Hall1 sets damping=0.3
+        assert!((r.dattorro.damping - 0.3).abs() < EPS);
     }
 
     // ---- Gain/level tests ----
 
     #[test]
     fn set_level_updates_dattorro_gain() {
-        let mut r = SpessaSynthReverb::new(SR);
-        r.set_character(0); // gain_coefficient = 0.7
+        let mut r = SpessaSynthReverb::new(SR, 128);
+        r.set_character(0); // gain_coefficient = 0.9
         r.set_level(127);
-        let expected = (127.0_f64 / 348.0) * 0.7;
+        let expected = (127.0_f64 / 345.0) * 0.9;
         assert!((r.dattorro.gain - expected).abs() < EPS);
     }
 
     #[test]
     fn set_level_updates_delay_gain() {
-        let mut r = SpessaSynthReverb::new(SR);
+        let mut r = SpessaSynthReverb::new(SR, 128);
         r.set_level(127);
-        assert!((r.delay_gain - 1.0).abs() < EPS);
+        assert!((r.delay_gain - DELAY_GAIN).abs() < EPS);
     }
 
     // ---- Time tests ----
 
     #[test]
     fn set_time_updates_decay() {
-        let mut r = SpessaSynthReverb::new(SR);
+        let mut r = SpessaSynthReverb::new(SR, 128);
         r.set_character(0); // time_coefficient = 0.9
         r.set_time(127);
         let expected = 0.9 * (0.05 + 0.65 * 1.0); // = 0.63
@@ -404,7 +399,7 @@ mod tests {
 
     #[test]
     fn set_time_zero_gives_minimum_delay() {
-        let mut r = SpessaSynthReverb::new(SR);
+        let mut r = SpessaSynthReverb::new(SR, 128);
         r.set_time(0);
         assert!(r.delay_left.time() >= 21);
     }
@@ -413,7 +408,7 @@ mod tests {
 
     #[test]
     fn set_pre_delay_time_converts_to_samples() {
-        let mut r = SpessaSynthReverb::new(SR);
+        let mut r = SpessaSynthReverb::new(SR, 128);
         r.set_pre_delay_time(100);
         let expected = (100.0_f64 / 1000.0) * SR;
         assert!((r.dattorro.pre_delay - expected).abs() < 1.0);
@@ -423,7 +418,7 @@ mod tests {
 
     #[test]
     fn set_delay_feedback_mono_character6() {
-        let mut r = SpessaSynthReverb::new(SR);
+        let mut r = SpessaSynthReverb::new(SR, 128);
         r.set_character(6);
         r.set_delay_feedback(127);
         let x = 127.0_f64 / 127.0;
@@ -433,7 +428,7 @@ mod tests {
 
     #[test]
     fn set_delay_feedback_panning_character7() {
-        let mut r = SpessaSynthReverb::new(SR);
+        let mut r = SpessaSynthReverb::new(SR, 128);
         r.set_character(7);
         r.set_delay_feedback(127);
         // For character 7, left/right feedback = 0, pan_delay_feedback gets the value
@@ -448,7 +443,7 @@ mod tests {
 
     #[test]
     fn set_pre_lowpass_updates_dattorro_lpf() {
-        let mut r = SpessaSynthReverb::new(SR);
+        let mut r = SpessaSynthReverb::new(SR, 128);
         r.set_character(0); // lpf_coefficient = 0.2
         r.set_pre_lowpass(7);
         let expected = (0.1 + (7.0 - 7.0_f64) / 14.0 + 0.2).min(1.0);
@@ -459,7 +454,7 @@ mod tests {
 
     #[test]
     fn snapshot_captures_all_parameters() {
-        let mut r = SpessaSynthReverb::new(SR);
+        let mut r = SpessaSynthReverb::new(SR, 128);
         r.set_character(3);
         r.set_time(64);
         r.set_level(100);

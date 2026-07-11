@@ -23,7 +23,7 @@ pub struct PhAutoWahFx {
 }
 
 impl PhAutoWahFx {
-    pub fn new(sample_rate: f64) -> Self {
+    pub fn new(sample_rate: f64, max_buffer_size: usize) -> Self {
         let mut phaser = PhaserFx::new(sample_rate);
         let mut auto_wah = AutoWahFx::new(sample_rate);
         phaser.set_send_level_to_reverb(0.0);
@@ -42,8 +42,8 @@ impl PhAutoWahFx {
             level: DEFAULT_LEVEL / 127.0,
             phaser,
             auto_wah,
-            buffer_ph: vec![0.0; 128],
-            buffer_aw: vec![0.0; 128],
+            buffer_ph: vec![0.0; max_buffer_size],
+            buffer_aw: vec![0.0; max_buffer_size],
         };
         fx.phaser.set_parameter(0x16, 127);
         fx.auto_wah.set_parameter(0x16, 127);
@@ -94,12 +94,6 @@ impl InsertionProcessor for PhAutoWahFx {
         let rev = self.send_level_to_reverb;
         let chr = self.send_level_to_chorus;
         let dly = self.send_level_to_delay;
-
-        // Resize buffers if needed
-        if sample_count > self.buffer_ph.len() {
-            self.buffer_ph.resize(sample_count, 0.0);
-            self.buffer_aw.resize(sample_count, 0.0);
-        }
 
         // Process phaser (left input only)
         // TS uses same buffer for L/R output; in Rust we need separate mutable refs
