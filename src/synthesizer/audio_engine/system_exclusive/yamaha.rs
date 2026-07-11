@@ -1,20 +1,18 @@
-/// handle_xg.rs
-/// purpose: Handles XG (Yamaha) system exclusive messages.
-/// Ported from: src/synthesizer/audio_engine/engine_methods/system_exclusive/handle_xg.ts
+/// yamaha.rs
+/// purpose: Handles Yamaha XG system exclusive messages.
+/// Ported from: src/synthesizer/audio_engine/system_exclusive/yamaha.ts
 /// Reference: http://www.studio4all.de/htmle/main91.html
 use crate::midi::enums::midi_controllers;
 use crate::synthesizer::audio_engine::channel::parameters::midi::ChannelMidiParameterValue;
 use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::sys_ex_not_recognized;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
-use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::GlobalMIDIParameterChangeCallback;
 use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::spessa_synth_info;
-use crate::utils::midi_hacks::BankSelectHacks;
 
 impl SynthesizerCore {
-    /// Handles a XG system exclusive message.
-    /// Equivalent to: handleXG(syx, channelOffset)
+    /// Handles a Yamaha XG system exclusive message.
+    /// Equivalent to: yamahaSystemExclusive(syx, channelOffset)
     pub fn handle_xg(&mut self, syx: &[u8], channel_offset: usize) {
         // XG sysex
         if syx[2] != 0x4c {
@@ -24,10 +22,12 @@ impl SynthesizerCore {
 
         let a1 = syx[3]; // Address 1
         let a2 = syx[4]; // Address 2
+        let a3 = syx[5]; // Address 3
+        let data = syx[6];
 
         // XG system parameter
         if a1 == 0x00 && a2 == 0x00 {
-            match syx[5] {
+            match a3 {
                 // Master tune
                 0x00 => {
                     let tune = ((syx[6] as u32 & 15) << 12)
@@ -35,77 +35,78 @@ impl SynthesizerCore {
                         | ((syx[8] as u32 & 15) << 4)
                         | (syx[9] as u32 & 15);
                     let cents = (tune as f64 - 1024.0) / 10.0;
-                    self.set_master_tuning(cents);
-                    spessa_synth_info(&format!("XG master tune. Cents: {}", cents));
+                    self.set_midi_parameter(GlobalMIDIParameterChangeCallback::FineTune(cents));
+                    spessa_synth_info(&format!("XG Master Tune. Cents: {}", cents));
                 }
 
                 // Master volume
                 0x04 => {
-                    let vol = syx[6];
-                    self.set_midi_volume(vol as f64 / 127.0);
-                    spessa_synth_info(&format!("XG master volume. Volume: {}", vol));
+                    self.set_midi_parameter(GlobalMIDIParameterChangeCallback::Gain(
+                        data as f64 / 127.0,
+                    ));
+                    spessa_synth_info(&format!("XG Master Volume: {}", data));
                 }
 
                 // Master attenuation
                 0x05 => {
-                    let vol = 127u8.saturating_sub(syx[6]);
-                    self.set_midi_volume(vol as f64 / 127.0);
-                    spessa_synth_info(&format!("XG master attenuation. Volume: {}", vol));
+                    let vol = 127i32 - data as i32;
+                    self.set_midi_parameter(GlobalMIDIParameterChangeCallback::Gain(
+                        vol as f64 / 127.0,
+                    ));
+                    spessa_synth_info(&format!("XG Master Attenuation: {}", data));
                 }
 
                 // Master transpose
                 0x06 => {
-                    let transpose = syx[6] as f64 - 64.0;
-                    self.set_midi_parameter(GlobalMIDIParameterChangeCallback::KeyShift(
-                        transpose,
-                    ));
-                    spessa_synth_info(&format!("XG master transpose. Semitones: {}", transpose));
+                    let transpose = data as f64 - 64.0;
+                    self.set_midi_parameter(GlobalMIDIParameterChangeCallback::KeyShift(transpose));
+                    spessa_synth_info(&format!("XG Master Transpose: {}", data));
                 }
 
+                // XG Reset
                 // XG on
-                0x7e => {
-                    spessa_synth_info("XG system on");
+                0x7f | 0x7e => {
+                    spessa_synth_info("MIDI System: Yamaha XG");
                     self.reset(MIDISystem::Xg);
                 }
 
                 _ => {}
             }
-        } else if a1 == 0x02 && a2 == 0x01 {
-            let effect = syx[5];
+            return;
+        }
+
+        if a1 == 0x02 && a2 == 0x01 {
+            let effect = a3;
             let effect_type = if effect <= 0x15 {
                 "Reverb"
-            } else if effect <= 35 {
+            } else if effect <= 0x35 {
                 "Chorus"
             } else {
                 "Variation"
             };
-            spessa_synth_info(&format!(
-                "Unsupported XG {} Parameter: {:02X}",
-                effect_type, effect
-            ));
-        } else if a1 == 0x08 {
+            spessa_synth_info(&format!("Unsupported XG {} Parameter: {:02X}", effect_type, effect));
+            return;
+        }
+
+        if a1 == 0x08 {
             // A2 is the channel number
-            // XG part parameter
-            if !BankSelectHacks::is_system_xg(self.midi_parameters.system) {
-                return;
-            }
             let channel = a2 as usize + channel_offset;
             if channel >= self.midi_channels.len() {
                 // Invalid channel
+                sys_ex_not_recognized(syx, "Yamaha XG Part Setup");
                 return;
             }
-            let value = syx[6];
 
             let current_time = self.current_time;
             let current_system = self.midi_parameters.system;
             let enable_event_system = self.system_parameters.events_enabled;
 
-            match syx[5] {
+            match a3 {
                 // Bank-select MSB
                 0x01 => {
                     let evs = self.midi_channels[channel].controller_change(
                         midi_controllers::BANK_SELECT,
-                        value,
+                        data,
                         &mut self.voices,
                         current_time,
                         current_system,
@@ -120,7 +121,7 @@ impl SynthesizerCore {
                 0x02 => {
                     let evs = self.midi_channels[channel].controller_change(
                         midi_controllers::BANK_SELECT_LSB,
-                        value,
+                        data,
                         &mut self.voices,
                         current_time,
                         current_system,
@@ -134,7 +135,7 @@ impl SynthesizerCore {
                 // Program change
                 0x03 => {
                     let evs = self.midi_channels[channel].program_change(
-                        value,
+                        data,
                         &self.sound_bank_manager,
                         current_system,
                         enable_event_system,
@@ -142,28 +143,36 @@ impl SynthesizerCore {
                     for ev in evs {
                         self.call_event(ev);
                     }
+                }
+
+                // Rev. channel
+                0x04 => {
+                    // The rxChannel selects which channel this part receives on.
+                    // NOTE: customChannelNumbers dispatch is not implemented yet
+                    // (Task 21), so the value is stored but does not affect rendering.
+                    let rx_channel = data as usize + channel_offset;
+                    self.midi_channels[channel]
+                        .set_midi_parameter(ChannelMidiParameterValue::RxChannel(rx_channel as u8));
+                    spessa_synth_info(&format!("XG Rev. Channel on {}: {}", channel, rx_channel));
+                }
+
+                // Poly/mono
+                0x05 => {
+                    let poly = data == 1;
+                    self.midi_channels[channel]
+                        .set_midi_parameter(ChannelMidiParameterValue::PolyMode(poly));
+                    spessa_synth_info(&format!(
+                        "XG Mono/poly on {}: {}",
+                        channel,
+                        if poly { "POLY" } else { "MONO" }
+                    ));
                 }
 
                 // Part mode (drum channel flag)
                 0x07 => {
-                    // setDrums: for XG, set bank MSB to drum bank (127) if drum
-                    let is_drum = value != 0;
-                    if is_drum {
-                        if let Some(drum_bank) = BankSelectHacks::get_drum_bank(current_system) {
-                            self.midi_channels[channel].set_bank_msb(drum_bank);
-                            self.midi_channels[channel].set_bank_lsb(0);
-                        }
-                    } else {
-                        self.midi_channels[channel].set_bank_msb(0);
-                        self.midi_channels[channel].set_bank_lsb(0);
-                    }
-                    if let Some(ev) = self.midi_channels[channel].set_drum_flag(is_drum) {
-                        self.call_event(ev);
-                    }
-                    // Extract program before the mutable borrow of program_change
-                    let program = self.midi_channels[channel].patch.program;
-                    let evs = self.midi_channels[channel].program_change(
-                        program,
+                    let drums = data != 0;
+                    let evs = self.midi_channels[channel].set_drums(
+                        drums,
                         &self.sound_bank_manager,
                         current_system,
                         enable_event_system,
@@ -171,17 +180,23 @@ impl SynthesizerCore {
                     for ev in evs {
                         self.call_event(ev);
                     }
+                    spessa_synth_info(&format!(
+                        "XG Part Mode on {}: {}",
+                        channel,
+                        if drums { "DRUM" } else { "MELODIC" }
+                    ));
                 }
 
                 // Note shift
                 0x08 => {
+                    // Drum channels ignore key shift; reset to 0 to be sure.
+                    let mut shift = data as f64 - 64.0;
                     if self.midi_channels[channel].drum_channel {
-                        // Skip for drum channels
-                    } else {
-                        self.midi_channels[channel].set_custom_controller(
-                            custom_controllers::CHANNEL_KEY_SHIFT,
-                            (value as i32 - 64) as f64,
-                        );
+                        shift = 0.0;
+                    }
+                    if self.midi_channels[channel].midi_parameters.key_shift != shift {
+                        self.midi_channels[channel]
+                            .set_midi_parameter(ChannelMidiParameterValue::KeyShift(shift));
                     }
                 }
 
@@ -189,7 +204,7 @@ impl SynthesizerCore {
                 0x0b => {
                     let evs = self.midi_channels[channel].controller_change(
                         midi_controllers::MAIN_VOLUME,
-                        value,
+                        data,
                         &mut self.voices,
                         current_time,
                         current_system,
@@ -202,12 +217,13 @@ impl SynthesizerCore {
 
                 // Pan position
                 0x0e => {
-                    let pan = value;
-                    if pan == 0 {
+                    let pan = data;
+                    let random_pan = pan == 0;
+                    self.midi_channels[channel]
+                        .set_midi_parameter(ChannelMidiParameterValue::RandomPan(random_pan));
+                    if random_pan {
                         // 0 means random
-                        self.midi_channels[channel]
-                            .set_midi_parameter(ChannelMidiParameterValue::RandomPan(true));
-                        spessa_synth_info(&format!("Random pan is set to ON for {}", channel));
+                        spessa_synth_info(&format!("Random Pan for {}: ON", channel));
                     } else {
                         let evs = self.midi_channels[channel].controller_change(
                             midi_controllers::PAN,
@@ -223,26 +239,11 @@ impl SynthesizerCore {
                     }
                 }
 
-                // Dry (same as main volume)
-                0x11 => {
-                    let evs = self.midi_channels[channel].controller_change(
-                        midi_controllers::MAIN_VOLUME,
-                        value,
-                        &mut self.voices,
-                        current_time,
-                        current_system,
-                        enable_event_system,
-                    );
-                    for ev in evs {
-                        self.call_event(ev);
-                    }
-                }
-
                 // Chorus
                 0x12 => {
                     let evs = self.midi_channels[channel].controller_change(
                         midi_controllers::CHORUS_DEPTH,
-                        value,
+                        data,
                         &mut self.voices,
                         current_time,
                         current_system,
@@ -257,7 +258,7 @@ impl SynthesizerCore {
                 0x13 => {
                     let evs = self.midi_channels[channel].controller_change(
                         midi_controllers::REVERB_DEPTH,
-                        value,
+                        data,
                         &mut self.voices,
                         current_time,
                         current_system,
@@ -272,7 +273,7 @@ impl SynthesizerCore {
                 0x15 => {
                     let evs = self.midi_channels[channel].controller_change(
                         midi_controllers::VIBRATO_RATE,
-                        value,
+                        data,
                         &mut self.voices,
                         current_time,
                         current_system,
@@ -287,7 +288,7 @@ impl SynthesizerCore {
                 0x16 => {
                     let evs = self.midi_channels[channel].controller_change(
                         midi_controllers::VIBRATO_DEPTH,
-                        value,
+                        data,
                         &mut self.voices,
                         current_time,
                         current_system,
@@ -302,7 +303,7 @@ impl SynthesizerCore {
                 0x17 => {
                     let evs = self.midi_channels[channel].controller_change(
                         midi_controllers::VIBRATO_DELAY,
-                        value,
+                        data,
                         &mut self.voices,
                         current_time,
                         current_system,
@@ -317,7 +318,7 @@ impl SynthesizerCore {
                 0x18 => {
                     let evs = self.midi_channels[channel].controller_change(
                         midi_controllers::BRIGHTNESS,
-                        value,
+                        data,
                         &mut self.voices,
                         current_time,
                         current_system,
@@ -332,7 +333,7 @@ impl SynthesizerCore {
                 0x19 => {
                     let evs = self.midi_channels[channel].controller_change(
                         midi_controllers::FILTER_RESONANCE,
-                        value,
+                        data,
                         &mut self.voices,
                         current_time,
                         current_system,
@@ -347,7 +348,7 @@ impl SynthesizerCore {
                 0x1a => {
                     let evs = self.midi_channels[channel].controller_change(
                         midi_controllers::ATTACK_TIME,
-                        value,
+                        data,
                         &mut self.voices,
                         current_time,
                         current_system,
@@ -362,7 +363,7 @@ impl SynthesizerCore {
                 0x1b => {
                     let evs = self.midi_channels[channel].controller_change(
                         midi_controllers::DECAY_TIME,
-                        value,
+                        data,
                         &mut self.voices,
                         current_time,
                         current_system,
@@ -377,7 +378,7 @@ impl SynthesizerCore {
                 0x1c => {
                     let evs = self.midi_channels[channel].controller_change(
                         midi_controllers::RELEASE_TIME,
-                        value,
+                        data,
                         &mut self.voices,
                         current_time,
                         current_system,
@@ -388,20 +389,161 @@ impl SynthesizerCore {
                     }
                 }
 
+                // Bend pitch control (pitch wheel range)
+                0x23 => {
+                    let centered_value = data as f64 - 64.0;
+                    self.midi_channels[channel].set_midi_parameter(
+                        ChannelMidiParameterValue::PitchWheelRange(centered_value),
+                    );
+                }
+
                 _ => {
                     spessa_synth_info(&format!(
                         "Unsupported Yamaha XG Part Setup: {:02X} for channel {}",
-                        syx[5], channel
+                        a3, channel
                     ));
                 }
             }
-        } else if a1 == 0x06 || a1 == 0x07 {
+            return;
+        }
+
+        if a1 >> 4 == 3 {
+            // Drum part setup
+            if self.system_parameters.drum_lock {
+                return;
+            }
+            let drum_key = a2 as usize;
+            match a3 {
+                0x00 => {
+                    // Drum pitch coarse
+                    let pitch = (data as f64 - 64.0) * 100.0;
+                    for ch in self.midi_channels.iter_mut() {
+                        if !ch.drum_channel {
+                            continue;
+                        }
+                        ch.drum_params[drum_key].pitch = pitch;
+                    }
+                    spessa_synth_info(&format!(
+                        "Drum Pitch for key {}: {} semitones",
+                        drum_key, pitch
+                    ));
+                }
+
+                0x01 => {
+                    // Drum pitch fine
+                    let pitch = data as f64 - 64.0;
+                    for ch in self.midi_channels.iter_mut() {
+                        if !ch.drum_channel {
+                            continue;
+                        }
+                        ch.drum_params[drum_key].pitch += pitch;
+                    }
+                    spessa_synth_info(&format!("Drum Pitch Fine for key {}: {}", drum_key, pitch));
+                }
+
+                0x02 => {
+                    // Drum Level
+                    for ch in self.midi_channels.iter_mut() {
+                        if !ch.drum_channel {
+                            continue;
+                        }
+                        ch.drum_params[drum_key].gain = data as f64 / 120.0;
+                    }
+                    spessa_synth_info(&format!("Drum Level for key {}: {}", drum_key, data));
+                }
+
+                0x03 => {
+                    // Drum Alternate Group (exclusive class)
+                    for ch in self.midi_channels.iter_mut() {
+                        if !ch.drum_channel {
+                            continue;
+                        }
+                        ch.drum_params[drum_key].exclusive_class = data;
+                    }
+                    spessa_synth_info(&format!(
+                        "Drum Alternate Group for key {}: {}",
+                        drum_key, data
+                    ));
+                }
+
+                0x04 => {
+                    // Drum Pan
+                    for ch in self.midi_channels.iter_mut() {
+                        if !ch.drum_channel {
+                            continue;
+                        }
+                        ch.drum_params[drum_key].pan = data;
+                    }
+                    spessa_synth_info(&format!("Drum Pan for key {}: {}", drum_key, data));
+                }
+
+                0x05 => {
+                    // Drum Reverb
+                    for ch in self.midi_channels.iter_mut() {
+                        if !ch.drum_channel {
+                            continue;
+                        }
+                        ch.drum_params[drum_key].reverb_gain = data as f64 / 127.0;
+                    }
+                    spessa_synth_info(&format!("Drum Reverb for key {}: {}", drum_key, data));
+                }
+
+                0x06 => {
+                    // Drum Chorus
+                    for ch in self.midi_channels.iter_mut() {
+                        if !ch.drum_channel {
+                            continue;
+                        }
+                        ch.drum_params[drum_key].chorus_gain = data as f64 / 127.0;
+                    }
+                    spessa_synth_info(&format!("Drum Chorus for key {}: {}", drum_key, data));
+                }
+
+                0x09 => {
+                    // Receive note off
+                    for ch in self.midi_channels.iter_mut() {
+                        if !ch.drum_channel {
+                            continue;
+                        }
+                        ch.drum_params[drum_key].rx_note_off = data == 1;
+                    }
+                    spessa_synth_info(&format!(
+                        "Drum Note Off for key {}: {}",
+                        drum_key,
+                        if data == 1 { "ON" } else { "OFF" }
+                    ));
+                }
+
+                0x0a => {
+                    // Receive note on
+                    for ch in self.midi_channels.iter_mut() {
+                        if !ch.drum_channel {
+                            continue;
+                        }
+                        ch.drum_params[drum_key].rx_note_on = data == 1;
+                    }
+                    spessa_synth_info(&format!(
+                        "Drum Note On for key {}: {}",
+                        drum_key,
+                        if data == 1 { "ON" } else { "OFF" }
+                    ));
+                }
+
+                _ => {
+                    sys_ex_not_recognized(&[a3], "Yamaha XG Drum Setup");
+                }
+            }
+            return;
+        }
+
+        if a1 == 0x06 || a1 == 0x07 {
             // Display letters (0x06) or Display bitmap (0x07)
             self.call_event(
                 crate::synthesizer::types::SynthProcessorEvent::DisplayMessage(syx.to_vec()),
             );
-        } else if BankSelectHacks::is_system_xg(self.midi_parameters.system) {
-            sys_ex_not_recognized(syx, "Yamaha XG");
+            return;
         }
+
+        sys_ex_not_recognized(syx, "Yamaha XG");
     }
 }

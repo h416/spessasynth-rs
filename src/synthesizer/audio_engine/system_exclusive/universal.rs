@@ -1,6 +1,6 @@
-/// handle_gm.rs
-/// purpose: Handles GM (General MIDI) system exclusive messages.
-/// Ported from: src/synthesizer/audio_engine/engine_methods/system_exclusive/handle_gm.ts
+/// universal.rs
+/// purpose: Handles Universal (GM realtime/non-realtime) system exclusive messages.
+/// Ported from: src/synthesizer/audio_engine/system_exclusive/universal.ts
 use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::sys_ex_not_recognized;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::types::GlobalMIDIParameterChangeCallback;
@@ -26,42 +26,154 @@ fn get_tuning(byte1: u8, byte2: u8, byte3: u8) -> f64 {
 }
 
 impl SynthesizerCore {
-    /// Handles a GM system exclusive message (realtime/non-realtime).
-    /// Equivalent to: handleGM(syx, channelOffset)
+    /// Handles a Universal system exclusive message (realtime/non-realtime).
+    /// Equivalent to: universalSystemExclusive(syx, channelOffset)
     pub fn handle_gm(&mut self, syx: &[u8], channel_offset: usize) {
         match syx[2] {
             0x04 => {
                 // Device control
                 match syx[3] {
                     0x01 => {
-                        // Main volume
+                        // Master volume
                         let vol = ((syx[5] as u32) << 7) | syx[4] as u32;
-                        self.set_midi_volume(vol as f64 / 16_384.0);
+                        self.set_midi_parameter(GlobalMIDIParameterChangeCallback::Gain(
+                            vol as f64 / 16_384.0,
+                        ));
                         spessa_synth_info(&format!("Master Volume. Volume: {}", vol));
                     }
 
                     0x02 => {
-                        // Main balance (MIDI spec page 62)
+                        // Master balance
+                        // Complete MIDI 1.0 Detailed Specification page 57
+                        // This is not specified in GM2 spec for some reason
                         let balance = ((syx[5] as u32) << 7) | syx[4] as u32;
                         let pan = (balance as f64 - 8192.0) / 8192.0;
                         self.set_midi_parameter(GlobalMIDIParameterChangeCallback::Pan(pan));
-                        spessa_synth_info(&format!("Master Pan. Pan: {}", pan));
+                        spessa_synth_info(&format!("Master Balance. Pan: {}", pan));
                     }
 
                     0x03 => {
                         // Fine-tuning
                         let tuning_value = (((syx[5] as i32) << 7) | syx[6] as i32) - 8192;
-                        let cents = (tuning_value as f64 / 81.92).floor(); // [-100;+99] cents range
-                        self.set_master_tuning(cents);
+                        let cents = tuning_value as f64 / 81.92; // [-100;+99] cents range
+                        self.set_midi_parameter(GlobalMIDIParameterChangeCallback::FineTune(cents));
                         spessa_synth_info(&format!("Master Fine Tuning. Cents: {}", cents));
                     }
 
                     0x04 => {
                         // Coarse tuning (LSB is ignored)
-                        let semitones = syx[5] as i32 - 64;
-                        let cents = semitones * 100;
-                        self.set_master_tuning(cents as f64);
-                        spessa_synth_info(&format!("Master Coarse Tuning. Cents: {}", cents));
+                        let key_shift = syx[5] as i32 - 64;
+                        self.set_midi_parameter(GlobalMIDIParameterChangeCallback::KeyShift(
+                            key_shift as f64,
+                        ));
+                        spessa_synth_info(&format!("Master Coarse Tuning. Keys: {}", key_shift));
+                    }
+
+                    0x05 if syx.len() < 11 => {
+                        // Global Parameter control message too short to hold the
+                        // slot-path / parameter / value bytes; ignore defensively.
+                        sys_ex_not_recognized(syx, "Global Parameter Control");
+                    }
+
+                    0x05 => {
+                        // Global Parameter control
+                        if syx[4] != 0x01 // Slot Path Length
+                            || syx[5] != 0x01 // Parameter ID Width
+                            || syx[6] != 0x01 // Value Width
+                            || syx[7] != 0x01
+                        // Slot Path MSB
+                        {
+                            sys_ex_not_recognized(syx, "Global Parameter Control");
+                        } else {
+                            // Slot Path LSB
+                            match syx[8] {
+                                0x01 => {
+                                    // Reverb
+                                    let value = syx[10];
+                                    // Parameter
+                                    match syx[9] {
+                                        0x00 => {
+                                            // Reverb type
+                                            // Match 8850 manual, page 231
+                                            // All match except for plate which is 8 in GM
+                                            // and 5 in GS
+                                            let r#macro = if value == 0x08 { 0x05 } else { value };
+                                            self.set_reverb_macro(r#macro);
+                                            spessa_synth_info(&format!("Reverb Type: {}", r#macro));
+                                        }
+
+                                        0x01 => {
+                                            // Reverb time
+                                            self.reverb_processor.set_time(value);
+                                            spessa_synth_info(&format!("Reverb Time: {}", value));
+                                        }
+
+                                        _ => {
+                                            sys_ex_not_recognized(syx, "Reverb Parameter Control");
+                                        }
+                                    }
+                                }
+
+                                0x02 => {
+                                    // Chorus
+                                    let value = syx[10];
+                                    // Parameter
+                                    match syx[9] {
+                                        0x00 => {
+                                            // Chorus type
+                                            // Match 8850 manual, page 231
+                                            // All match
+                                            self.set_chorus_macro(value);
+                                            spessa_synth_info(&format!("Chorus Type: {}", value));
+                                        }
+
+                                        0x01 => {
+                                            // Mod rate
+                                            self.chorus_processor.set_rate(value);
+                                            spessa_synth_info(&format!(
+                                                "Chorus Mod Rate: {}",
+                                                value
+                                            ));
+                                        }
+
+                                        0x02 => {
+                                            // Mod depth
+                                            self.chorus_processor.set_depth(value);
+                                            spessa_synth_info(&format!(
+                                                "Chorus Mod Depth: {}",
+                                                value
+                                            ));
+                                        }
+
+                                        0x03 => {
+                                            // Mod feedback
+                                            self.chorus_processor.set_feedback(value);
+                                            spessa_synth_info(&format!(
+                                                "Chorus Mod Feedback: {}",
+                                                value
+                                            ));
+                                        }
+
+                                        0x04 => {
+                                            // Mod send to reverb
+                                            self.chorus_processor.set_send_level_to_reverb(value);
+                                            spessa_synth_info(&format!(
+                                                "Chorus Send to Reverb: {}",
+                                                value
+                                            ));
+                                        }
+
+                                        _ => {
+                                            sys_ex_not_recognized(syx, "Chorus Parameter Control");
+                                        }
+                                    }
+                                }
+
+                                _ => {
+                                    sys_ex_not_recognized(syx, "Global Parameter Control");
+                                }
+                            }
+                        }
                     }
 
                     _ => {
@@ -74,18 +186,23 @@ impl SynthesizerCore {
             }
 
             0x09 => {
-                // GM system related
-                if syx[3] == 0x01 {
-                    spessa_synth_info("GM1 system on");
-                    self.reset(MIDISystem::Gm);
-                } else if syx[3] == 0x03 {
-                    spessa_synth_info("GM2 system on");
-                    self.reset(MIDISystem::Gm2);
-                } else {
-                    spessa_synth_info("GM system off, defaulting to GS");
-                    self.set_midi_parameter(GlobalMIDIParameterChangeCallback::System(
-                        MIDISystem::Gs,
-                    ));
+                // General MIDI
+                match syx[3] {
+                    0x01 => {
+                        spessa_synth_info("MIDI System: General MIDI 1");
+                        self.reset(MIDISystem::Gm);
+                    }
+                    0x02 => {
+                        spessa_synth_info("MIDI System: Roland GS");
+                        self.reset(MIDISystem::Gs);
+                    }
+                    0x03 => {
+                        spessa_synth_info("MIDI System: General MIDI 2");
+                        self.reset(MIDISystem::Gm2);
+                    }
+                    _ => {
+                        sys_ex_not_recognized(syx, "System Exclusive");
+                    }
                 }
             }
 
