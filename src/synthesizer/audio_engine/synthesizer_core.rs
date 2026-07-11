@@ -1109,14 +1109,15 @@ impl SynthesizerCore {
         self.cached_voices.clear();
     }
 
-    /// Sets the MIDI volume (raised to e as per GM2 spec).
-    /// Legacy 4.2.0 plumbing — removed upstream in 4.3.0 (replaced by
-    /// `midiParameters.gain` applied linearly in the channels); see module doc TODO(Task 21).
-    /// Equivalent to: setMIDIVolume(volume) (4.2.0, protected)
+    /// Sets the global MIDI gain (applied linearly, matching 4.3.0).
+    ///
+    /// 4.2.0 raised the master volume to `e` (GM2 §4.1 squared-ish curve) in
+    /// `setMIDIVolume`. 4.3.0 removed that curve: `midiParameters.gain` is applied
+    /// linearly in the channels. Keep this as the shared `midi_volume` plumbing but
+    /// store the value linearly so it equals `midi_parameters.gain`.
+    /// Equivalent to: setMIDIParameter("gain", value) (4.3.0)
     pub fn set_midi_volume(&mut self, volume: f64) {
-        // GM2 specification, section 4.1: volume is squared.
-        // Though, according to my own testing, Math.E seems like a better choice
-        self.midi_volume = volume.powf(std::f64::consts::E);
+        self.midi_volume = volume;
     }
 
     /// Sets the master tuning for all channels.

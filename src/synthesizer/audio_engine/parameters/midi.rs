@@ -196,8 +196,9 @@ mod tests {
         let (mut core, _) = make_core();
         core.set_midi_parameter(GlobalMIDIParameterChangeCallback::Gain(0.5));
         assert!((core.midi_parameters.gain - 0.5).abs() < 1e-12);
-        // Legacy plumbing: midi_volume = gain^E (4.2.0 GM2 curve)
-        assert!((core.midi_volume - 0.5f64.powf(std::f64::consts::E)).abs() < 1e-12);
+        // 4.3.0: the global MIDI gain is applied linearly (the 4.2.0 gain^E GM2
+        // curve was removed), so midi_volume == gain.
+        assert!((core.midi_volume - 0.5).abs() < 1e-12);
     }
 
     #[test]
