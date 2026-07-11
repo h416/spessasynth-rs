@@ -47,7 +47,8 @@ const fn build_default_midi_controller_values() -> [i16; CONTROLLER_TABLE_SIZE] 
     arr[midi_controllers::GENERAL_PURPOSE_CONTROLLER6 as usize] = 64 << 7;
     arr[midi_controllers::GENERAL_PURPOSE_CONTROLLER8 as usize] = 64 << 7;
 
-    arr[midi_controllers::REVERB_DEPTH as usize] = 40 << 7;
+    // Note: TS 4.3.0 removed the default reverb depth (CC91). It now defaults to 0,
+    // matching DEFAULT_MIDI_CONTROLLERS in reset.ts (previously 4.2.0 set it to 40).
 
     arr[midi_controllers::REGISTERED_PARAMETER_LSB as usize] = 127 << 7;
     arr[midi_controllers::REGISTERED_PARAMETER_MSB as usize] = 127 << 7;
