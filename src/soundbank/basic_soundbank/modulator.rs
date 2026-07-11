@@ -9,6 +9,7 @@
 use std::fmt;
 use std::sync::LazyLock;
 
+use crate::midi::enums::midi_controllers as cc;
 use crate::soundbank::basic_soundbank::generator_types::{
     GeneratorType, MAX_GENERATOR, generator_types,
 };
@@ -95,6 +96,14 @@ pub struct Modulator {
     /// Equivalent to: isDefaultResonantModulator
     pub is_default_resonant_modulator: bool,
 
+    /// True if this is a modulation-wheel modulator: a CC-1 (modulation wheel)
+    /// source driving the vibrato/mod LFO pitch depth.
+    /// Corresponds to TS 4.3.0 `VoiceModulator.isModWheelModulator`; in this port
+    /// the flag is folded into `Modulator` (matching the existing treatment of
+    /// `is_effect_modulator` / `is_default_resonant_modulator`) rather than kept on
+    /// a separate `VoiceModulator` subclass.
+    pub is_mod_wheel_modulator: bool,
+
     /// Primary modulator source.
     /// Equivalent to: primarySource
     pub primary_source: ModulatorSource,
@@ -114,6 +123,8 @@ impl Default for Modulator {
             transform_type: 0,
             is_effect_modulator: false,
             is_default_resonant_modulator: false,
+            // destination is INVALID, so this can never be a mod-wheel modulator.
+            is_mod_wheel_modulator: false,
             primary_source: ModulatorSource::default(),
             secondary_source: ModulatorSource::default(),
         }
@@ -121,6 +132,25 @@ impl Default for Modulator {
 }
 
 impl Modulator {
+    /// Computes whether this is a modulation-wheel modulator (CC-1 driving mod/vib LFO pitch).
+    /// Equivalent to VoiceModulator.isModWheelModulator (folded into Modulator in this port).
+    ///
+    /// Logic is identical to the former inline computation in `voice.rs`:
+    /// a CC-1 (modulation wheel) primary or secondary source whose destination is the
+    /// mod/vibrato LFO pitch depth.
+    fn compute_is_mod_wheel(
+        primary_source: &ModulatorSource,
+        secondary_source: &ModulatorSource,
+        destination: GeneratorType,
+    ) -> bool {
+        ((primary_source.is_cc
+            && primary_source.index as u16 == cc::MODULATION_WHEEL as u16)
+            || (secondary_source.is_cc
+                && secondary_source.index as u16 == cc::MODULATION_WHEEL as u16))
+            && (destination == generator_types::MOD_LFO_TO_PITCH
+                || destination == generator_types::VIB_LFO_TO_PITCH)
+    }
+
     /// Creates a new Modulator with explicit parameters.
     /// Equivalent to: constructor(primarySource, secondarySource, destination, amount,
     ///                            transformType, isEffectModulator, isDefaultResonantModulator)
@@ -133,12 +163,17 @@ impl Modulator {
         is_effect_modulator: bool,
         is_default_resonant_modulator: bool,
     ) -> Self {
+        // The mod-wheel flag is derived from the sources + destination (matches the
+        // former inline computation in voice.rs); no extra constructor argument needed.
+        let is_mod_wheel_modulator =
+            Self::compute_is_mod_wheel(&primary_source, &secondary_source, destination);
         Self {
             destination,
             transform_amount,
             transform_type,
             is_effect_modulator,
             is_default_resonant_modulator,
+            is_mod_wheel_modulator,
             primary_source,
             secondary_source,
         }
@@ -166,6 +201,7 @@ impl Modulator {
             transform_type: mod_.transform_type,
             is_effect_modulator: mod_.is_effect_modulator,
             is_default_resonant_modulator: mod_.is_default_resonant_modulator,
+            is_mod_wheel_modulator: mod_.is_mod_wheel_modulator,
         }
     }
 
@@ -257,6 +293,10 @@ pub struct DecodedModulator {
     /// True if this is the default resonant modulator.
     /// Equivalent to: isDefaultResonantModulator
     pub is_default_resonant_modulator: bool,
+    /// True if this is a modulation-wheel modulator (CC-1 driving mod/vib LFO pitch).
+    /// Corresponds to TS 4.3.0 `VoiceModulator.isModWheelModulator`; folded here so the
+    /// voice render loop can read the precomputed flag instead of recomputing it per call.
+    pub is_mod_wheel_modulator: bool,
 }
 
 impl DecodedModulator {
@@ -279,6 +319,17 @@ impl DecodedModulator {
             && secondary_source_enum == 0x0
             && destination == generator_types::INITIAL_FILTER_Q;
 
+        // Mod-wheel flag: CC-1 (modulation wheel) primary/secondary source driving the
+        // mod/vibrato LFO pitch depth. Computed from raw enum bits to stay `const fn`;
+        // logically identical to `Modulator::compute_is_mod_wheel`. Valid pitch-LFO
+        // destinations are never clamped, so computing before the clamp is equivalent.
+        let is_mod_wheel_modulator = (((source_enum & 0x80) != 0
+            && (source_enum & 0x7F) == cc::MODULATION_WHEEL as u16)
+            || ((secondary_source_enum & 0x80) != 0
+                && (secondary_source_enum & 0x7F) == cc::MODULATION_WHEEL as u16))
+            && (destination == generator_types::MOD_LFO_TO_PITCH
+                || destination == generator_types::VIB_LFO_TO_PITCH);
+
         // Clamp invalid destinations (must happen after the flag checks above).
         let destination = if destination > MAX_GENERATOR {
             generator_types::INVALID
@@ -294,6 +345,7 @@ impl DecodedModulator {
             transform_type,
             is_effect_modulator,
             is_default_resonant_modulator,
+            is_mod_wheel_modulator,
         }
     }
 
@@ -315,6 +367,14 @@ impl DecodedModulator {
             && secondary_source_enum == 0x0
             && destination == generator_types::INITIAL_FILTER_Q;
 
+        // Mod-wheel flag: see `DecodedModulator::new` for the rationale.
+        let is_mod_wheel_modulator = (((source_enum & 0x80) != 0
+            && (source_enum & 0x7F) == cc::MODULATION_WHEEL as u16)
+            || ((secondary_source_enum & 0x80) != 0
+                && (secondary_source_enum & 0x7F) == cc::MODULATION_WHEEL as u16))
+            && (destination == generator_types::MOD_LFO_TO_PITCH
+                || destination == generator_types::VIB_LFO_TO_PITCH);
+
         let destination = if destination > MAX_GENERATOR {
             generator_types::INVALID
         } else {
@@ -329,6 +389,7 @@ impl DecodedModulator {
             transform_type,
             is_effect_modulator,
             is_default_resonant_modulator,
+            is_mod_wheel_modulator,
         }
     }
 

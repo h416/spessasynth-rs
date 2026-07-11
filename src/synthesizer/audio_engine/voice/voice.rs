@@ -1,7 +1,6 @@
 /// voice.rs
 /// purpose: prepares Voices from sample and generator data
 /// Ported from: src/synthesizer/audio_engine/engine_components/voice.ts
-use crate::midi::enums::midi_controllers as cc;
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 use crate::soundbank::basic_soundbank::generator_types::GENERATORS_AMOUNT;
 use crate::soundbank::basic_soundbank::modulator::DecodedModulator;
@@ -388,12 +387,9 @@ impl VoiceContext for Voice {
             let secondary = modulator.secondary_source();
             // TS 4.3.0 `isModWheelModulator`: a CC-1 (modulation wheel) source driving
             // the vibrato/mod LFO pitch depth. Its value is scaled by the channel
-            // modulation depth in `computeModulator`.
-            let is_mod_wheel_mod = ((primary.is_cc
-                && primary.index as u16 == cc::MODULATION_WHEEL as u16)
-                || (secondary.is_cc && secondary.index as u16 == cc::MODULATION_WHEEL as u16))
-                && (modulator.destination == gt::MOD_LFO_TO_PITCH
-                    || modulator.destination == gt::VIB_LFO_TO_PITCH);
+            // modulation depth in `computeModulator`. Precomputed on the modulator
+            // (see `DecodedModulator::is_mod_wheel_modulator`).
+            let is_mod_wheel_mod = modulator.is_mod_wheel_modulator;
             (
                 modulator.transform_amount,
                 modulator.transform_type,

@@ -186,6 +186,7 @@ pub fn write_sf2_elements(bank: &BasicSoundBank, is_preset: bool) -> SF2Elements
         transform_type: 0,
         is_effect_modulator: false,
         is_default_resonant_modulator: false,
+        is_mod_wheel_modulator: false,
         primary_source: ModulatorSource::default(),
         secondary_source: ModulatorSource::default(),
     });
