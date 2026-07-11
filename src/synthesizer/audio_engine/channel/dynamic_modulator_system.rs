@@ -1,8 +1,9 @@
 /// dynamic_modulator_system.rs
 /// purpose: DynamicModulatorSystem - Runtime dynamic modulator management for complex messages such as SysEx.
 /// Ported from: src/synthesizer/audio_engine/engine_components/dynamic_modulator_system.ts
+use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::{GeneratorType, generator_types};
-use crate::soundbank::basic_soundbank::modulator::Modulator;
+use crate::soundbank::basic_soundbank::modulator::{Modulator, get_mod_source_enum};
 use crate::soundbank::basic_soundbank::modulator_source::ModulatorSource;
 use crate::soundbank::enums::{ModulatorControllerSource, modulator_curve_types};
 use crate::utils::loggin::spessa_synth_info;
@@ -48,11 +49,49 @@ impl DynamicModulatorSystem {
         }
     }
 
-    /// Clears all dynamic modulators.
+    /// Resets the dynamic modulators to the initial set.
+    ///
+    /// Seeds the list with `INITIAL_MODULATORS` (currently a single entry that
+    /// maps the GS vibrato-rate CC to the vibrato LFO rate in bare Hz, needed
+    /// for special cases such as J-Cycle.mid) and clears the `active` flag.
     /// Equivalent to: resetModulators()
     pub fn reset_modulators(&mut self) {
-        self.modulator_list.clear();
+        self.modulator_list = Self::initial_modulators();
         self.active = false;
+    }
+
+    /// Builds the initial modulator list.
+    ///
+    /// Equivalent to: INITIAL_MODULATORS mapped into `{ mod, id }` entries.
+    /// The single initial modulator is `vibratoRate` (linear, forward, bipolar)
+    /// → `vibLfoRate`, amount 1000. Its ID uses the primary source's raw source
+    /// enum (matching `getModulatorID(m.primarySource.toSourceEnum(), ...)`).
+    fn initial_modulators() -> Vec<DynamicModulatorEntry> {
+        // getModSourceEnum(linear, isBipolar=true, isNegative=false, isCC=true, vibratoRate)
+        let src_enum = get_mod_source_enum(
+            modulator_curve_types::LINEAR,
+            true,
+            false,
+            true,
+            midi_controllers::VIBRATO_RATE,
+        );
+        let modulator = Modulator::new(
+            ModulatorSource::from_source_enum(src_enum),
+            ModulatorSource::from_source_enum(0x0),
+            generator_types::VIB_LFO_RATE,
+            1000.0,
+            0,
+            false,
+            false,
+        );
+        let ps = &modulator.primary_source;
+        let id = Self::get_modulator_id(
+            ps.to_source_enum() as usize,
+            modulator.destination,
+            ps.is_bipolar,
+            ps.is_negative,
+        );
+        vec![DynamicModulatorEntry { modulator, id }]
     }
 
     /// Configures the dynamic modulators from a GS "patch parameter" receiver
@@ -370,21 +409,39 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_reset_clears_all() {
+    fn test_reset_seeds_initial_modulators() {
         let mut sys = DynamicModulatorSystem::new(0);
         sys.set_modulator(10, true, generator_types::PAN, 500.0, false, false);
         sys.set_modulator(7, true, generator_types::INITIAL_ATTENUATION, 960.0, false, false);
         assert_eq!(sys.modulator_list.len(), 2);
+        sys.setup_receiver(0x00, 100, 1, true, "mod wheel", false);
+        assert!(sys.active);
+        // Reset restores the single initial (vibrato rate) modulator and clears active.
         sys.reset_modulators();
-        assert!(sys.modulator_list.is_empty());
+        assert_eq!(sys.modulator_list.len(), 1);
         assert!(!sys.active);
     }
 
     #[test]
-    fn test_reset_on_empty_is_noop() {
+    fn test_reset_on_new_seeds_one_initial() {
         let mut sys = DynamicModulatorSystem::new(0);
         sys.reset_modulators();
-        assert!(sys.modulator_list.is_empty());
+        assert_eq!(sys.modulator_list.len(), 1);
+    }
+
+    #[test]
+    fn test_initial_modulator_maps_vibrato_rate_to_vib_lfo_rate() {
+        let mut sys = DynamicModulatorSystem::new(0);
+        sys.reset_modulators();
+        let entry = &sys.modulator_list[0];
+        assert_eq!(entry.modulator.destination, generator_types::VIB_LFO_RATE);
+        assert_eq!(entry.modulator.transform_amount, 1000.0);
+        assert!(entry.modulator.primary_source.is_cc);
+        assert_eq!(
+            entry.modulator.primary_source.index,
+            crate::midi::enums::midi_controllers::VIBRATO_RATE
+        );
+        assert!(entry.modulator.primary_source.is_bipolar);
     }
 
     // -----------------------------------------------------------------------
