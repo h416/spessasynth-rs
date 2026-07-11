@@ -114,11 +114,13 @@ impl WavetableOscillator {
                 cursor += step;
             }
         } else {
-            for out in output_buffer.iter_mut().take(sample_count) {
+            for i in 0..sample_count {
                 let floor = cursor as usize;
                 let ceil = floor + 1;
 
                 if ceil as f64 >= end {
+                    // Fill the rest with zeros (testcase drum_spam_test.mid)
+                    output_buffer[i..sample_count].fill(0.0);
                     self.cursor = cursor;
                     return false;
                 }
@@ -127,7 +129,7 @@ impl WavetableOscillator {
 
                 let lower = data[floor] as f64;
                 let upper = data[ceil] as f64;
-                *out = (lower + (upper - lower) * fraction) as f32;
+                output_buffer[i] = (lower + (upper - lower) * fraction) as f32;
 
                 cursor += step;
             }
@@ -165,13 +167,15 @@ impl WavetableOscillator {
                 cursor += step;
             }
         } else {
-            for out in output_buffer.iter_mut().take(sample_count) {
+            for i in 0..sample_count {
                 if cursor >= end {
+                    // Fill the rest with zeros (testcase drum_spam_test.mid)
+                    output_buffer[i..sample_count].fill(0.0);
                     self.cursor = cursor;
                     return false;
                 }
 
-                *out = data[cursor as usize];
+                output_buffer[i] = data[cursor as usize];
                 cursor += step;
             }
         }
@@ -242,11 +246,13 @@ impl WavetableOscillator {
                 cursor += step;
             }
         } else {
-            for out in output_buffer.iter_mut().take(sample_count) {
+            for i in 0..sample_count {
                 let y0 = cursor as usize;
                 let y3 = y0 + 3;
 
                 if y3 as f64 >= end {
+                    // Fill the rest with zeros (testcase drum_spam_test.mid)
+                    output_buffer[i..sample_count].fill(0.0);
                     self.cursor = cursor;
                     return false;
                 }
@@ -267,7 +273,7 @@ impl WavetableOscillator {
                 let w = c + v;
                 let a = w + v + (x2 - x0) * 0.5;
                 let b = w + a;
-                *out = (((a * t - b) * t + c) * t + x0) as f32;
+                output_buffer[i] = (((a * t - b) * t + c) * t + x0) as f32;
 
                 cursor += step;
             }
