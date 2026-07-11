@@ -284,8 +284,12 @@ impl SynthesizerCore {
                         - 64;
                     let target_pan =
                         (drum_pan as i32 - 64 + channel_pan).clamp(-63, 63);
-                    let target_pan = if target_pan == 0 { 1 } else { target_pan };
+                    // Compute the product first; ensure override is applied,
+                    // even for zero (matches TS `(targetPan / 63) * 500 || 1`).
                     pan_override = (target_pan as f64 / 63.0) * 500.0;
+                    if pan_override == 0.0 {
+                        pan_override = 1.0;
+                    }
                 }
             }
 

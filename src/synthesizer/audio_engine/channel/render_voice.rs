@@ -5,7 +5,6 @@ use std::sync::OnceLock;
 
 use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
-use crate::synthesizer::audio_engine::voice::lfo::get_lfo_value_sine;
 use crate::synthesizer::audio_engine::voice::unit_converter::{
     abs_cents_to_hz, cb_attenuation_to_gain, cb_attenuation_to_gain_f64, timecents_to_seconds,
 };
@@ -127,8 +126,10 @@ impl MidiChannel {
         let mut target_key = voice.target_key;
 
         // Fine tune (soundfont) + MTS octave tuning + channel tuning + pitch offset (drum params)
+        // TS 4.3.0: octave tuning is indexed by targetKey (accounts for the keyNum
+        // generator override), not the raw played note.
         let mut cents = voice.modulated_generators[gt::FINE_TUNE as usize] as f64
-            + self.channel_octave_tuning[voice.midi_note as usize] as f64
+            + self.channel_octave_tuning[target_key as usize] as f64
             + self.channel_tuning_cents as f64
             + voice.pitch_offset;
         let mut semitones = voice.modulated_generators[gt::COARSE_TUNE as usize] as f64;
@@ -246,17 +247,7 @@ impl MidiChannel {
             }
         }
 
-        // --- Channel vibrato (GS NRPN) ---
-        // Only when modulation wheel is zero (to prevent overlap)
-        if self.midi_controllers[midi_controllers::MODULATION_WHEEL as usize] == 0
-            && self.channel_vibrato.depth > 0.0
-        {
-            cents += get_lfo_value_sine(
-                voice.start_time + self.channel_vibrato.delay,
-                self.channel_vibrato.rate,
-                time_now,
-            ) * self.channel_vibrato.depth;
-        }
+        // TODO: Implement proper GS vibrato. Custom vibrato used to be here.
 
         // --- Mod envelope ---
         let mod_env_pitch_depth = voice.modulated_generators[gt::MOD_ENV_TO_PITCH as usize];
