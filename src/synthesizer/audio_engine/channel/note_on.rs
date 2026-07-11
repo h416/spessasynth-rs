@@ -365,14 +365,12 @@ impl SynthesizerCore {
             self.voices[voice_idx].oscillators[osc_idx].playback_step = cached.playback_step;
 
             // -----------------------------------------------------------------------
-            // Set modulators: merge SysEx dynamic modulators if present
+            // Set modulators: merge dynamic modulators when the manager is active.
+            // Equivalent to: if (this.dynamicModulators.active) { ... } else { ... }
             // -----------------------------------------------------------------------
-            let sysex_count = self.midi_channels[channel]
-                .sys_ex_modulators
-                .modulator_list
-                .len();
+            let dynamic_active = self.midi_channels[channel].sys_ex_modulators.active;
 
-            let final_modulators: Vec<Modulator> = if sysex_count > 0 {
+            let final_modulators: Vec<Modulator> = if dynamic_active {
                 // Clone cached modulators and apply SysEx overrides
                 let mut mods: Vec<Modulator> = cached.modulators.clone();
                 // Copy the SysEx modulator entries to avoid borrow issues

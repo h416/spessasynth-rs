@@ -231,7 +231,7 @@ impl MidiChannel {
             custom_controllers: CUSTOM_RESET_ARRAY,
             channel_transpose_key_shift: 0,
             channel_octave_tuning: [0i8; 128],
-            sys_ex_modulators: DynamicModulatorSystem::new(),
+            sys_ex_modulators: DynamicModulatorSystem::new(channel as usize),
             drum_channel: false,
             midi_parameters: ChannelMidiParameter {
                 // Rx Channel is initialized to the channel number.
@@ -391,14 +391,15 @@ impl MidiChannel {
     /// Sets the modulation depth in cents.
     /// Equivalent to: setModulationDepth(cents)
     pub fn set_modulation_depth(&mut self, cents: f64) {
-        let cents = cents.round();
-        spessa_synth_info(&format!(
-            "Channel {} modulation depth. Cents: {}",
-            self.channel, cents
-        ));
         // TS 4.3.0: setMIDIParameter("modulationDepth", cents / 50). The depth multiplier now
         // lives on the channel MIDI parameters and is applied in `compute_single_modulator`.
+        // Note: the raw (unrounded) `cents / 50` is stored; only the log rounds `cents`.
         self.midi_parameters.modulation_depth = cents / 50.0;
+        spessa_synth_info(&format!(
+            "Channel {} modulation depth. Cents: {}",
+            self.channel,
+            cents.round()
+        ));
     }
 
     /// Sets the channel's fine tuning in cents.

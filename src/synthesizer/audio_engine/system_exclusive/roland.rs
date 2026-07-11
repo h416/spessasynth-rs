@@ -7,9 +7,7 @@
 use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::generator_types;
 use crate::soundbank::enums::modulator_sources;
-use crate::synthesizer::audio_engine::channel::parameters::midi::{
-    ChannelMidiParameterValue, NON_CC_INDEX_OFFSET,
-};
+use crate::synthesizer::audio_engine::channel::parameters::midi::ChannelMidiParameterValue;
 use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::{
     sys_ex_logging, sys_ex_not_recognized,
 };
@@ -173,256 +171,95 @@ impl SynthesizerCore {
                         let channel =
                             channel_table[(syx[5] & 0x0f) as usize] as usize + channel_offset;
 
-                        let centered_value = message_value as i32 - 64;
-                        let normalized_value = centered_value as f64 / 64.0;
-                        let normalized_not_centered = message_value as f64 / 128.0;
+                        let data = message_value;
+                        let a3 = syx[6];
 
-                        // Determine source and bipolar flag based on upper nibble of syx[6]
-                        // SC88 manual page 198
-                        let (source, source_name, is_bipolar): (usize, &str, bool) = match syx[6]
-                            & 0xf0
-                        {
-                            0x00 => (
-                                midi_controllers::MODULATION_WHEEL as usize,
-                                "mod wheel",
-                                false,
-                            ),
-                            0x10 => (
-                                NON_CC_INDEX_OFFSET + modulator_sources::PITCH_WHEEL as usize,
-                                "pitch wheel",
-                                true,
-                            ),
-                            0x20 => (
-                                NON_CC_INDEX_OFFSET + modulator_sources::CHANNEL_PRESSURE as usize,
-                                "channel pressure",
-                                false,
-                            ),
-                            0x30 => (
-                                NON_CC_INDEX_OFFSET + modulator_sources::POLY_PRESSURE as usize,
-                                "poly pressure",
-                                false,
-                            ),
-                            _ => {
-                                sys_ex_not_recognized(syx, "Roland GS");
-                                return;
-                            }
-                        };
-
-                        let current_time = self.current_time;
-                        let current_system = self.midi_parameters.system;
-                        let enable_event_system = self.system_parameters.events_enabled;
-
-                        // Setup receivers for CC to parameter mapping (SC-88 manual page 198)
-                        match syx[6] & 0x0f {
+                        // Patch parameter controller (SC-88 manual page 198).
+                        // Upper nibble of a3 selects the modulation source; the lower
+                        // nibble selects the parameter (dispatched inside setupReceiver).
+                        match a3 & 0xf0 {
                             0x00 => {
-                                // Pitch control
-                                // Special case: if the source is pitch wheel, it's a way of
-                                // setting the pitch wheel range. Testcase: th07_03.mid
-                                if source
-                                    == NON_CC_INDEX_OFFSET + modulator_sources::PITCH_WHEEL as usize
-                                {
-                                    let voices = &mut self.voices;
-                                    let ch = &mut self.midi_channels[channel];
-                                    let mut evs = ch.controller_change(
-                                        midi_controllers::REGISTERED_PARAMETER_MSB,
-                                        0x0,
-                                        voices,
-                                        current_time,
-                                        current_system,
-                                        enable_event_system,
-                                    );
-                                    for ev in evs.drain(..) {
-                                        self.call_event(ev);
-                                    }
-                                    let mut evs = self.midi_channels[channel].controller_change(
-                                        midi_controllers::REGISTERED_PARAMETER_LSB,
-                                        0x0,
-                                        &mut self.voices,
-                                        current_time,
-                                        current_system,
-                                        enable_event_system,
-                                    );
-                                    for ev in evs.drain(..) {
-                                        self.call_event(ev);
-                                    }
-                                    let mut evs = self.midi_channels[channel].controller_change(
-                                        midi_controllers::DATA_ENTRY_MSB,
-                                        centered_value.max(0) as u8,
-                                        &mut self.voices,
-                                        current_time,
-                                        current_system,
-                                        enable_event_system,
-                                    );
-                                    for ev in evs.drain(..) {
-                                        self.call_event(ev);
-                                    }
+                                // Modulation wheel
+                                if (a3 & 0x0f) == 0x04 {
+                                    // LFO1 pitch depth special case: a mod wheel here is a
+                                    // strange way of setting the modulation depth.
+                                    // Testcase: J-Cycle.mid (affects gm.dls which uses LFO1).
+                                    let cents = (data as f64 / 127.0) * 600.0;
+                                    self.midi_channels[channel].set_modulation_depth(cents);
                                 } else {
-                                    self.midi_channels[channel].sys_ex_modulators.set_modulator(
-                                        source,
-                                        generator_types::FINE_TUNE,
-                                        centered_value as f64 * 100.0,
-                                        is_bipolar,
+                                    self.midi_channels[channel].sys_ex_modulators.setup_receiver(
+                                        a3,
+                                        data,
+                                        midi_controllers::MODULATION_WHEEL as usize,
+                                        true,
+                                        "mod wheel",
                                         false,
-                                    );
-                                    sys_ex_logging(
-                                        syx,
-                                        channel as u8,
-                                        &centered_value,
-                                        &format!("{} pitch control", source_name),
-                                        "semitones",
                                     );
                                 }
                             }
-
-                            0x01 => {
-                                // Cutoff
-                                self.midi_channels[channel].sys_ex_modulators.set_modulator(
-                                    source,
-                                    generator_types::INITIAL_FILTER_FC,
-                                    normalized_value * 9600.0,
-                                    is_bipolar,
+                            0x10 => {
+                                // Pitch wheel
+                                if (a3 & 0x0f) == 0x00 {
+                                    // Pitch control special case: a pitch wheel here is a
+                                    // strange way of setting the pitch wheel range.
+                                    // Testcase: th07_03.mid.
+                                    let centered_value = data as i32 - 64;
+                                    self.midi_channels[channel].set_midi_parameter(
+                                        ChannelMidiParameterValue::PitchWheelRange(
+                                            centered_value as f64,
+                                        ),
+                                    );
+                                } else {
+                                    self.midi_channels[channel].sys_ex_modulators.setup_receiver(
+                                        a3,
+                                        data,
+                                        modulator_sources::PITCH_WHEEL as usize,
+                                        false,
+                                        "pitch wheel",
+                                        true,
+                                    );
+                                }
+                            }
+                            0x20 => {
+                                // Channel pressure
+                                self.midi_channels[channel].sys_ex_modulators.setup_receiver(
+                                    a3,
+                                    data,
+                                    modulator_sources::CHANNEL_PRESSURE as usize,
+                                    false,
+                                    "channel pressure",
                                     false,
                                 );
-                                sys_ex_logging(
-                                    syx,
-                                    channel as u8,
-                                    &(normalized_value * 9600.0),
-                                    &format!("{} pitch control", source_name),
-                                    "cents",
-                                );
                             }
-
-                            0x02 => {
-                                // Amplitude
-                                self.midi_channels[channel].sys_ex_modulators.set_modulator(
-                                    source,
-                                    generator_types::INITIAL_ATTENUATION,
-                                    normalized_value * 960.0,
-                                    is_bipolar,
+                            0x30 => {
+                                // Poly pressure
+                                self.midi_channels[channel].sys_ex_modulators.setup_receiver(
+                                    a3,
+                                    data,
+                                    modulator_sources::POLY_PRESSURE as usize,
+                                    false,
+                                    "poly pressure",
                                     false,
                                 );
-                                sys_ex_logging(
-                                    syx,
-                                    channel as u8,
-                                    &(normalized_value * 960.0),
-                                    &format!("{} amplitude", source_name),
-                                    "cB",
+                            }
+                            0x40 => {
+                                // CC1
+                                let cc1 = self.midi_channels[channel].midi_parameters.cc1 as usize;
+                                self.midi_channels[channel].sys_ex_modulators.setup_receiver(
+                                    a3, data, cc1, true, "CC1", false,
                                 );
                             }
-
-                            // Rate control is ignored as it is in hertz (case 0x03)
-                            0x04 => {
-                                // LFO1 pitch depth
-                                self.midi_channels[channel].sys_ex_modulators.set_modulator(
-                                    source,
-                                    generator_types::VIB_LFO_TO_PITCH,
-                                    normalized_not_centered * 600.0,
-                                    is_bipolar,
-                                    false,
-                                );
-                                sys_ex_logging(
-                                    syx,
-                                    channel as u8,
-                                    &(normalized_not_centered * 600.0),
-                                    &format!("{} LFO1 pitch depth", source_name),
-                                    "cents",
+                            0x50 => {
+                                // CC2
+                                let cc2 = self.midi_channels[channel].midi_parameters.cc2 as usize;
+                                self.midi_channels[channel].sys_ex_modulators.setup_receiver(
+                                    a3, data, cc2, true, "CC2", false,
                                 );
                             }
-
-                            0x05 => {
-                                // LFO1 filter depth
-                                self.midi_channels[channel].sys_ex_modulators.set_modulator(
-                                    source,
-                                    generator_types::VIB_LFO_TO_FILTER_FC,
-                                    normalized_not_centered * 2400.0,
-                                    is_bipolar,
-                                    false,
-                                );
-                                sys_ex_logging(
-                                    syx,
-                                    channel as u8,
-                                    &(normalized_not_centered * 2400.0),
-                                    &format!("{} LFO1 filter depth", source_name),
-                                    "cents",
-                                );
+                            _ => {
+                                // This is some other GS sysex...
+                                sys_ex_not_recognized(syx, "Roland GS");
                             }
-
-                            0x06 => {
-                                // LFO1 amplitude depth
-                                // Note: 4.2.0 `vibLfoToVolume` semantics retained in slot 61
-                                // (renamed `amplitude` in TS 4.3.0); see render_voice.rs.
-                                self.midi_channels[channel].sys_ex_modulators.set_modulator(
-                                    source,
-                                    generator_types::AMPLITUDE,
-                                    normalized_value * 960.0,
-                                    is_bipolar,
-                                    false,
-                                );
-                                sys_ex_logging(
-                                    syx,
-                                    channel as u8,
-                                    &(normalized_value * 960.0),
-                                    &format!("{} LFO1 amplitude depth", source_name),
-                                    "cB",
-                                );
-                            }
-
-                            // Rate control is ignored as it is in hertz (case 0x07)
-                            0x08 => {
-                                // LFO2 pitch depth
-                                self.midi_channels[channel].sys_ex_modulators.set_modulator(
-                                    source,
-                                    generator_types::MOD_LFO_TO_PITCH,
-                                    normalized_not_centered * 600.0,
-                                    is_bipolar,
-                                    false,
-                                );
-                                sys_ex_logging(
-                                    syx,
-                                    channel as u8,
-                                    &(normalized_not_centered * 600.0),
-                                    &format!("{} LFO2 pitch depth", source_name),
-                                    "cents",
-                                );
-                            }
-
-                            0x09 => {
-                                // LFO2 filter depth
-                                self.midi_channels[channel].sys_ex_modulators.set_modulator(
-                                    source,
-                                    generator_types::MOD_LFO_TO_FILTER_FC,
-                                    normalized_not_centered * 2400.0,
-                                    is_bipolar,
-                                    false,
-                                );
-                                sys_ex_logging(
-                                    syx,
-                                    channel as u8,
-                                    &(normalized_not_centered * 2400.0),
-                                    &format!("{} LFO2 filter depth", source_name),
-                                    "cents",
-                                );
-                            }
-
-                            0x0a => {
-                                // LFO2 amplitude depth
-                                self.midi_channels[channel].sys_ex_modulators.set_modulator(
-                                    source,
-                                    generator_types::MOD_LFO_TO_VOLUME,
-                                    normalized_value * 960.0,
-                                    is_bipolar,
-                                    false,
-                                );
-                                sys_ex_logging(
-                                    syx,
-                                    channel as u8,
-                                    &(normalized_value * 960.0),
-                                    &format!("{} LFO2 amplitude depth", source_name),
-                                    "cB",
-                                );
-                            }
-
-                            _ => {}
                         }
                     } else if syx[5] == 0x00 {
                         // This is a global system parameter
