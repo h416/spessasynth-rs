@@ -5,7 +5,6 @@ use crate::midi::enums::midi_controllers;
 use crate::synthesizer::audio_engine::synth_constants::MIN_NOTE_LENGTH;
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
-use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::{NoteOffCallback, SynthProcessorEvent};
 use crate::utils::loggin::spessa_synth_warn;
 
@@ -33,12 +32,6 @@ impl MidiChannel {
             return Vec::new();
         }
 
-        // Adjust the MIDI note with channel transpose key shift
-        let real_key = (midi_note as i16
-            + self.channel_transpose_key_shift
-            + self.custom_controllers[custom_controllers::CHANNEL_KEY_SHIFT as usize] as i16)
-            as u8;
-
         let event = SynthProcessorEvent::NoteOff(NoteOffCallback {
             midi_note,
             channel: self.channel,
@@ -46,7 +39,7 @@ impl MidiChannel {
 
         // Black MIDI mode: kill the note immediately
         if black_midi_mode && !self.drum_channel {
-            self.kill_note(real_key, -12_000, voices, current_time);
+            self.kill_note(midi_note, -12_000, voices, current_time);
             return vec![event];
         }
 
@@ -56,7 +49,7 @@ impl MidiChannel {
             for v in voices.iter_mut() {
                 if v.channel == self.channel
                     && v.is_active
-                    && v.real_key == real_key
+                    && v.midi_note == midi_note
                     && !v.is_in_release
                 {
                     if sustain {

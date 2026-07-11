@@ -135,8 +135,10 @@ impl MidiChannel {
         let mut semitones = voice.modulated_generators[gt::COARSE_TUNE as usize] as f64;
 
         // MIDI Tuning Standard
+        // Use `midi_note` here since it was used for selecting the preset if
+        // tuning was active (TS 4.3.0 render_voice).
         if let Some(preset) = &self.preset {
-            let tune_idx = (preset.program as usize) * 128 + voice.real_key as usize;
+            let tune_idx = (preset.program as usize) * 128 + voice.midi_note as usize;
             if tune_idx < tunings.len() {
                 let tuning = tunings[tune_idx];
                 if tuning >= 0.0 {

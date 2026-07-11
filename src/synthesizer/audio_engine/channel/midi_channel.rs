@@ -670,13 +670,10 @@ impl MidiChannel {
         voices: &mut [Voice],
         current_time: f64,
     ) {
-        let adjusted_note = (midi_note as i32
-            + self.custom_controllers[custom_controllers::CHANNEL_KEY_SHIFT as usize] as i32)
-            as u8;
         let mut vc = 0u32;
         if self.voice_count > 0 {
             for v in voices.iter_mut() {
-                if v.channel == self.channel && v.is_active && v.real_key == adjusted_note {
+                if v.channel == self.channel && v.is_active && v.midi_note == midi_note {
                     v.override_release_vol_env = release_time;
                     v.is_in_release = false;
                     v.release_voice(current_time, MIN_NOTE_LENGTH);

@@ -12,7 +12,7 @@
 /// the required values and passes them individually:
 ///   - `process(release_start_time, current_time)`
 ///   - `start_release(modulated_generators)`
-///   - `init(modulated_generators, start_time, midi_note)`
+///   - `init(modulated_generators, start_time, target_key)`
 use std::sync::LazyLock;
 
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
@@ -209,10 +209,10 @@ impl ModulationEnvelope {
     ///
     /// `modulated_generators` – `voice.modulated_generators` slice.
     /// `start_time` – `voice.start_time` (absolute seconds).
-    /// `midi_note` – `voice.midi_note` (0–127).
+    /// `target_key` – `voice.target_key` (effective key, 0–127).
     ///
     /// Equivalent to: init(voice: Voice)
-    pub fn init(&mut self, modulated_generators: &[i16], start_time: f64, midi_note: i16) {
+    pub fn init(&mut self, modulated_generators: &[i16], start_time: f64, target_key: i16) {
         self.entered_release = false;
         self.sustain_level =
             1.0 - modulated_generators[gt::SUSTAIN_MOD_ENV as usize] as f64 / 1000.0;
@@ -221,7 +221,7 @@ impl ModulationEnvelope {
             Self::tc2sec(modulated_generators[gt::ATTACK_MOD_ENV as usize] as i32);
 
         // Decay time with key excursion
-        let decay_key_excursion_cents = (60 - midi_note as i32) as f64
+        let decay_key_excursion_cents = (60 - target_key as i32) as f64
             * modulated_generators[gt::KEY_NUM_TO_MOD_ENV_DECAY as usize] as f64;
         let decay_time = Self::tc2sec(
             (modulated_generators[gt::DECAY_MOD_ENV as usize] as f64 + decay_key_excursion_cents)
@@ -231,7 +231,7 @@ impl ModulationEnvelope {
         self.decay_duration = decay_time * (1.0 - self.sustain_level);
 
         // Hold time with key excursion
-        let hold_key_excursion_cents = (60 - midi_note as i32) as f64
+        let hold_key_excursion_cents = (60 - target_key as i32) as f64
             * modulated_generators[gt::KEY_NUM_TO_MOD_ENV_HOLD as usize] as f64;
         self.hold_duration = Self::tc2sec(
             (hold_key_excursion_cents + modulated_generators[gt::HOLD_MOD_ENV as usize] as f64)

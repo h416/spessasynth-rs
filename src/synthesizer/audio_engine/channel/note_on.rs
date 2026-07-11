@@ -14,7 +14,6 @@ use crate::synthesizer::audio_engine::synth_constants::{
     GENERATOR_OVERRIDE_NO_CHANGE_VALUE, MIN_EXCLUSIVE_LENGTH,
 };
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
-use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::{NoteOnCallback, SynthProcessorEvent};
 use crate::utils::loggin::spessa_synth_warn;
 
@@ -67,31 +66,30 @@ impl SynthesizerCore {
             return;
         }
 
-        // Compute real key with channel transpose and custom key shift
-        let key_shift = self.midi_channels[channel].channel_transpose_key_shift;
-        let custom_key_shift = self.midi_channels[channel].custom_controllers
-            [custom_controllers::CHANNEL_KEY_SHIFT as usize] as i32;
-        let real_key_i =
-            midi_note as i32 + key_shift as i32 + custom_key_shift;
-        if !(0..=127).contains(&real_key_i) {
+        // Note which we should grab presets from (strictly internal).
+        let mut sound_bank_note =
+            midi_note as i32 + self.midi_channels[channel].current_key_shift();
+        // Sanity check on the raw played note.
+        if midi_note > 127 {
             return;
         }
-        let real_key = real_key_i as u8;
 
-        // Apply MIDI Tuning Standard (MTS) if active
+        // Apply MIDI Tuning Standard (MTS) if active. Indexed by the raw played note.
         let program = self.midi_channels[channel]
             .preset
             .as_ref()
             .unwrap()
             .program;
-        let mts_idx = program as usize * 128 + real_key as usize;
-        let mut internal_midi_note = real_key;
+        let mts_idx = program as usize * 128 + midi_note as usize;
         if mts_idx < self.tunings.len() {
             let tune = self.tunings[mts_idx];
             if tune >= 0.0 {
-                internal_midi_note = tune.trunc() as u8;
+                // Overwrite the note with MIDI tuning standard.
+                sound_bank_note = tune.trunc() as i32;
             }
         }
+        // Used for preset lookups; may be out of 0-127 range (then no zones match).
+        let sound_bank_note_u8 = sound_bank_note as u8;
 
         // Monophonic retrigger: kill any current note before starting new one
         if self.system_parameters.monophonic_retrigger {
@@ -107,7 +105,7 @@ impl SynthesizerCore {
         // Key velocity override from key modifier manager
         let key_vel = self
             .key_modifier_manager
-            .get_velocity(channel as u8, real_key);
+            .get_velocity(channel as u8, midi_note);
         let effective_velocity = if key_vel > -1 {
             key_vel as u8
         } else {
@@ -117,7 +115,7 @@ impl SynthesizerCore {
         // Gain override from key modifier manager
         let voice_gain = self
             .key_modifier_manager
-            .get_gain(channel as u8, real_key);
+            .get_gain(channel as u8, midi_note);
 
         // Portamento: compute glide duration if enabled
         let portamento_time_cc = (self.midi_channels[channel].midi_controllers
@@ -134,14 +132,14 @@ impl SynthesizerCore {
         let mut portamento_duration: f64 = 0.0;
 
         if !self.midi_channels[channel].drum_channel
-            && porta_control as i32 != internal_midi_note as i32
+            && porta_control as i32 != sound_bank_note
             && portamento_on
             && portamento_time_cc > 0
         {
             if porta_control > 0 {
                 // Key 0 means initial portamento (no glide)
                 let diff =
-                    (internal_midi_note as i32 - porta_control as i32).unsigned_abs() as u8;
+                    (sound_bank_note - porta_control as i32).unsigned_abs() as u8;
                 portamento_duration =
                     portamento_time_to_seconds(portamento_time_cc, diff as f64);
                 portamento_from_key = porta_control as i32;
@@ -152,7 +150,7 @@ impl SynthesizerCore {
             let enable = self.system_parameters.events_enabled;
             let evs = self.midi_channels[channel].controller_change(
                 midi_controllers::PORTAMENTO_CONTROL,
-                internal_midi_note,
+                sound_bank_note_u8,
                 &mut self.voices,
                 current_time,
                 current_system,
@@ -187,13 +185,13 @@ impl SynthesizerCore {
         // -----------------------------------------------------------------------
         let override_patch = self
             .key_modifier_manager
-            .has_override_patch(channel as u8, internal_midi_note);
+            .has_override_patch(channel as u8, sound_bank_note_u8);
 
         let cached_voices = if override_patch {
             // Key modifier overrides the patch for this note
             let patch = match self
                 .key_modifier_manager
-                .get_patch(channel as u8, internal_midi_note)
+                .get_patch(channel as u8, sound_bank_note_u8)
             {
                 Ok(p) => p,
                 Err(_) => return,
@@ -218,7 +216,7 @@ impl SynthesizerCore {
                     self.get_cached_voices_impl(
                         bank_idx,
                         &preset,
-                        internal_midi_note,
+                        sound_bank_note_u8,
                         effective_velocity,
                     )
                 } else {
@@ -239,7 +237,7 @@ impl SynthesizerCore {
             self.get_cached_voices_impl(
                 bank_idx,
                 &preset_clone,
-                internal_midi_note,
+                sound_bank_note_u8,
                 effective_velocity,
             )
         };
@@ -258,7 +256,7 @@ impl SynthesizerCore {
         let mut voice_gain = voice_gain;
 
         if self.midi_channels[channel].drum_channel {
-            let p = &self.midi_channels[channel].drum_params[internal_midi_note as usize];
+            let p = &self.midi_channels[channel].drum_params[midi_note as usize];
 
             // Check if note on is allowed
             if !p.rx_note_on {
@@ -321,14 +319,8 @@ impl SynthesizerCore {
             // Assign a free voice slot (returns index, not reference)
             let voice_idx = self.assign_voice_idx();
 
-            // Setup basic voice state
-            self.voices[voice_idx].setup(
-                self.current_time,
-                channel as u8,
-                internal_midi_note,
-                effective_velocity,
-                real_key,
-            );
+            // Setup basic voice state (raw played note).
+            self.voices[voice_idx].setup(self.current_time, channel as u8, midi_note);
 
             // Select the active oscillator type
             self.voices[voice_idx].oscillator_type =
@@ -352,11 +344,13 @@ impl SynthesizerCore {
                 }
             }
 
-            // Copy other cached fields
+            // Copy other cached fields (effective target key and velocity may be
+            // overridden by generators).
+            self.voices[voice_idx].target_key = cached.target_key;
+            self.voices[voice_idx].velocity = cached.velocity as u8;
             self.voices[voice_idx].exclusive_class = cached.exclusive_class as i32;
             self.voices[voice_idx].root_key = cached.root_key;
             self.voices[voice_idx].looping_mode = cached.looping_mode;
-            self.voices[voice_idx].target_key = cached.target_key;
 
             // Set sample data on the active oscillator
             let osc_idx = self.voices[voice_idx].oscillator_type as usize;
@@ -474,14 +468,13 @@ impl SynthesizerCore {
             let modulated_copy = self.voices[voice_idx].modulated_generators;
             let target_key = self.voices[voice_idx].target_key;
             let start_time = self.voices[voice_idx].start_time;
-            let midi_note_i16 = self.voices[voice_idx].midi_note as i16;
 
             self.voices[voice_idx]
                 .vol_env
                 .init(&modulated_copy, target_key);
             self.voices[voice_idx]
                 .mod_env
-                .init(&modulated_copy, start_time, midi_note_i16);
+                .init(&modulated_copy, start_time, target_key);
             self.voices[voice_idx].filter.init();
 
             // -----------------------------------------------------------------------
@@ -793,37 +786,37 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // real_key out of range → early return
+    // Out-of-range shifted note / raw note bounds → no voices
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_real_key_above_127_no_voice_added() {
+    fn test_sound_bank_note_above_127_no_voice_added() {
         let (mut core, _events) = make_core_with_channel();
-        // note 100 + shift 64 = 164 > 127
+        // note 100 + shift 64 = 164 → out of the 0-127 zone range, no zones match
         core.midi_channels[0].channel_transpose_key_shift = 64;
         core.note_on(0, 100, 100);
         assert_eq!(
             core.midi_channels[0].voice_count, 0,
-            "real_key > 127 must not add voices"
+            "out-of-range sound bank note must not add voices"
         );
     }
 
     #[test]
-    fn test_real_key_below_0_no_voice_added() {
+    fn test_sound_bank_note_below_0_no_voice_added() {
         let (mut core, _events) = make_core_with_channel();
-        // note 0 + shift -64 = -64 < 0
+        // note 0 + shift -64 = -64 → out of the 0-127 zone range, no zones match
         core.midi_channels[0].channel_transpose_key_shift = -64;
         core.note_on(0, 0, 100);
         assert_eq!(
             core.midi_channels[0].voice_count, 0,
-            "real_key < 0 must not add voices"
+            "out-of-range sound bank note must not add voices"
         );
     }
 
     #[test]
-    fn test_real_key_at_127_boundary_proceeds_to_preset_check() {
+    fn test_valid_note_no_preset_no_voice_added() {
         let (mut core, _events) = make_core_with_channel();
-        // note 127 + shift 0 = 127 → valid key, but no preset → bails at preset check
+        // note 127 → valid raw note, but no preset → bails at preset check
         core.note_on(0, 127, 100);
         assert_eq!(
             core.midi_channels[0].voice_count, 0,

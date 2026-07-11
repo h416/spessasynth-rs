@@ -112,11 +112,15 @@ pub struct Voice {
     /// Equivalent to: channel
     pub channel: u8,
 
-    /// Note-on velocity (0–127).
+    /// MIDI Velocity of the voice (0–127).
+    /// This can be overridden by generators and is the effective velocity.
+    /// MIDI Note On velocity is only used for zone filtering.
     /// Equivalent to: velocity
     pub velocity: u8,
 
-    /// MIDI note number (0–127).
+    /// MIDI note number of the voice (0–127).
+    /// Direct number from the Note On message; used for Note Off and external
+    /// parameters (MTS and per-note pitch wheel).
     /// Equivalent to: midiNote
     pub midi_note: u8,
 
@@ -159,10 +163,6 @@ pub struct Voice {
     /// Current pan value (−500 to +500) used for smoothing.
     /// Equivalent to: currentPan
     pub current_pan: f64,
-
-    /// Actual MIDI key (may differ from `midi_note` when MIDI Tuning Standard is active).
-    /// Equivalent to: realKey
-    pub real_key: u8,
 
     /// Key to glide from for portamento (−1 = portamento off).
     /// Equivalent to: portamentoFromKey
@@ -247,7 +247,6 @@ impl Voice {
             tuning_cents: 0.0,
             tuning_ratio: 1.0,
             current_pan: 0.0,
-            real_key: 60,
             portamento_from_key: -1,
             portamento_duration: 0.0,
             override_pan: 0.0,
@@ -304,26 +303,17 @@ impl Voice {
 
     /// Initialises the voice for a new note-on event.
     ///
-    /// Equivalent to: setup(currentTime, channel, midiNote, velocity, realKey)
-    pub fn setup(
-        &mut self,
-        current_time: f64,
-        channel: u8,
-        midi_note: u8,
-        velocity: u8,
-        real_key: u8,
-    ) {
-        self.start_time = current_time;
+    /// Equivalent to: setup(currentTime, channel, midiNote)
+    pub fn setup(&mut self, current_time: f64, channel: u8, midi_note: u8) {
         self.is_active = true;
         self.is_in_release = false;
         self.has_rendered = false;
         self.is_held = false;
         self.release_start_time = f64::INFINITY;
         self.pressure = 0;
+        self.start_time = current_time;
         self.channel = channel;
         self.midi_note = midi_note;
-        self.velocity = velocity;
-        self.real_key = real_key;
         self.override_release_vol_env = 0;
         self.portamento_duration = 0.0;
         self.portamento_from_key = -1;
@@ -350,10 +340,10 @@ impl VoiceContext for Voice {
         &self.generators
     }
 
-    /// Returns the real MIDI key number as usize (for per-note pitch lookup).
-    /// Equivalent to: voice.realKey
-    fn real_key(&self) -> usize {
-        self.real_key as usize
+    /// Returns the raw MIDI note number as usize (for per-note pitch lookup).
+    /// Equivalent to: voice.midiNote
+    fn midi_note(&self) -> usize {
+        self.midi_note as usize
     }
 
     /// Computes the modulator at `index`, caches it in `modulator_values[index]`,
@@ -577,12 +567,6 @@ mod tests {
     }
 
     #[test]
-    fn test_new_real_key_is_60() {
-        let v = Voice::new(SAMPLE_RATE);
-        assert_eq!(v.real_key, 60);
-    }
-
-    #[test]
     fn test_new_portamento_from_key_is_minus_one() {
         let v = Voice::new(SAMPLE_RATE);
         assert_eq!(v.portamento_from_key, -1);
@@ -632,14 +616,14 @@ mod tests {
     #[test]
     fn test_setup_sets_start_time() {
         let mut v = Voice::new(SAMPLE_RATE);
-        v.setup(1.5, 0, 60, 100, 60);
+        v.setup(1.5, 0, 60);
         assert!((v.start_time - 1.5).abs() < f64::EPSILON);
     }
 
     #[test]
     fn test_setup_activates_voice() {
         let mut v = Voice::new(SAMPLE_RATE);
-        v.setup(0.0, 0, 60, 100, 60);
+        v.setup(0.0, 0, 60);
         assert!(v.is_active);
     }
 
@@ -648,7 +632,7 @@ mod tests {
         let mut v = Voice::new(SAMPLE_RATE);
         v.is_in_release = true;
         v.has_rendered = true;
-        v.setup(0.0, 0, 60, 100, 60);
+        v.setup(0.0, 0, 60);
         assert!(!v.is_in_release);
         assert!(!v.has_rendered);
     }
@@ -657,18 +641,16 @@ mod tests {
     fn test_setup_resets_release_start_time_to_infinity() {
         let mut v = Voice::new(SAMPLE_RATE);
         v.release_start_time = 1.0;
-        v.setup(0.0, 0, 60, 100, 60);
+        v.setup(0.0, 0, 60);
         assert!(v.release_start_time.is_infinite() && v.release_start_time > 0.0);
     }
 
     #[test]
     fn test_setup_sets_channel_and_note() {
         let mut v = Voice::new(SAMPLE_RATE);
-        v.setup(0.0, 3, 64, 80, 64);
+        v.setup(0.0, 3, 64);
         assert_eq!(v.channel, 3);
         assert_eq!(v.midi_note, 64);
-        assert_eq!(v.velocity, 80);
-        assert_eq!(v.real_key, 64);
     }
 
     #[test]
@@ -676,7 +658,7 @@ mod tests {
         let mut v = Voice::new(SAMPLE_RATE);
         v.portamento_from_key = 50;
         v.portamento_duration = 0.5;
-        v.setup(0.0, 0, 60, 100, 60);
+        v.setup(0.0, 0, 60);
         assert_eq!(v.portamento_from_key, -1);
         assert!((v.portamento_duration - 0.0).abs() < f64::EPSILON);
     }
@@ -685,7 +667,7 @@ mod tests {
     fn test_setup_resets_override_release_vol_env() {
         let mut v = Voice::new(SAMPLE_RATE);
         v.override_release_vol_env = -2320;
-        v.setup(0.0, 0, 60, 100, 60);
+        v.setup(0.0, 0, 60);
         assert_eq!(v.override_release_vol_env, 0);
     }
 
@@ -693,7 +675,7 @@ mod tests {
     fn test_setup_resets_pressure() {
         let mut v = Voice::new(SAMPLE_RATE);
         v.pressure = 64;
-        v.setup(0.0, 0, 60, 100, 60);
+        v.setup(0.0, 0, 60);
         assert_eq!(v.pressure, 0);
     }
 
@@ -704,7 +686,7 @@ mod tests {
     #[test]
     fn test_release_voice_sets_release_time() {
         let mut v = Voice::new(SAMPLE_RATE);
-        v.setup(0.0, 0, 60, 100, 60);
+        v.setup(0.0, 0, 60);
         v.release_voice(1.0, MIN_NOTE_LENGTH);
         assert!((v.release_start_time - 1.0).abs() < f64::EPSILON);
     }
@@ -735,7 +717,7 @@ mod tests {
     #[test]
     fn test_exclusive_release_sets_cutoff_time() {
         let mut v = Voice::new(SAMPLE_RATE);
-        v.setup(0.0, 0, 60, 100, 60);
+        v.setup(0.0, 0, 60);
         v.exclusive_release(0.5, MIN_EXCLUSIVE_LENGTH);
         assert_eq!(v.override_release_vol_env, EXCLUSIVE_CUTOFF_TIME);
     }
@@ -758,7 +740,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // VoiceContext trait – decoded_modulators / generators / real_key
+    // VoiceContext trait – decoded_modulators / generators / midi_note
     // -----------------------------------------------------------------------
 
     #[test]
@@ -774,10 +756,10 @@ mod tests {
     }
 
     #[test]
-    fn test_real_key_returns_usize() {
+    fn test_midi_note_returns_usize() {
         let mut v = Voice::new(SAMPLE_RATE);
-        v.real_key = 72;
-        assert_eq!(v.real_key(), 72usize);
+        v.midi_note = 72;
+        assert_eq!(v.midi_note(), 72usize);
     }
 
     // -----------------------------------------------------------------------

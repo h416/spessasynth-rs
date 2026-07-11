@@ -64,7 +64,7 @@ pub trait ChannelContext {
     /// Equivalent to: `this.perNotePitch`
     fn per_note_pitch(&self) -> bool;
 
-    /// Per-note pitch wheel values (indexed by realKey).
+    /// Per-note pitch wheel values (indexed by midiNote).
     /// Equivalent to: `this.pitchWheels`
     fn pitch_wheels(&self) -> &[i16];
 
@@ -96,9 +96,9 @@ pub trait VoiceContext {
     /// Equivalent to: `voice.generators`
     fn generators(&self) -> &[i16];
 
-    /// The voice's actual MIDI key number (for per-note pitch).
-    /// Equivalent to: `voice.realKey`
-    fn real_key(&self) -> usize;
+    /// The voice's raw MIDI note number (for per-note pitch).
+    /// Equivalent to: `voice.midiNote`
+    fn midi_note(&self) -> usize;
 
     /// Computes the modulator at the specified index, caches and returns the value.
     /// Also writes the result to `modulator_values()[index]`.
@@ -177,10 +177,10 @@ pub fn compute_modulators<C: ChannelContext, V: VoiceContext>(
     // Get pitch wheel value
     // Equivalent to:
     //   const pitch = this.perNotePitch
-    //     ? this.pitchWheels[voice.realKey]
-    //     : this.midiControllers[modulatorSources.pitchWheel + NON_CC_INDEX_OFFSET]
+    //     ? this.pitchWheels[voice.midiNote]
+    //     : this._midiParameters.pitchWheel
     let pitch: i16 = if channel.per_note_pitch() {
-        let key = voice.real_key();
+        let key = voice.midi_note();
         channel.pitch_wheels().get(key).copied().unwrap_or(0)
     } else {
         // TS 4.3.0: the global pitch wheel now lives on the channel MIDI parameters
@@ -400,7 +400,7 @@ mod tests {
         modulators: Vec<DecodedModulator>,
         generators: Vec<i16>,
         modulator_values: Vec<i16>,
-        real_key: usize,
+        midi_note: usize,
         /// Simple mock that returns a fixed value without using closures
         fixed_mod_value: f64,
     }
@@ -411,7 +411,7 @@ mod tests {
                 modulators: vec![],
                 generators,
                 modulator_values: vec![],
-                real_key: 60,
+                midi_note: 60,
                 fixed_mod_value: 0.0,
             }
         }
@@ -430,8 +430,8 @@ mod tests {
         fn generators(&self) -> &[i16] {
             &self.generators
         }
-        fn real_key(&self) -> usize {
-            self.real_key
+        fn midi_note(&self) -> usize {
+            self.midi_note
         }
         fn compute_single_modulator(
             &mut self,
@@ -597,7 +597,7 @@ mod tests {
         ch.per_note_pitch = true;
         ch.pitch_wheels = vec![500; 128];
         let mut voice = MockVoice::new(vec![0; 63]);
-        voice.real_key = 60;
+        voice.midi_note = 60;
         let mut modulated = vec![0i16; 63];
 
         compute_modulators(&ch, &mut voice, &mut modulated, SourceFilter::All, 0);
