@@ -1,5 +1,4 @@
 pub mod compute_modulator;
-pub mod lfo;
 pub mod lowpass_filter;
 pub mod modulation_envelope;
 pub mod unit_converter;
