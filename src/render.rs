@@ -4,6 +4,7 @@ use std::time::Instant;
 use crate::midi::basic_midi::BasicMidi;
 use crate::sequencer::sequencer::SpessaSynthSequencer;
 use crate::soundbank::sound_bank_loader::load_sound_bank;
+use crate::synthesizer::audio_engine::parameters::system::GlobalSystemParameterChange;
 use crate::synthesizer::audio_engine::synth_constants::DEFAULT_SYNTH_MODE;
 use crate::synthesizer::processor::SpessaSynthProcessor;
 use crate::synthesizer::types::SynthProcessorOptions;
@@ -68,6 +69,13 @@ pub fn render_midi_to_wav(
     seq.synth
         .synth_core
         .reset(DEFAULT_SYNTH_MODE);
+
+    // Enable uncapped voice count (matches the 4.3.0 example, which renders with
+    // `setSystemParameter("autoAllocateVoices", true)`; the TS reference WAVs are
+    // generated this way, so no voice stealing during offline render).
+    seq.synth
+        .synth_core
+        .set_system_parameter(GlobalSystemParameterChange::AutoAllocateVoices(true));
 
     // Load MIDI and play
     seq.load_new_song_list(vec![midi]);
