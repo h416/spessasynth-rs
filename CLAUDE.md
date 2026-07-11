@@ -17,7 +17,7 @@ midiからwavを生成する機能のみです。
 ## wav 生成方法
 
 - typescript
-tsx ./tmp/spessasynth_core-4.2.0/examples/midi_to_wav_node.ts sample/soundfont/GeneralUser-GS.sf2 sample/midi/J-cycle.mid sample/result/ts/J-cycle.wav
+tsx ./tmp/spessasynth_core-4.3.0/examples/midi_to_wav_node.ts sample/soundfont/GeneralUser-GS.sf2 sample/midi/J-cycle.mid sample/result/ts/J-cycle.wav
 
 - rust
 cargo run --release --example midi_to_wav -- sample/soundfont/GeneralUser-GS.sf2 sample/midi/J-cycle.mid sample/result/rust/J-cycle.wav
