@@ -24,3 +24,10 @@ target
 #macos
 .DS_Store
 
+# Migration-only material (not part of the ported result)
+/docs/
+/sample/
+/tmp/
+/tools/
+/tschange/
+

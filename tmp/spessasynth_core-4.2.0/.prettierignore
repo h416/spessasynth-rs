@@ -1,5 +1,0 @@
-**/*.min.*
-**/*.d.ts
-dist/
-tests/files
-.husky
