@@ -31,3 +31,6 @@ target
 /tools/
 /tschange/
 
+
+# Project instructions (migration-only, not for publication)
+/CLAUDE.md
