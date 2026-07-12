@@ -50,6 +50,38 @@ random pan のイベントがあると、ts,rustで差異が起こる。
 * typescriptは、Float32Array以外、f64になる
 * rustで、[f32],Vec<f32> 配列(バッファ)以外、f64を使うこと。配列に代入するときに初めてf32にキャストする。配列から取り出したらすぐ、f64にキャストする。
 
+## バージョンアップ移植時の注意(WAV乖離の主因)
+
+spessasynth_core のバージョンを上げて移植する時、WAV が TS版と乖離する主因は
+**「旧バージョンの定数・デフォルト値・式が残ったまま、新バージョンの変更が反映漏れ」** になること。
+`tmp/spessasynth_core-<旧>` と `tmp/spessasynth_core-<新>` の両ソースを直接 `diff` し、
+数値定数・デフォルト値・式・制御フローの変更を1つずつ Rust 側と照合すること。
+
+### 4.2.0→4.3.0 で実際にあった乖離(すべて修正済み・再発注意)
+
+1. **ピッチの整数セント切り捨て(最大の犯人)**: `render_voice` で
+   `cents_total = (cents + semitones*100) as i32` としていた。新版は整数を
+   「再計算するかの判定キー」にのみ使い、`tuningRatio = pow(2, centsTotal/1200)` は
+   **フル float** で計算する。切り捨てるとビブラート・fine tune・pitch bend 等の
+   サブセント動作を持つ持続音の位相がドリフトし、管弦楽器で顕著に乖離する。
+2. **デフォルトコントローラ値の変更漏れ**: `DEFAULT_MIDI_CONTROLLERS`(新版 `channel/reset.ts`)を
+   1行ずつ照合する。例: reverb depth(CC91)40→0、NRPN(`DEFAULT_NRPN`)127→0、
+   portamento デフォルト削除、CC121(resetRP15)のリセット範囲が8CCのみに限定、など。
+3. **機構の削除に伴う経路変更**: 旧版の「custom vibrato」削除に伴い、GS NRPN vibrato は
+   `channel_vibrato` フィールドではなく vibrato CC(76/77/78)経由で vibLfoRate 生成子を駆動する。
+   旧経路を残すと dead code になり効かない。
+4. **エフェクト定数**: chorus/delay/reverb の gain・character係数・damping・send補正
+   (`EFX_SENDS_GAIN_CORRECTION` 等)も変更されている。
+
+### WAV乖離の切り分け手法(有効な順)
+
+1. 窓別相関(例 10秒ごと)を見る。「特定の窓だけ急落→1.0に回復」なら FP累積ではなく
+   **特定の楽器/イベントの乖離**。単調減少なら累積系。
+2. `tools/isolate_channel.py --keep <ch>` でチャンネルを特定。
+3. 単音MIDI(program 指定・1ノート持続)を生成して楽器を最小再現。
+4. oscillator → filter → volume envelope → effect-send を段階的にダンプして層を特定。
+5. 該当層の generator/定数/式を新旧TSと Rust で3者照合。
+
 ## テストデータ
 
 - soundfont: sample/soundfont/GeneralUser-GS.sf2 
