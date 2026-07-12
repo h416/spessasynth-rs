@@ -403,6 +403,7 @@ impl VoiceContext for Voice {
         // Build minimal voice view for source value lookup.
         let voice_inputs = VoiceModInputs {
             midi_note: self.midi_note,
+            target_key: self.target_key,
             velocity: self.velocity,
             pressure: self.pressure,
         };

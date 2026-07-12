@@ -31,8 +31,11 @@ use crate::utils::byte_functions::bit_mask::{bit_mask_to_bool, to_numeric_bool};
 /// When `voice.ts` is ported, callers can switch to the real `Voice` type.
 /// Equivalent to the subset of `Voice` used in `getValue()`.
 pub struct VoiceModInputs {
-    /// MIDI note number (0–127).
+    /// MIDI note number (0–127) — the raw pressed key.
     pub midi_note: u8,
+    /// Effective key after key shift / keyNum override (`voice.targetKey`).
+    /// TS 4.3.0's `noteOnKeyNum` modulator source reads this, not the raw note.
+    pub target_key: i16,
     /// Note-on velocity (0–127).
     pub velocity: u8,
     /// Polyphonic pressure (0–127).
@@ -176,7 +179,8 @@ impl ModulatorSource {
         } else {
             match self.index {
                 modulator_sources::NO_CONTROLLER => 16_383,
-                modulator_sources::NOTE_ON_KEY_NUM => (voice.midi_note as usize) << 7,
+                // TS 4.3.0: voice.targetKey << 7 (effective key, not the raw pressed note).
+                modulator_sources::NOTE_ON_KEY_NUM => (voice.target_key.max(0) as usize) << 7,
                 modulator_sources::NOTE_ON_VELOCITY => (voice.velocity as usize) << 7,
                 modulator_sources::POLY_PRESSURE => (voice.pressure as usize) << 7,
                 modulator_sources::PITCH_WHEEL => pitch_wheel.max(0) as usize,
@@ -313,6 +317,8 @@ mod tests {
     fn voice(midi_note: u8, velocity: u8, pressure: u8) -> VoiceModInputs {
         VoiceModInputs {
             midi_note,
+            // In tests without key shift / keyNum override, the effective key equals the note.
+            target_key: midi_note as i16,
             velocity,
             pressure,
         }
