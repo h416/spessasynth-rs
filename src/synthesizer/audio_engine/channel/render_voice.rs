@@ -263,11 +263,17 @@ impl MidiChannel {
         // Resonance offset (does not affect filter gain)
         volume_excursion_centibels -= voice.resonance_offset as f64;
 
-        // Compute final playback rate
-        let cents_total = (cents + semitones * 100.0) as i32;
-        if cents_total != voice.tuning_cents as i32 {
-            voice.tuning_cents = cents_total as f64;
-            voice.tuning_ratio = f64::powf(2.0, cents_total as f64 / 1200.0);
+        // Compute final playback rate.
+        // TS 4.3.0: centsRounded (integer) is used ONLY to test whether the pitch changed
+        // enough to justify recomputing the ratio; the ratio itself is computed from the
+        // FULL floating-point centsTotal (sub-cent tunings, e.g. a few-cent vibrato, are
+        // preserved). Truncating to i32 here would quantize the pitch and make sustained
+        // notes (vibrato, fractional tuning) slowly drift out of phase from TS.
+        let cents_total = cents + semitones * 100.0;
+        let cents_rounded = cents_total as i32;
+        if cents_rounded != voice.tuning_cents as i32 {
+            voice.tuning_cents = cents_rounded as f64;
+            voice.tuning_ratio = f64::powf(2.0, cents_total / 1200.0);
         }
 
         // Gain target from initial attenuation generator

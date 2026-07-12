@@ -11,6 +11,7 @@ use crate::synthesizer::audio_engine::channel::parameters::midi::ChannelMidiPara
 use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::{
     sys_ex_logging, sys_ex_not_recognized,
 };
+use crate::synthesizer::audio_engine::synth_constants::EFX_SENDS_GAIN_CORRECTION;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::GlobalMIDIParameterChangeCallback;
@@ -291,22 +292,26 @@ impl SynthesizerCore {
                             }
 
                             0x04 => {
-                                // Roland GS master volume
+                                // Roland GS master volume.
+                                // TS 4.3.0 logs only (no-op); master volume is not applied here.
                                 spessa_synth_info(&format!(
-                                    "Roland GS Master Volume set to: {} with: {:02X?}",
+                                    "Roland GS Master Volume: {} with: {:02X?}",
                                     message_value, syx
                                 ));
-                                self.set_midi_volume(message_value as f64 / 127.0);
                             }
 
                             0x05 => {
-                                // Roland master key shift (transpose)
+                                // Roland master key shift (transpose).
+                                // TS 4.3.0: setMIDIParameter("keyShift", transpose) — integer
+                                // semitone shift (drum channels ignore it), not a cents tuning.
                                 let transpose = message_value as i32 - 64;
                                 spessa_synth_info(&format!(
-                                    "Roland GS Master Key-Shift set to: {} with: {:02X?}",
+                                    "Roland GS Master Key-Shift: {} keys with: {:02X?}",
                                     transpose, syx
                                 ));
-                                self.set_master_tuning(transpose as f64 * 100.0);
+                                self.set_midi_parameter(GlobalMIDIParameterChangeCallback::KeyShift(
+                                    transpose as f64,
+                                ));
                             }
 
                             _ => {
@@ -343,20 +348,27 @@ impl SynthesizerCore {
                             }
 
                             0x17 => {
-                                // EFX send level to reverb
-                                self.insertion_processor.set_send_level_to_reverb(data as f64 / 127.0);
+                                // EFX send level to reverb.
+                                // TS 4.3.0 scales the raw send by EFX_SENDS_GAIN_CORRECTION.
+                                self.insertion_processor.set_send_level_to_reverb(
+                                    (data as f64 / 127.0) * EFX_SENDS_GAIN_CORRECTION,
+                                );
                                 spessa_synth_info(&format!("GS EFX Send Level to Reverb: {}", data));
                             }
 
                             0x18 => {
-                                // EFX send level to chorus
-                                self.insertion_processor.set_send_level_to_chorus(data as f64 / 127.0);
+                                // EFX send level to chorus.
+                                self.insertion_processor.set_send_level_to_chorus(
+                                    (data as f64 / 127.0) * EFX_SENDS_GAIN_CORRECTION,
+                                );
                                 spessa_synth_info(&format!("GS EFX Send Level to Chorus: {}", data));
                             }
 
                             0x19 => {
-                                // EFX send level to delay
-                                self.insertion_processor.set_send_level_to_delay(data as f64 / 127.0);
+                                // EFX send level to delay.
+                                self.insertion_processor.set_send_level_to_delay(
+                                    (data as f64 / 127.0) * EFX_SENDS_GAIN_CORRECTION,
+                                );
                                 self.delay_active = true;
                                 spessa_synth_info(&format!("GS EFX Send Level to Delay: {}", data));
                             }

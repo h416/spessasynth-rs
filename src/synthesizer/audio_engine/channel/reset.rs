@@ -195,27 +195,31 @@ impl MidiChannel {
         current_system: MIDISystem,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
-        self.channel_octave_tuning.fill(0);
-
         let mut events = Vec::new();
 
-        // Reset pitch wheel
+        // Reset pitch wheel to center.
         self.per_note_pitch = false;
-        let mut sub = self.pitch_wheel(voices, 8192, -1, enable_event_system);
-        events.append(&mut sub);
+        events.append(&mut self.pitch_wheel(voices, 8192, -1, enable_event_system));
 
-        // Reset custom vibrato
-        self.channel_vibrato.rate = 0.0;
-        self.channel_vibrato.depth = 0.0;
-        self.channel_vibrato.delay = 0.0;
+        // Reset channel pressure to 0.
+        events.append(&mut self.channel_pressure(voices, 0));
 
-        // Reset all non-locked, non-special controllers
-        for cc in 0..128u8 {
+        // TS 4.3.0 RP-15 resets ONLY these controllers (RP_15_RESET_CC_NUMS), each back to
+        // its DEFAULT_MIDI_CONTROLLERS value (and only if it currently differs). The 4.2.0
+        // "reset everything except a non-resettable exclusion list" behavior was removed.
+        const RP_15_RESET_CC_NUMS: [u8; 8] = [
+            midi_controllers::MODULATION_WHEEL,
+            midi_controllers::EXPRESSION_CONTROLLER,
+            midi_controllers::SUSTAIN_PEDAL,
+            midi_controllers::PORTAMENTO_ON_OFF,
+            midi_controllers::SOSTENUTO_PEDAL,
+            midi_controllers::SOFT_PEDAL,
+            midi_controllers::REGISTERED_PARAMETER_MSB,
+            midi_controllers::REGISTERED_PARAMETER_LSB,
+        ];
+        for &cc in RP_15_RESET_CC_NUMS.iter() {
             let reset_value = DEFAULT_MIDI_CONTROLLER_VALUES[cc as usize];
-            if !is_non_resettable(cc)
-                && reset_value != self.midi_controllers[cc as usize]
-                && cc != midi_controllers::PORTAMENTO_CONTROL
-            {
+            if reset_value != self.midi_controllers[cc as usize] {
                 let mut sub = self.controller_change(
                     cc,
                     (reset_value >> 7) as u8,
@@ -228,9 +232,6 @@ impl MidiChannel {
             }
         }
 
-        self.reset_generator_overrides();
-        self.reset_generator_offsets();
-
         events
     }
 
@@ -242,8 +243,9 @@ impl MidiChannel {
     /// Equivalent to: resetParameters()
     pub fn reset_parameters(&mut self) {
         self.last_parameter_is_registered = true;
-        self.midi_controllers[midi_controllers::NON_REGISTERED_PARAMETER_LSB as usize] = 127 << 7;
-        self.midi_controllers[midi_controllers::NON_REGISTERED_PARAMETER_MSB as usize] = 127 << 7;
+        // TS 4.3.0 defaults: RPN = 0x7F (null), NRPN = DEFAULT_NRPN = 0.
+        self.midi_controllers[midi_controllers::NON_REGISTERED_PARAMETER_LSB as usize] = 0;
+        self.midi_controllers[midi_controllers::NON_REGISTERED_PARAMETER_MSB as usize] = 0;
         self.midi_controllers[midi_controllers::REGISTERED_PARAMETER_LSB as usize] = 127 << 7;
         self.midi_controllers[midi_controllers::REGISTERED_PARAMETER_MSB as usize] = 127 << 7;
         self.reset_generator_overrides();

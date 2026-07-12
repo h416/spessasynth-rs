@@ -142,7 +142,7 @@ impl MidiChannel {
                 }
 
                 rpt::RESET_PARAMETERS => {
-                    self.reset_parameters();
+                    // TS 4.3.0 ignores the RPN "reset parameters" (0x7F,0x7F) data entry.
                 }
 
                 _ => {

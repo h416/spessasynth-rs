@@ -32,8 +32,8 @@ const fn build_default_midi_controller_values() -> [i16; CONTROLLER_TABLE_SIZE] 
     arr[midi_controllers::EXPRESSION_CONTROLLER as usize] = 127 << 7;
     arr[midi_controllers::PAN as usize] = 64 << 7;
 
-    // Portamento is on by default, but time is set to 0 so it's effectively off
-    arr[midi_controllers::PORTAMENTO_ON_OFF as usize] = 127 << 7;
+    // Note: TS 4.3.0 no longer defaults portamento on/off (CC65) to on; it stays 0 (off),
+    // matching DEFAULT_MIDI_CONTROLLERS in reset.ts.
 
     arr[midi_controllers::FILTER_RESONANCE as usize] = 64 << 7;
     arr[midi_controllers::RELEASE_TIME as usize] = 64 << 7;
@@ -50,10 +50,10 @@ const fn build_default_midi_controller_values() -> [i16; CONTROLLER_TABLE_SIZE] 
     // Note: TS 4.3.0 removed the default reverb depth (CC91). It now defaults to 0,
     // matching DEFAULT_MIDI_CONTROLLERS in reset.ts (previously 4.2.0 set it to 40).
 
+    // RPN defaults to 127 (DEFAULT_RPN = 0x7f, the "null RPN"); NRPN defaults to 0
+    // (TS 4.3.0 DEFAULT_NRPN = 0, changed from 4.2.0's 127).
     arr[midi_controllers::REGISTERED_PARAMETER_LSB as usize] = 127 << 7;
     arr[midi_controllers::REGISTERED_PARAMETER_MSB as usize] = 127 << 7;
-    arr[midi_controllers::NON_REGISTERED_PARAMETER_LSB as usize] = 127 << 7;
-    arr[midi_controllers::NON_REGISTERED_PARAMETER_MSB as usize] = 127 << 7;
 
     // Pitch wheel
     arr[NON_CC_INDEX_OFFSET + modulator_sources::PITCH_WHEEL as usize] = 64 << 7;
@@ -250,8 +250,8 @@ mod tests {
 
     #[test]
     fn test_portamento_on_off() {
-        // portamentoOnOff = 65, value = 127 << 7 = 16256
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[65], 16256);
+        // TS 4.3.0 no longer defaults portamento on/off (CC65); it stays 0 (off).
+        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[65], 0);
     }
 
     #[test]
@@ -309,14 +309,14 @@ mod tests {
 
     #[test]
     fn test_non_registered_parameter_lsb() {
-        // nonRegisteredParameterLSB = 98, value = 127 << 7 = 16256
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[98], 16256);
+        // TS 4.3.0 DEFAULT_NRPN = 0 (was 127 in 4.2.0).
+        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[98], 0);
     }
 
     #[test]
     fn test_non_registered_parameter_msb() {
-        // nonRegisteredParameterMSB = 99
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[99], 16256);
+        // TS 4.3.0 DEFAULT_NRPN = 0 (was 127 in 4.2.0).
+        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[99], 0);
     }
 
     #[test]
