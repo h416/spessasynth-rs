@@ -1,5 +1,5 @@
 === WAV Comparison Report ===
-Date: 2026-07-12 15:46:57
+Date: 2026-07-12 15:52:23
 
 --- Bond ---
 Duration: TS=113.07s  RS=113.07s
@@ -40,11 +40,11 @@ Result: PASS
 --- J-cycle ---
 Duration: TS=105.62s  RS=105.62s
 Size: TS=18630772  RS=18630772
-RMS diff:  L=152.1  R=149.2
-Max diff:  L=4942  R=4651
-Correlation: L=0.99924  R=0.99923
-Worst 1s window: 59.0-60.0s  RMS_L=974.3
-Result: FAIL
+RMS diff:  L=0.0  R=0.0
+Max diff:  L=1  R=1
+Correlation: L=1.00000  R=1.00000
+Worst 1s window: 77.0-78.0s  RMS_R=0.0
+Result: PASS
 
 --- Jump ---
 Duration: TS=169.79s  RS=169.79s
@@ -83,4 +83,4 @@ Worst 1s window: 8.0-9.0s  RMS_L=0.0
 Result: PASS
 
 --- Summary ---
-PASS: 8/9  WARN: 0/9  FAIL: 1/9
+PASS: 9/9  WARN: 0/9  FAIL: 0/9

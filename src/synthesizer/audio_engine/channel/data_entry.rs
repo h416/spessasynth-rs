@@ -299,40 +299,47 @@ impl MidiChannel {
         let mut events = Vec::new();
 
         match nrpn_fine {
+            // TS 4.3.0 removed the pre-4.3.0 custom channel vibrato: GS NRPN vibrato
+            // rate/depth/delay now route through the vibrato-rate/depth/delay CCs
+            // (76/77/78), which drive the vibLfoRate / vibLfoToPitch / delayVibLFO
+            // generators via the default modulators.
             nrl::VIBRATO_RATE => {
-                if data_coarse == 64 {
-                    return events;
-                }
-                add_default_vibrato(self);
-                self.channel_vibrato.rate = (data_coarse as f64 / 64.0) * 8.0;
-                spessa_synth_info(&format!(
-                    "Vibrato rate for {}: {} = {} Hz",
-                    self.channel, data_coarse, self.channel_vibrato.rate
-                ));
+                let mut sub = self.controller_change(
+                    midi_controllers::VIBRATO_RATE,
+                    data_coarse,
+                    voices,
+                    current_time,
+                    current_system,
+                    enable_event_system,
+                );
+                events.append(&mut sub);
+                spessa_synth_info(&format!("Vibrato rate for {}: {}", self.channel, data_coarse));
             }
 
             nrl::VIBRATO_DEPTH => {
-                if data_coarse == 64 {
-                    return events;
-                }
-                add_default_vibrato(self);
-                self.channel_vibrato.depth = data_coarse as f64 / 2.0;
-                spessa_synth_info(&format!(
-                    "Vibrato depth for {}: {} = {} cents",
-                    self.channel, data_coarse, self.channel_vibrato.depth
-                ));
+                let mut sub = self.controller_change(
+                    midi_controllers::VIBRATO_DEPTH,
+                    data_coarse,
+                    voices,
+                    current_time,
+                    current_system,
+                    enable_event_system,
+                );
+                events.append(&mut sub);
+                spessa_synth_info(&format!("Vibrato depth for {}: {}", self.channel, data_coarse));
             }
 
             nrl::VIBRATO_DELAY => {
-                if data_coarse == 64 {
-                    return events;
-                }
-                add_default_vibrato(self);
-                self.channel_vibrato.delay = data_coarse as f64 / 64.0 / 3.0;
-                spessa_synth_info(&format!(
-                    "Vibrato delay for {}: {} = {} seconds",
-                    self.channel, data_coarse, self.channel_vibrato.delay
-                ));
+                let mut sub = self.controller_change(
+                    midi_controllers::VIBRATO_DELAY,
+                    data_coarse,
+                    voices,
+                    current_time,
+                    current_system,
+                    enable_event_system,
+                );
+                events.append(&mut sub);
+                spessa_synth_info(&format!("Vibrato delay for {}: {}", self.channel, data_coarse));
             }
 
             nrl::TVF_FILTER_CUTOFF => {
