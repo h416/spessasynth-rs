@@ -301,13 +301,17 @@ impl SpessaSynthSequencer {
                     } = analyzed
                     {
                         let sysex_channel = sysex_channel as usize;
-                        // Empty tracks cannot controller change
-                        if self.songs[song_idx].is_multi_port
+                        // Channel number may be above 15: GS/XG SysEx-encoded controller
+                        // changes carry their own part/channel number, which can exceed the
+                        // 0-15 MIDI channel range in double-module (32-channel) setups.
+                        let empty_track = self.songs[song_idx].is_multi_port
                             && self.songs[song_idx].tracks[track_index]
                                 .channels
-                                .is_empty()
-                        {
-                            // Break (do nothing further for this event)
+                                .is_empty();
+                        if sysex_channel >= channels_to_save {
+                            // Matches TS `break`: stop processing this event, nothing more to do.
+                        } else if empty_track {
+                            // Empty tracks cannot controller change
                         } else if controller == midi_controllers::RESET_ALL_CONTROLLERS {
                             reset_all_controllers(&mut channels, sysex_channel);
                         } else if is_cc_non_skippable(controller) {
