@@ -18,9 +18,16 @@ use crate::synthesizer::types::{NoteOnCallback, SynthProcessorEvent};
 use crate::utils::loggin::spessa_synth_warn;
 
 /// Clamps a value between min and max.
+///
+/// Mirrors TS `clamp = (num, min, max) => Math.max(min, Math.min(max, num))`
+/// (min-then-max order). This matches the old `max(min).min(max)` behavior
+/// whenever `min <= max`, but differs when `min > max`: TS clamps to `min`
+/// in that degenerate case (e.g. `clamp(5, 0, -1) === 0`), while
+/// `max(min).min(max)` would instead yield `-1`. The degenerate case arises
+/// for zero-length samples where `end_exclusive - 1.0 == -1.0`.
 #[inline]
 fn clamp_f64(val: f64, min: f64, max: f64) -> f64 {
-    val.max(min).min(max)
+    val.min(max).max(min)
 }
 
 impl SynthesizerCore {
@@ -717,6 +724,16 @@ mod tests {
     fn test_clamp_f64_at_boundaries() {
         assert_eq!(clamp_f64(0.0, 0.0, 1.0), 0.0);
         assert_eq!(clamp_f64(1.0, 0.0, 1.0), 1.0);
+    }
+
+    /// Regression: when `min > max` (degenerate case from a zero-length
+    /// sample where `end_exclusive - 1.0 == -1.0`), TS's
+    /// `Math.max(min, Math.min(max, num))` returns `min`, not `max`.
+    /// `clamp_f64` must match this order to avoid producing a negative
+    /// wavetable cursor that panics on cast to `usize`.
+    #[test]
+    fn test_clamp_f64_min_greater_than_max_matches_ts_order() {
+        assert_eq!(clamp_f64(5.0, 0.0, -1.0), 0.0);
     }
 
     // -----------------------------------------------------------------------
