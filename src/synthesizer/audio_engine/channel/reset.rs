@@ -147,9 +147,9 @@ impl MidiChannel {
             self.custom_controllers[custom_controllers::CHANNEL_TRANSPOSE_FINE as usize];
         self.custom_controllers.copy_from_slice(&CUSTOM_RESET_ARRAY);
         self.set_custom_controller(custom_controllers::CHANNEL_TRANSPOSE_FINE, transpose as f64);
-        // TS 4.3.0 reset.ts: this.modulationDepth(50, false) → modulationDepth = 1
-        // (log = false; set the value directly to avoid per-reset log spam).
-        self.midi_parameters.modulation_depth = 1.0;
+        // TS 4.3.14 reset.ts: setMIDIParameter("modulationDepth", 50)
+        // (set the value directly to avoid per-reset log spam).
+        self.midi_parameters.modulation_depth = 50.0;
         self.reset_parameters();
 
         // Reset note-tracking state (new in 4.3.14: this.playingNotes.fill(false)).

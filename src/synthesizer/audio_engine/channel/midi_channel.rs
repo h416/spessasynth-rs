@@ -396,10 +396,10 @@ impl MidiChannel {
     /// Sets the modulation depth in cents.
     /// Equivalent to: setModulationDepth(cents)
     pub fn set_modulation_depth(&mut self, cents: f64) {
-        // TS 4.3.0: setMIDIParameter("modulationDepth", cents / 50). The depth multiplier now
-        // lives on the channel MIDI parameters and is applied in `compute_single_modulator`.
-        // Note: the raw (unrounded) `cents / 50` is stored; only the log rounds `cents`.
-        self.midi_parameters.modulation_depth = cents / 50.0;
+        // TS 4.3.14: setMIDIParameter("modulationDepth", cents). The value is stored in cents
+        // directly and converted to a multiplier (dividing by 50) at the point of use in
+        // `compute_single_modulator`.
+        self.midi_parameters.modulation_depth = cents;
         spessa_synth_info(&format!(
             "Channel {} modulation depth. Cents: {}",
             self.channel,

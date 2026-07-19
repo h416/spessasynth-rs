@@ -436,10 +436,14 @@ impl VoiceContext for Voice {
             self.resonance_offset = (computed_value / 2.0).max(0.0);
         }
 
-        // Modulation depth: scale mod-wheel modulators by the channel modulation depth.
-        // Equivalent to: if (modulator.isModWheelModulator) computedValue *= this._midiParameters.modulationDepth;
+        // Modulation depth is in cents; convert to a multiplier by dividing by 50.
+        // The MIDI spec assumes the default modulation depth is 50 cents, but it may vary
+        // for different sound banks. For example, a modulation depth of 100 cents yields a
+        // multiplier of 2, which, for a preset with a depth of 50, creates a total
+        // modulation depth of 100 cents.
+        // Equivalent to: if (modulator.isModWheelModulator) computedValue *= this._midiParameters.modulationDepth / 50;
         if is_mod_wheel_mod {
-            computed_value *= modulation_depth;
+            computed_value *= modulation_depth / 50.0;
         }
 
         // Store as i16 to match TypeScript's Int16Array truncation behavior.

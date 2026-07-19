@@ -104,7 +104,8 @@ pub struct ChannelMidiParameter {
     /// Equivalent to: pitchWheelRange
     pub pitch_wheel_range: f64,
 
-    /// The multiplier of the modulation wheel modulator.
+    /// The modulation depth in cents.
+    /// This is internally converted to a multiplier by dividing by 50.
     /// The MIDI spec assumes the default modulation depth is 50 cents, but it
     /// may vary for different sound banks.
     /// Equivalent to: modulationDepth
@@ -212,7 +213,7 @@ pub const DEFAULT_CHANNEL_MIDI_PARAMETERS: ChannelMidiParameter = ChannelMidiPar
     pressure: 0,
     pitch_wheel: 8192,
     pitch_wheel_range: 2.0,
-    modulation_depth: 1.0,
+    modulation_depth: 50.0,
     rx_channel: 0,
     poly_mode: true,
     key_shift: 0.0,
