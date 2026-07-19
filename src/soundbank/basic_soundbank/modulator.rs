@@ -543,7 +543,6 @@ pub static SPESSASYNTH_DEFAULT_MODULATORS: LazyLock<Vec<Modulator>> = LazyLock::
     const BRIGHTNESS: u8 = 74; // midiControllers.brightness
     const FILTER_RESONANCE: u8 = 71; // midiControllers.filterResonance
     const SOFT_PEDAL: u8 = 67; // midiControllers.softPedal
-    const BALANCE: u8 = 8; // midiControllers.balance
 
     // --- SF2 standard default modulators (Section 8.4 of the SF2 spec) ---
 
@@ -643,31 +642,13 @@ pub static SPESSASYNTH_DEFAULT_MODULATORS: LazyLock<Vec<Modulator>> = LazyLock::
             250,
             0,
         ),
-        // 16. CC 67 (soft pedal) → initial attenuation (switch, unipolar, positive, CC)
+        // 16. CC 67 (soft pedal) → initialFilterFc (switch, unipolar, positive, CC)
         //     source_enum = (3<<10)|(0<<9)|(0<<8)|(1<<7)|67 = 3072+128+67 = 3267 = 0x0cc3
         decoded_mod(
             get_mod_source_enum(switch, false, false, true, SOFT_PEDAL),
             0x0,
-            generator_types::INITIAL_ATTENUATION,
-            50,
-            0,
-        ),
-        // 17. CC 67 (soft pedal) → initialFilterFc (switch, unipolar, positive, CC)
-        //     source_enum = 3267 = 0x0cc3 (same source as above)
-        decoded_mod(
-            get_mod_source_enum(switch, false, false, true, SOFT_PEDAL),
-            0x0,
             generator_types::INITIAL_FILTER_FC,
-            -2400,
-            0,
-        ),
-        // 18. CC 8 (balance) → pan (linear, bipolar, positive, CC)
-        //     source_enum = 0|(1<<9)|(0<<8)|(1<<7)|8 = 512+128+8 = 648 = 0x0288
-        decoded_mod(
-            get_mod_source_enum(linear, true, false, true, BALANCE),
-            0x0,
-            generator_types::PAN,
-            500,
+            -1200,
             0,
         ),
     ]
@@ -1045,8 +1026,9 @@ mod tests {
         let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
         assert_eq!(
             mods.len(),
-            17,
-            "Expected 9 SF2 + 8 SpessaSynth = 17 modulators"
+            15,
+            "Expected 9 SF2 + 6 SpessaSynth = 15 modulators \
+             (4.3.14 removed the CC67->initialAttenuation and CC8->pan defaults)"
         );
     }
 
@@ -1117,24 +1099,16 @@ mod tests {
     }
 
     #[test]
-    fn test_default_mod_15_soft_pedal_filter_fc_negative_amount() {
-        // Entry 15 (index 15) = CC 67 soft pedal → initialFilterFc, amount=-2400
+    fn test_default_mod_14_soft_pedal_filter_fc_negative_amount() {
+        // Entry 14 (index 14, last entry) = CC 67 soft pedal → initialFilterFc, amount=-1200.
+        // 4.3.14 changed this from -2400 and removed the CC67->initialAttenuation
+        // and CC8->pan default modulators entirely.
         let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
-        let m = &mods[15];
+        let m = &mods[14];
         assert_eq!(m.destination, generator_types::INITIAL_FILTER_FC);
-        assert_eq!(m.transform_amount, -2400.0);
-    }
-
-    #[test]
-    fn test_default_mod_16_balance_to_pan() {
-        // Entry 16 (index 16) = CC 8 balance → pan, amount=500
-        let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
-        let m = &mods[16];
-        assert_eq!(m.destination, generator_types::PAN);
-        assert_eq!(m.transform_amount, 500.0);
+        assert_eq!(m.transform_amount, -1200.0);
         assert!(m.primary_source.is_cc);
-        assert_eq!(m.primary_source.index, 8); // balance = CC 8
-        assert!(m.primary_source.is_bipolar);
+        assert_eq!(m.primary_source.index, 67); // soft pedal = CC 67
     }
 
     #[test]
