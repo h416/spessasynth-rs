@@ -63,7 +63,8 @@ impl MidiChannel {
     /// - `sample_count`: Number of samples to render.
     /// - `sample_rate`: Output sample rate in Hz (used for the phase-based LFOs).
     /// - `master_gain`, `reverb_gain`, `chorus_gain`, `delay_gain`: Global gain values.
-    /// - `midi_volume`: Global MIDI volume scale (globalMIDI.gain, legacy curve).
+    /// - `midi_volume`: Global MIDI volume scale (globalMIDI.volume, already squared —
+    ///   see `SynthesizerCore::set_midi_volume`).
     /// - `global_pan`: Global master pan normalized to [-1, 1]
     ///   (globalSystem.pan + globalMIDI.pan); folded additively into the pan index.
     /// - `enable_effects`: Whether to write to effect buffers.
@@ -349,10 +350,11 @@ impl MidiChannel {
             voice.current_pan
         };
 
-        // 4.3.0 additive channel gain/pan model.
-        // currentGain = SPESSASYNTH_GAIN_FACTOR * globalSystem.gain * globalMIDI.gain * channelSystem.gain.
+        // 4.3.14 additive channel gain/pan model.
+        // currentGain = SPESSASYNTH_GAIN_FACTOR * globalSystem.gain * Math.pow(globalMIDI.volume, 2) * channelSystem.gain.
         // `self.current_gain` already holds SPESSASYNTH_GAIN_FACTOR * channelSystem.gain; fold in the
-        // global gain: master_gain = globalSystem.gain, midi_volume = globalMIDI.gain (legacy curve).
+        // global gain: master_gain = globalSystem.gain, midi_volume = globalMIDI.volume^2 (already
+        // squared by `SynthesizerCore::set_midi_volume`).
         let current_gain = master_gain * midi_volume * self.current_gain();
         // outputGain = currentGain * voiceGain (voiceGain already carries gainModifier + amplitude + LFOs).
         let output_gain = current_gain * voice_gain;

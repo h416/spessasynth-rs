@@ -213,7 +213,7 @@ impl MidiChannel {
             // Portamento control: force portamento once (MIDI 1.0 spec, page 16),
             // even if portamento on/off (CC#65) is off.
             midi_controllers::PORTAMENTO_CONTROL => {
-                self.last_note = value as i32;
+                self.last_portamento_note = value as i32;
                 self.portamento_force = true;
             }
 

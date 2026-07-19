@@ -161,9 +161,9 @@ pub fn apply_snapshot(core: &mut SynthesizerCore, snapshot: &SynthesizerSnapshot
     // globalParamChange events and updating the legacy plumbing) without restoring anything
     // from the snapshot. Ported bug-for-bug, including the iteration order: `Object.entries`
     // follows the key insertion order of `DEFAULT_GLOBAL_MIDI_PARAMETERS`
-    // (gain, pan, keyShift, fineTune, system).
+    // (volume, pan, keyShift, fineTune, system).
     let mp = core.midi_parameters;
-    core.set_midi_parameter(GlobalMIDIParameterChangeCallback::Gain(mp.gain));
+    core.set_midi_parameter(GlobalMIDIParameterChangeCallback::Volume(mp.volume));
     core.set_midi_parameter(GlobalMIDIParameterChangeCallback::Pan(mp.pan));
     core.set_midi_parameter(GlobalMIDIParameterChangeCallback::KeyShift(mp.key_shift));
     core.set_midi_parameter(GlobalMIDIParameterChangeCallback::FineTune(mp.fine_tune));
@@ -275,9 +275,9 @@ mod tests {
     #[test]
     fn test_create_captures_midi_parameters() {
         let (mut core, _) = make_core();
-        core.set_midi_parameter(GlobalMIDIParameterChangeCallback::Gain(0.4));
+        core.set_midi_parameter(GlobalMIDIParameterChangeCallback::Volume(0.4));
         let snap = get_synthesizer_snapshot(&core);
-        assert!((snap.midi_parameters.gain - 0.4).abs() < 1e-9);
+        assert!((snap.midi_parameters.volume - 0.4).abs() < 1e-9);
     }
 
     #[test]
@@ -425,13 +425,13 @@ mod tests {
     fn test_apply_does_not_restore_midi_parameters_upstream_quirk() {
         // Same upstream quirk for the MIDI parameters (re-set to current values).
         let (mut core, _) = make_core();
-        core.set_midi_parameter(GlobalMIDIParameterChangeCallback::Gain(0.25));
+        core.set_midi_parameter(GlobalMIDIParameterChangeCallback::Volume(0.25));
         let snap = get_synthesizer_snapshot(&core);
 
-        core.set_midi_parameter(GlobalMIDIParameterChangeCallback::Gain(1.0));
+        core.set_midi_parameter(GlobalMIDIParameterChangeCallback::Volume(1.0));
         apply_snapshot(&mut core, &snap);
 
-        assert!((core.midi_parameters.gain - 1.0).abs() < 1e-9);
+        assert!((core.midi_parameters.volume - 1.0).abs() < 1e-9);
     }
 
     // -----------------------------------------------------------------------

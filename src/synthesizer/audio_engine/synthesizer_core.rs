@@ -38,11 +38,12 @@
 /// - `getInsertionSnapshot`: `{type, params, channels}` — the separate send-level fields are
 ///   gone (folded into params[20..23]).
 /// - `setMIDIVolume`/`setMasterTuning` were removed upstream (replaced by the
-///   `midiParameters.gain`/`fineTune` flow applied in the channels' `updateInternalParams`).
+///   `midiParameters.volume`/`fineTune` flow applied in the channels' `updateInternalParams`).
 ///   TODO(Task 21): they are kept here as legacy plumbing called by
 ///   `set_midi_parameter` and the (pre-4.3.0) SysEx handlers, because the current render
-///   path still consumes `midi_volume`/the MASTER_TUNING custom controller. In particular
-///   the 4.2.0 GM2 `volume^E` curve is still applied — TS 4.3.0 applies the gain linearly.
+///   path still consumes `midi_volume`/the MASTER_TUNING custom controller. `set_midi_volume`
+///   stores `Math.pow(volume, 2)` (TS 4.3.14: `updateInternalParams` squares
+///   `globalMIDI.volume` — "it corresponds to CC volume, so volume is squared").
 /// - `processMessage` lost its `force` parameter (and the force-kill Note Off branch).
 /// - `createMIDIChannel`: fires `ChannelAdded` (was `newChannel` + `sendChannelProperty`).
 ///   Pre-existing phase-1 divergence kept: the TS constructor-side `channel.setDrums(true)`
@@ -1109,15 +1110,18 @@ impl SynthesizerCore {
         self.cached_voices.clear();
     }
 
-    /// Sets the global MIDI gain (applied linearly, matching 4.3.0).
+    /// Sets the global MIDI volume (squared, matching 4.3.14).
     ///
     /// 4.2.0 raised the master volume to `e` (GM2 §4.1 squared-ish curve) in
-    /// `setMIDIVolume`. 4.3.0 removed that curve: `midiParameters.gain` is applied
-    /// linearly in the channels. Keep this as the shared `midi_volume` plumbing but
-    /// store the value linearly so it equals `midi_parameters.gain`.
-    /// Equivalent to: setMIDIParameter("gain", value) (4.3.0)
+    /// `setMIDIVolume`. 4.3.0 removed that curve and applied `midiParameters.gain`
+    /// linearly. 4.3.14 renamed the parameter to `volume` and squares it again when
+    /// folding it into the channel gain (`Math.pow(globalMIDI.volume, 2)` inside
+    /// `updateInternalParams` — "it corresponds to CC volume, so volume is squared").
+    /// Keep this as the shared `midi_volume` plumbing but store the squared value
+    /// directly, so `midi_volume == midi_parameters.volume^2`.
+    /// Equivalent to: setMIDIParameter("volume", value) (4.3.14) → Math.pow(volume, 2)
     pub fn set_midi_volume(&mut self, volume: f64) {
-        self.midi_volume = volume;
+        self.midi_volume = volume.powi(2);
     }
 
     /// Sets the master tuning for all channels.

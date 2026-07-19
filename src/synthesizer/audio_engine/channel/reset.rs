@@ -57,10 +57,11 @@ impl MidiChannel {
     /// Portamento has a quirk: for XG the last note is set to 60, for others it
     /// is set to none (-1), so no portamento happens on the first note-on.
     ///
-    /// Equivalent to: resetPortamento()
+    /// Equivalent to: the inline `lastPortamentoNote` reset in `resetChannelInternal()`
+    /// (4.3.0: standalone `resetPortamento()`, inlined upstream in 4.3.14).
     fn reset_portamento(&mut self, current_system: MIDISystem) {
         let ch_system = self.channel_system(current_system);
-        self.last_note = if ch_system == MIDISystem::Xg { 60 } else { -1 };
+        self.last_portamento_note = if ch_system == MIDISystem::Xg { 60 } else { -1 };
     }
 
     /// Resets all controllers to their default values (full reset).
@@ -123,12 +124,15 @@ impl MidiChannel {
         self.channel_vibrato.delay = 0.0;
         self.set_midi_parameter(ChannelMidiParameterValue::RandomPan(false));
 
-        // Restore poly mode
-        if !self.locked_controllers[midi_controllers::MONO_MODE_ON as usize]
-            && !self.locked_controllers[midi_controllers::POLY_MODE_ON as usize]
-        {
-            self.set_midi_parameter(ChannelMidiParameterValue::PolyMode(true));
-        }
+        // Restore poly mode.
+        // TS 4.3.0 guarded this with the lockedControllers[monoModeOn/polyModeOn] check;
+        // TS 4.3.14 drops the guard here (parameter locking moves to the not-yet-ported
+        // lockedMIDIParameters mechanism), so it is now set unconditionally.
+        self.set_midi_parameter(ChannelMidiParameterValue::PolyMode(true));
+
+        // Reset velocity sense (new in 4.3.14): identity depth/offset of 64/64.
+        self.set_midi_parameter(ChannelMidiParameterValue::VelocitySenseOffset(64));
+        self.set_midi_parameter(ChannelMidiParameterValue::VelocitySenseDepth(64));
 
         // Reset pitch wheel
         self.per_note_pitch = false;
@@ -147,6 +151,9 @@ impl MidiChannel {
         // (log = false; set the value directly to avoid per-reset log spam).
         self.midi_parameters.modulation_depth = 1.0;
         self.reset_parameters();
+
+        // Reset note-tracking state (new in 4.3.14: this.playingNotes.fill(false)).
+        self.playing_notes.fill(false);
 
         // Reset drum parameters (SC-88 standard reverb values, etc.)
         reset_drum_params(&mut self.drum_params);

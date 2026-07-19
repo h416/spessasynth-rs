@@ -36,7 +36,7 @@ impl SynthesizerCore {
                     0x01 => {
                         // Master volume
                         let vol = ((syx[5] as u32) << 7) | syx[4] as u32;
-                        self.set_midi_parameter(GlobalMIDIParameterChangeCallback::Gain(
+                        self.set_midi_parameter(GlobalMIDIParameterChangeCallback::Volume(
                             vol as f64 / 16_384.0,
                         ));
                         spessa_synth_info(&format!("Master Volume. Volume: {}", vol));

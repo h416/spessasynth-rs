@@ -41,7 +41,7 @@ impl SynthesizerCore {
 
                 // Master volume
                 0x04 => {
-                    self.set_midi_parameter(GlobalMIDIParameterChangeCallback::Gain(
+                    self.set_midi_parameter(GlobalMIDIParameterChangeCallback::Volume(
                         data as f64 / 127.0,
                     ));
                     spessa_synth_info(&format!("XG Master Volume: {}", data));
@@ -50,7 +50,7 @@ impl SynthesizerCore {
                 // Master attenuation
                 0x05 => {
                     let vol = 127i32 - data as i32;
-                    self.set_midi_parameter(GlobalMIDIParameterChangeCallback::Gain(
+                    self.set_midi_parameter(GlobalMIDIParameterChangeCallback::Volume(
                         vol as f64 / 127.0,
                     ));
                     spessa_synth_info(&format!("XG Master Attenuation: {}", data));

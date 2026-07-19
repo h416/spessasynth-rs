@@ -111,11 +111,11 @@ pub struct MidiChannel {
     /// Equivalent to: lastParameterIsRegistered
     pub last_parameter_is_registered: bool,
 
-    /// The last pressed note on this channel. -1 means none.
+    /// The last pressed note on this channel, for portamento tracking. -1 means none.
     /// Strictly internal (not a MIDI parameter); set by Portamento Control CC
     /// and by the sequencer for accurate portamento recreation.
-    /// Equivalent to: lastNote
-    pub last_note: i32,
+    /// Equivalent to: lastPortamentoNote (renamed from `lastNote` in 4.3.14)
+    pub last_portamento_note: i32,
 
     /// If the portamento should be executed once regardless of Portamento on/off.
     /// Per the MIDI spec, CC#84 (Portamento Control) ignores on/off.
@@ -212,6 +212,10 @@ pub struct MidiChannel {
     /// Equivalent to: insertionEnabled
     pub insertion_enabled: bool,
 
+    /// For Mono Mode restoring notes: `playing_notes[midi_note]` is true while that note
+    /// is sounding on this channel.
+    /// Equivalent to: playingNotes
+    pub playing_notes: [bool; 128],
 }
 
 impl MidiChannel {
@@ -244,7 +248,7 @@ impl MidiChannel {
             current_key_shift: 0,
             current_gain: 0.0,
             last_parameter_is_registered: true,
-            last_note: -1,
+            last_portamento_note: -1,
             portamento_force: false,
             patch: MidiPatch {
                 program: 0,
@@ -270,6 +274,7 @@ impl MidiChannel {
             is_muted: false,
             previous_voice_count: 0,
             insertion_enabled: false,
+            playing_notes: [false; 128],
         };
         ch.update_channel_tuning();
         ch.update_internal_params();
@@ -377,7 +382,7 @@ impl MidiChannel {
     /// very accurate portamento recreation.
     /// Equivalent to: setLastNote(midiNote)
     pub fn set_last_note(&mut self, midi_note: i32) {
-        self.last_note = midi_note;
+        self.last_portamento_note = midi_note;
     }
 
     /// Sets the octave tuning for all 128 notes (repeated from 12-element array).
@@ -705,6 +710,9 @@ impl MidiChannel {
 
     /// Internal helper that modifies voices without returning events.
     fn stop_all_notes_impl(&mut self, voices: &mut [Voice], current_time: f64, force: bool) {
+        // TS 4.3.14: stopAllNotes also clears the (skeleton, currently unused) note-tracking
+        // state.
+        self.playing_notes.fill(false);
         if force {
             let mut vc = 0u32;
             if self.voice_count > 0 {
@@ -889,6 +897,8 @@ impl MidiChannel {
             Cc1(v) => self.midi_parameters.cc1 = v,
             Cc2(v) => self.midi_parameters.cc2 = v,
             DrumMap(v) => self.midi_parameters.drum_map = v,
+            VelocitySenseDepth(v) => self.midi_parameters.velocity_sense_depth = v,
+            VelocitySenseOffset(v) => self.midi_parameters.velocity_sense_offset = v,
         }
         self.update_internal_params();
     }
