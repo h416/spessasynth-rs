@@ -494,17 +494,19 @@ impl SynthesizerCore {
                 Some(d) => d.len(),
                 None => 0,
             };
-            let last_sample = if sample_len > 0 { (sample_len - 1) as f64 } else { 0.0 };
+            // End is exclusive, not inclusive.
+            // Testcase: https://github.com/spessasus/spessasynth_core/issues/90
+            let end_exclusive = sample_len as f64; // Length, not length - 1
 
             self.voices[voice_idx].oscillators[osc_idx].cursor =
-                clamp_f64(start_offset as f64, 0.0, last_sample);
+                clamp_f64(start_offset as f64, 0.0, end_exclusive - 1.0);
             self.voices[voice_idx].oscillators[osc_idx].end =
-                clamp_f64(last_sample + end_offset as f64, 0.0, last_sample);
+                clamp_f64(end_exclusive + end_offset as f64, 0.0, end_exclusive);
 
             let loop_start_raw = cached.loop_start as f64 + loop_start_offset as f64;
             let loop_end_raw = cached.loop_end as f64 + loop_end_offset as f64;
-            let mut ls = clamp_f64(loop_start_raw, 0.0, last_sample);
-            let mut le = clamp_f64(loop_end_raw, 0.0, last_sample);
+            let mut ls = clamp_f64(loop_start_raw, 0.0, end_exclusive);
+            let mut le = clamp_f64(loop_end_raw, 0.0, end_exclusive);
 
             // Swap if needed
             if le < ls {
