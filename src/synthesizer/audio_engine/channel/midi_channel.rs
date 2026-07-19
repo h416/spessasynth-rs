@@ -216,6 +216,27 @@ pub struct MidiChannel {
     /// is sounding on this channel.
     /// Equivalent to: playingNotes
     pub playing_notes: [bool; 128],
+
+    /// Groups voices for a specific Note On message, indexed by MIDI note.
+    /// Incremented on every non-internal Note On for that note (overlapping notes).
+    /// Equivalent to: noteOnID
+    pub note_on_id: [i32; 128],
+
+    /// Tracks the last Note Off's note ID, indexed by MIDI note.
+    /// Only advances to noteOnID once a matching Note Off is processed, so repeated
+    /// Note Offs for the same instance do not release a newer overlapping instance.
+    /// Equivalent to: noteOffID
+    pub note_off_id: [i32; 128],
+
+    /// The last note played in mono mode (-1 = none currently held).
+    /// Strictly internal (not a MIDI parameter).
+    /// Equivalent to: lastMonoNote
+    pub last_mono_note: i32,
+
+    /// The velocity of the last note played in mono mode.
+    /// Strictly internal (not a MIDI parameter).
+    /// Equivalent to: lastMonoVelocity
+    pub last_mono_velocity: u8,
 }
 
 impl MidiChannel {
@@ -275,6 +296,10 @@ impl MidiChannel {
             previous_voice_count: 0,
             insertion_enabled: false,
             playing_notes: [false; 128],
+            note_on_id: [0; 128],
+            note_off_id: [0; 128],
+            last_mono_note: -1,
+            last_mono_velocity: 0,
         };
         ch.update_channel_tuning();
         ch.update_internal_params();
@@ -675,6 +700,9 @@ impl MidiChannel {
         voices: &mut [Voice],
         current_time: f64,
     ) {
+        // Clear the note-on/off IDs for this note so the next Note On starts a fresh group.
+        self.note_off_id[midi_note as usize] = 0;
+        self.note_on_id[midi_note as usize] = 0;
         let mut vc = 0u32;
         if self.voice_count > 0 {
             for v in voices.iter_mut() {
@@ -710,8 +738,9 @@ impl MidiChannel {
 
     /// Internal helper that modifies voices without returning events.
     fn stop_all_notes_impl(&mut self, voices: &mut [Voice], current_time: f64, force: bool) {
-        // TS 4.3.14: stopAllNotes also clears the (skeleton, currently unused) note-tracking
-        // state.
+        // Clear IDs.
+        self.note_on_id.fill(0);
+        self.note_off_id.fill(0);
         self.playing_notes.fill(false);
         if force {
             let mut vc = 0u32;

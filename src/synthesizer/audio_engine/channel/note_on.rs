@@ -40,19 +40,26 @@ impl SynthesizerCore {
     /// - `midi_note`: MIDI note number (0-127)
     /// - `velocity`: Note velocity (0-127). Velocity 0 sends note-off instead.
     pub fn note_on(&mut self, channel: usize, midi_note: u8, velocity: u8) {
+        self.note_on_internal(channel, midi_note, velocity, true);
+    }
+
+    /// Sends a MIDI Note On message and starts a note.
+    ///
+    /// `emit` mirrors TS's `noteOn(midiNote, velocity, emit = true)`: when `false` (used
+    /// only by the mono-mode legato retrigger from `note_off`), the Note On ID for this
+    /// note is peeked instead of consumed, and the public `NoteOn` event is not fired.
+    ///
+    /// Equivalent to: noteOn(midiNote, velocity, emit)
+    pub(crate) fn note_on_internal(
+        &mut self,
+        channel: usize,
+        midi_note: u8,
+        velocity: u8,
+        emit: bool,
+    ) {
         if velocity == 0 {
             // velocity 0 = note off (per MIDI spec)
-            let current_time = self.current_time;
-            let black_midi = self.system_parameters.black_midi_mode;
-            let evs = self.midi_channels[channel].note_off(
-                midi_note,
-                &mut self.voices,
-                current_time,
-                black_midi,
-            );
-            for ev in evs {
-                self.call_event(ev);
-            }
+            self.note_off_channel(channel, midi_note);
             return;
         }
         let velocity = velocity.min(127);
@@ -72,6 +79,17 @@ impl SynthesizerCore {
         if self.midi_channels[channel].preset.is_none() {
             return;
         }
+
+        // Apply Velocity Sense and clamp.
+        // Default depth/offset (64/64) is the identity transform.
+        let velocity_sense_depth =
+            self.midi_channels[channel].midi_parameters.velocity_sense_depth as f64;
+        let velocity_sense_offset =
+            self.midi_channels[channel].midi_parameters.velocity_sense_offset as f64;
+        let mut real_velocity = ((velocity as f64) * (velocity_sense_depth / 64.0)
+            + (velocity_sense_offset - 64.0) * 2.0)
+            .floor()
+            .clamp(0.0, 127.0) as u8;
 
         // Note which we should grab presets from (strictly internal).
         let mut sound_bank_note =
@@ -98,12 +116,19 @@ impl SynthesizerCore {
         // Used for preset lookups; may be out of 0-127 range (then no zones match).
         let sound_bank_note_u8 = sound_bank_note as u8;
 
-        // Monophonic retrigger: kill any current note before starting new one
-        if self.system_parameters.monophonic_retrigger {
+        // Monophonic retrigger: kill any current note before starting new one.
+        // Either the (per-channel, falling back to global) monophonicRetrigger system
+        // parameter is set, or the channel's assign mode is Single (0).
+        let monophonic_retrigger = self.midi_channels[channel]
+            .system_parameters
+            .monophonic_retrigger
+            .unwrap_or(self.system_parameters.monophonic_retrigger);
+        if monophonic_retrigger || self.midi_channels[channel].midi_parameters.assign_mode == 0 {
             let current_time = self.current_time;
+            // TS default: killNote(midiNote) uses releaseTime = -12_000 (near-instant).
             self.midi_channels[channel].kill_note(
                 midi_note,
-                0,
+                -12_000,
                 &mut self.voices,
                 current_time,
             );
@@ -113,11 +138,9 @@ impl SynthesizerCore {
         let key_vel = self
             .key_modifier_manager
             .get_velocity(channel as u8, midi_note);
-        let effective_velocity = if key_vel > -1 {
-            key_vel as u8
-        } else {
-            velocity
-        };
+        if key_vel > -1 {
+            real_velocity = key_vel as u8;
+        }
 
         // Gain override from key modifier manager
         let voice_gain = self
@@ -168,23 +191,23 @@ impl SynthesizerCore {
             }
         }
 
-        // Mono mode: release all active voices on this channel
+        self.midi_channels[channel].playing_notes[midi_note as usize] = true;
+
+        // Mono mode: kill only the previously-sounding note (legato), not all voices.
         if !self.midi_channels[channel].midi_parameters.poly_mode {
-            let ch_channel = self.midi_channels[channel].channel;
-            let voice_count_ch = self.midi_channels[channel].voice_count;
-            let current_time = self.current_time;
-            if voice_count_ch > 0 {
-                let mut vc = 0u32;
-                for v in self.voices.iter_mut() {
-                    if v.is_active && v.channel == ch_channel {
-                        v.exclusive_release(current_time, 0.0);
-                        vc += 1;
-                        if vc >= voice_count_ch {
-                            break;
-                        }
-                    }
-                }
+            let last_mono_note = self.midi_channels[channel].last_mono_note;
+            if last_mono_note >= 0 && last_mono_note != midi_note as i32 {
+                let current_time = self.current_time;
+                // TS default: killNote(lastMonoNote) uses releaseTime = -12_000.
+                self.midi_channels[channel].kill_note(
+                    last_mono_note as u8,
+                    -12_000,
+                    &mut self.voices,
+                    current_time,
+                );
             }
+            self.midi_channels[channel].last_mono_note = midi_note as i32;
+            self.midi_channels[channel].last_mono_velocity = velocity;
         }
 
         // -----------------------------------------------------------------------
@@ -224,7 +247,7 @@ impl SynthesizerCore {
                         bank_idx,
                         &preset,
                         sound_bank_note_u8,
-                        effective_velocity,
+                        real_velocity,
                     )
                 } else {
                     return;
@@ -245,7 +268,7 @@ impl SynthesizerCore {
                 bank_idx,
                 &preset_clone,
                 sound_bank_note_u8,
-                effective_velocity,
+                real_velocity,
             )
         };
 
@@ -318,6 +341,17 @@ impl SynthesizerCore {
             pan_override = (normalized * 1000.0 - 500.0).round();
         };
 
+        // Groups voices from this Note On together (overlapping notes / mono legato
+        // retrigger). A non-emitting (mono legato) retrigger peeks the current ID
+        // instead of consuming it.
+        let note_id = if emit {
+            let id = self.midi_channels[channel].note_on_id[midi_note as usize];
+            self.midi_channels[channel].note_on_id[midi_note as usize] += 1;
+            id
+        } else {
+            self.midi_channels[channel].note_on_id[midi_note as usize]
+        };
+
         // -----------------------------------------------------------------------
         // Assign and configure a voice slot for each cached voice
         // -----------------------------------------------------------------------
@@ -327,7 +361,7 @@ impl SynthesizerCore {
             let voice_idx = self.assign_voice_idx();
 
             // Setup basic voice state (raw played note).
-            self.voices[voice_idx].setup(self.current_time, channel as u8, midi_note);
+            self.voices[voice_idx].setup(self.current_time, channel as u8, midi_note, note_id);
 
             // Select the active oscillator type
             self.voices[voice_idx].oscillator_type =
@@ -564,11 +598,13 @@ impl SynthesizerCore {
         if let Some(ev) = self.midi_channels[channel].build_channel_property_event(enable) {
             self.call_event(ev);
         }
-        self.call_event(SynthProcessorEvent::NoteOn(NoteOnCallback {
-            midi_note,
-            channel: channel as u8,
-            velocity,
-        }));
+        if emit {
+            self.call_event(SynthProcessorEvent::NoteOn(NoteOnCallback {
+                midi_note,
+                channel: channel as u8,
+                velocity,
+            }));
+        }
     }
 
     /// Gets or computes (and caches) voices for a specific bank index and preset.

@@ -63,6 +63,7 @@
 ///   constructors taking `maxBufferSize`.
 use std::collections::HashMap;
 
+use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
@@ -365,9 +366,15 @@ impl SynthesizerCore {
             // Allocate a new voice and return it (see module doc note on the TS 4.3.0
             // duplicate-push quirk here).
             self.allocate_new_voices(1);
+            let new_idx = self.voices.len() - 1;
             self.system_parameters.voice_cap += 1;
-            SpessaLog::info("Allocating a new voice!");
-            return self.voices.len() - 1;
+            SpessaLog::info(&format!(
+                "Allocating a new voice, total count {}.",
+                self.system_parameters.voice_cap
+            ));
+            // Prevent this voice from being stolen.
+            self.voices[new_idx].priority = i32::MAX;
+            return new_idx;
         }
         self.assign_voice_priorities();
         let mut lowest_idx = 0;
@@ -452,9 +459,6 @@ impl SynthesizerCore {
         self.set_chorus_macro(2);
         // Delay1 default
         self.set_delay_macro(0);
-        if !self.system_parameters.delay_lock {
-            self.delay_active = false;
-        }
         self.reset_insertion();
 
         let events_enabled = self.system_parameters.events_enabled;
@@ -481,6 +485,14 @@ impl SynthesizerCore {
                 events_enabled,
             );
             events.append(&mut sub);
+        }
+
+        // Delay may only be disabled if variations are all set to 0.
+        // They can still be set after a reset due to locking.
+        if !self.system_parameters.delay_lock {
+            self.delay_active = self.midi_channels.iter().any(|c| {
+                c.midi_controllers[midi_controllers::VARIATION_DEPTH as usize] > 0
+            });
         }
 
         for event in events {

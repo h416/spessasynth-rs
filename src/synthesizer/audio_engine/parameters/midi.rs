@@ -131,13 +131,17 @@ impl SynthesizerCore {
     }
 
     /// Resets all global MIDI parameters to their default values.
-    /// Equivalent to: resetMIDIParametersInternal(system)
+    ///
+    /// TS 4.3.14 inlines this directly in `reset()` (the separate bound
+    /// `resetMIDIParameters` method was removed), in the order
+    /// system, volume, pan, keyShift, fineTune.
+    /// Equivalent to: (inlined in) reset(system)
     pub fn reset_midi_parameters(&mut self, system: MIDISystem) {
+        self.set_midi_parameter(GlobalMIDIParameterChangeCallback::System(system));
         self.set_midi_parameter(GlobalMIDIParameterChangeCallback::Volume(1.0));
         self.set_midi_parameter(GlobalMIDIParameterChangeCallback::Pan(0.0));
         self.set_midi_parameter(GlobalMIDIParameterChangeCallback::KeyShift(0.0));
         self.set_midi_parameter(GlobalMIDIParameterChangeCallback::FineTune(0.0));
-        self.set_midi_parameter(GlobalMIDIParameterChangeCallback::System(system));
     }
 }
 
