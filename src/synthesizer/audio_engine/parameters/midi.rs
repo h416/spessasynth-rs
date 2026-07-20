@@ -76,30 +76,17 @@ impl SynthesizerCore {
             }
 
             GlobalMIDIParameterChangeCallback::KeyShift(semitones) => {
-                // Legacy plumbing (see the module doc TODO): replicate the 4.2.0
-                // "transposition" master-parameter behavior — temporarily zero the global
-                // value so that transpose_channel computes relative to 0, transpose every
-                // channel, then store.
-                self.midi_parameters.key_shift = 0.0;
-                let current_time = self.current_time;
-                let events_enabled = self.system_parameters.events_enabled;
-                let voices = &mut self.voices;
-                let mut events = Vec::new();
-                for ch in self.midi_channels.iter_mut() {
-                    if let Some(ev) = ch.transpose_channel(
-                        semitones,
-                        false,
-                        0.0,
-                        voices,
-                        current_time,
-                        events_enabled,
-                    ) {
-                        events.push(ev);
-                    }
-                }
                 self.midi_parameters.key_shift = semitones;
-                for ev in events {
-                    self.call_event(ev);
+                // TS 4.3.14: setMIDIParameter("keyShift") folds the global key shift into
+                // each channel's `currentKeyShift` via `updateInternalParams`, changing the
+                // sound-bank note chosen at the NEXT note-on (sample selection + root key) —
+                // it is NOT a real-time transpose of currently-playing notes. Mirror the
+                // global value onto every channel and recompute its cached key shift so the
+                // live consumer (`current_key_shift()` in note_on) sees it. Drum channels
+                // ignore the global key shift (handled in `update_internal_params`).
+                for ch in self.midi_channels.iter_mut() {
+                    ch.global_key_shift = semitones;
+                    ch.update_internal_params();
                 }
             }
 

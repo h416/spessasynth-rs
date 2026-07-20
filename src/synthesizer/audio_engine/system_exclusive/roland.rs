@@ -8,6 +8,7 @@ use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::generator_types;
 use crate::soundbank::enums::modulator_sources;
 use crate::synthesizer::audio_engine::channel::parameters::midi::ChannelMidiParameterValue;
+use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::{
     sys_ex_logging, sys_ex_not_recognized,
 };
@@ -192,9 +193,14 @@ impl SynthesizerCore {
                                 // cents = (tune - 8192) / 81.92.
                                 let tune = ((message_value as i32) << 7) | syx[8] as i32;
                                 let cents = (tune as f64 - 8192.0) / 81.92;
-                                self.midi_channels[channel].set_midi_parameter(
-                                    ChannelMidiParameterValue::FineTune(cents),
-                                );
+                                // TS 4.3.14 setMIDIParameter("fineTune", cents) folds into the
+                                // channel tuning consumed by render_voice. Route the full float
+                                // value into the live CHANNEL_TUNING custom controller (mirrors
+                                // the RPN fine-tune fix in channel/data_entry.rs); the previous
+                                // FineTune parameter path wrote a `current_tuning` field that no
+                                // render code reads.
+                                self.midi_channels[channel]
+                                    .set_custom_controller(custom_controllers::CHANNEL_TUNING, cents);
                                 sys_ex_logging(
                                     syx,
                                     channel as u8,

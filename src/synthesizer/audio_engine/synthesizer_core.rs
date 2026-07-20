@@ -416,6 +416,11 @@ impl SynthesizerCore {
             channel.drum_channel = true;
         }
 
+        // Inherit the current global MIDI key shift (TS pulls this from
+        // synthCore.midiParameters in updateInternalParams; the Rust channel mirrors it).
+        channel.global_key_shift = self.midi_parameters.key_shift;
+        channel.update_internal_params();
+
         self.midi_channels.push(channel);
 
         if send_event {

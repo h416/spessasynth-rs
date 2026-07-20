@@ -164,6 +164,13 @@ pub struct MidiChannel {
     /// Equivalent to: currentKeyShift (protected)
     current_key_shift: i32,
 
+    /// Global (synth-wide) MIDI key shift in semitones, pushed from
+    /// `SynthesizerCore::set_midi_parameter(KeyShift)`. TS pulls this from
+    /// `synthCore.midiParameters.keyShift` inside `updateInternalParams`; the Rust
+    /// channel has no back-reference, so the value is mirrored here and folded into
+    /// `current_key_shift` (non-drum channels only, matching TS).
+    pub global_key_shift: f64,
+
     /// Current gain, cached from `update_internal_params`.
     /// Equivalent to: currentGain (protected)
     current_gain: f64,
@@ -267,6 +274,7 @@ impl MidiChannel {
             current_pan: 0.0,
             current_tuning: 0.0,
             current_key_shift: 0,
+            global_key_shift: 0.0,
             current_gain: 0.0,
             last_parameter_is_registered: true,
             last_portamento_note: -1,
@@ -972,11 +980,14 @@ impl MidiChannel {
         let channel_system = &self.system_parameters;
         let channel_midi = &self.midi_parameters;
 
-        // Only Channel System is processed for drum channels.
+        // Only Channel System is processed for drum channels (drums ignore key shift).
+        // Non-drum channels also fold in the global MIDI key shift (TS sums
+        // globalSystem + globalMIDI + channelSystem + channelMIDI; only globalMIDI is
+        // set by SysEx here, mirrored into `global_key_shift`).
         let current_key_shift = if self.drum_channel {
             channel_system.key_shift
         } else {
-            channel_system.key_shift + channel_midi.key_shift
+            self.global_key_shift + channel_system.key_shift + channel_midi.key_shift
         };
         // Ensure integer.
         self.current_key_shift = current_key_shift.trunc() as i32;
