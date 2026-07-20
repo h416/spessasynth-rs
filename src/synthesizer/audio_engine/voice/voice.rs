@@ -203,6 +203,11 @@ pub struct Voice {
     /// Current phase (0..1) of the modulation LFO triangle wave.
     /// Equivalent to: modLfoPhase
     pub mod_lfo_phase: f64,
+
+    /// Groups voices belonging to the same Note On message.
+    /// Used for overlapping Note Ons (Note Off releases only the matching group).
+    /// Equivalent to: noteID
+    pub note_id: i32,
 }
 
 impl Voice {
@@ -258,6 +263,7 @@ impl Voice {
             pitch_offset: 0.0,
             vib_lfo_phase: 0.0,
             mod_lfo_phase: 0.0,
+            note_id: 0,
         }
     }
 
@@ -303,8 +309,8 @@ impl Voice {
 
     /// Initialises the voice for a new note-on event.
     ///
-    /// Equivalent to: setup(currentTime, channel, midiNote)
-    pub fn setup(&mut self, current_time: f64, channel: u8, midi_note: u8) {
+    /// Equivalent to: setup(currentTime, channel, midiNote, noteID)
+    pub fn setup(&mut self, current_time: f64, channel: u8, midi_note: u8, note_id: i32) {
         self.is_active = true;
         self.is_in_release = false;
         self.has_rendered = false;
@@ -320,6 +326,7 @@ impl Voice {
         // Important, these start at 1/4 way there!
         self.vib_lfo_phase = 0.25;
         self.mod_lfo_phase = 0.25;
+        self.note_id = note_id;
     }
 }
 
@@ -436,10 +443,14 @@ impl VoiceContext for Voice {
             self.resonance_offset = (computed_value / 2.0).max(0.0);
         }
 
-        // Modulation depth: scale mod-wheel modulators by the channel modulation depth.
-        // Equivalent to: if (modulator.isModWheelModulator) computedValue *= this._midiParameters.modulationDepth;
+        // Modulation depth is in cents; convert to a multiplier by dividing by 50.
+        // The MIDI spec assumes the default modulation depth is 50 cents, but it may vary
+        // for different sound banks. For example, a modulation depth of 100 cents yields a
+        // multiplier of 2, which, for a preset with a depth of 50, creates a total
+        // modulation depth of 100 cents.
+        // Equivalent to: if (modulator.isModWheelModulator) computedValue *= this._midiParameters.modulationDepth / 50;
         if is_mod_wheel_mod {
-            computed_value *= modulation_depth;
+            computed_value *= modulation_depth / 50.0;
         }
 
         // Store as i16 to match TypeScript's Int16Array truncation behavior.
@@ -617,14 +628,14 @@ mod tests {
     #[test]
     fn test_setup_sets_start_time() {
         let mut v = Voice::new(SAMPLE_RATE);
-        v.setup(1.5, 0, 60);
+        v.setup(1.5, 0, 60, 0);
         assert!((v.start_time - 1.5).abs() < f64::EPSILON);
     }
 
     #[test]
     fn test_setup_activates_voice() {
         let mut v = Voice::new(SAMPLE_RATE);
-        v.setup(0.0, 0, 60);
+        v.setup(0.0, 0, 60, 0);
         assert!(v.is_active);
     }
 
@@ -633,7 +644,7 @@ mod tests {
         let mut v = Voice::new(SAMPLE_RATE);
         v.is_in_release = true;
         v.has_rendered = true;
-        v.setup(0.0, 0, 60);
+        v.setup(0.0, 0, 60, 0);
         assert!(!v.is_in_release);
         assert!(!v.has_rendered);
     }
@@ -642,14 +653,14 @@ mod tests {
     fn test_setup_resets_release_start_time_to_infinity() {
         let mut v = Voice::new(SAMPLE_RATE);
         v.release_start_time = 1.0;
-        v.setup(0.0, 0, 60);
+        v.setup(0.0, 0, 60, 0);
         assert!(v.release_start_time.is_infinite() && v.release_start_time > 0.0);
     }
 
     #[test]
     fn test_setup_sets_channel_and_note() {
         let mut v = Voice::new(SAMPLE_RATE);
-        v.setup(0.0, 3, 64);
+        v.setup(0.0, 3, 64, 0);
         assert_eq!(v.channel, 3);
         assert_eq!(v.midi_note, 64);
     }
@@ -659,7 +670,7 @@ mod tests {
         let mut v = Voice::new(SAMPLE_RATE);
         v.portamento_from_key = 50;
         v.portamento_duration = 0.5;
-        v.setup(0.0, 0, 60);
+        v.setup(0.0, 0, 60, 0);
         assert_eq!(v.portamento_from_key, -1);
         assert!((v.portamento_duration - 0.0).abs() < f64::EPSILON);
     }
@@ -668,7 +679,7 @@ mod tests {
     fn test_setup_resets_override_release_vol_env() {
         let mut v = Voice::new(SAMPLE_RATE);
         v.override_release_vol_env = -2320;
-        v.setup(0.0, 0, 60);
+        v.setup(0.0, 0, 60, 0);
         assert_eq!(v.override_release_vol_env, 0);
     }
 
@@ -676,7 +687,7 @@ mod tests {
     fn test_setup_resets_pressure() {
         let mut v = Voice::new(SAMPLE_RATE);
         v.pressure = 64;
-        v.setup(0.0, 0, 60);
+        v.setup(0.0, 0, 60, 0);
         assert_eq!(v.pressure, 0);
     }
 
@@ -687,7 +698,7 @@ mod tests {
     #[test]
     fn test_release_voice_sets_release_time() {
         let mut v = Voice::new(SAMPLE_RATE);
-        v.setup(0.0, 0, 60);
+        v.setup(0.0, 0, 60, 0);
         v.release_voice(1.0, MIN_NOTE_LENGTH);
         assert!((v.release_start_time - 1.0).abs() < f64::EPSILON);
     }
@@ -718,7 +729,7 @@ mod tests {
     #[test]
     fn test_exclusive_release_sets_cutoff_time() {
         let mut v = Voice::new(SAMPLE_RATE);
-        v.setup(0.0, 0, 60);
+        v.setup(0.0, 0, 60, 0);
         v.exclusive_release(0.5, MIN_EXCLUSIVE_LENGTH);
         assert_eq!(v.override_release_vol_env, EXCLUSIVE_CUTOFF_TIME);
     }

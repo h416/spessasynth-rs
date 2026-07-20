@@ -19,7 +19,9 @@ use crate::soundbank::basic_soundbank::generator_types::GeneratorType;
 use crate::soundbank::enums::modulator_sources;
 use crate::soundbank::types::MIDISystem;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
-use crate::synthesizer::audio_engine::channel::parameters::midi::NON_CC_INDEX_OFFSET;
+use crate::synthesizer::audio_engine::channel::parameters::midi::{
+    ChannelMidiParameterValue, NON_CC_INDEX_OFFSET,
+};
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::SynthProcessorEvent;
@@ -118,22 +120,34 @@ impl MidiChannel {
                 }
 
                 // Coarse tuning: semitones, discard the LSB.
+                // TS 4.3.14 treats this as a (non-real-time) key shift via
+                // setMIDIParameter("keyShift", semitones), which changes the sound-bank
+                // note chosen at note-on (sample selection + root key), NOT a pitch bend
+                // of the currently selected sample. Routing it through the channel tuning
+                // cents (pitch bend) plays the wrong sample.
                 rpt::COARSE_TUNING => {
                     let semitones = (data_value >> 7) - 64;
-                    self.set_custom_controller(
-                        custom_controllers::CHANNEL_TUNING_SEMITONES,
-                        semitones as f64,
-                    );
+                    self.set_midi_parameter(ChannelMidiParameterValue::KeyShift(semitones as f64));
                     spessa_synth_info(&format!(
-                        "Coarse tuning for {}: {} semitones",
+                        "Key shift for {}: {} semitones",
                         self.channel, semitones
                     ));
                 }
 
                 // Fine-tuning: resolution is 100/8192 cents.
+                // TS 4.3.14 uses setMIDIParameter("fineTune", cents) with the FULL float
+                // value (no rounding). Rounding to whole cents quantizes sub-cent real-time
+                // tuning and makes held notes drift out of phase from TS. Route the full
+                // float value into the channel tuning cents consumed by render_voice.
                 rpt::FINE_TUNING => {
                     let final_tuning = data_value - 8192;
-                    self.set_tuning(final_tuning as f64 / 81.92, true);
+                    let cents = final_tuning as f64 / 81.92;
+                    self.set_custom_controller(custom_controllers::CHANNEL_TUNING, cents);
+                    spessa_synth_info(&format!(
+                        "Fine tuning for {} is now set to {} cents.",
+                        self.channel,
+                        cents.round()
+                    ));
                 }
 
                 // Modulation depth: cents, so data / 128 * 100 == data / 1.28.

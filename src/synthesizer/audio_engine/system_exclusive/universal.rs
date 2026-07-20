@@ -36,8 +36,8 @@ impl SynthesizerCore {
                     0x01 => {
                         // Master volume
                         let vol = ((syx[5] as u32) << 7) | syx[4] as u32;
-                        self.set_midi_parameter(GlobalMIDIParameterChangeCallback::Gain(
-                            vol as f64 / 16_384.0,
+                        self.set_midi_parameter(GlobalMIDIParameterChangeCallback::Volume(
+                            vol as f64 / 16_383.0,
                         ));
                         spessa_synth_info(&format!("Master Volume. Volume: {}", vol));
                     }
@@ -54,7 +54,7 @@ impl SynthesizerCore {
 
                     0x03 => {
                         // Fine-tuning
-                        let tuning_value = (((syx[5] as i32) << 7) | syx[6] as i32) - 8192;
+                        let tuning_value = (((syx[5] as i32) << 7) | syx[4] as i32) - 8192;
                         let cents = tuning_value as f64 / 81.92; // [-100;+99] cents range
                         self.set_midi_parameter(GlobalMIDIParameterChangeCallback::FineTune(cents));
                         spessa_synth_info(&format!("Master Fine Tuning. Cents: {}", cents));

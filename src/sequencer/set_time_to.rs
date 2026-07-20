@@ -31,15 +31,14 @@
 ///     SysEx) is skip-tracked exactly like a literal Controller Change event instead of being
 ///     processed immediately; anything else (including Program Change, which cannot be skipped —
 ///     see the code comment) is processed immediately via `processEvent`, same as before.
-/// - The controller-restore comparison at the end changed scale but kept an existing quirk:
-///   `value = ch.controllers[i] >> 7` (7-bit) is still compared against `DEFAULT_MIDI_CONTROLLERS[i]`
-///   (14-bit, NOT shifted down) — i.e. for every CC whose default is nonzero (mainVolume, pan,
-///   filterResonance, ...) the comparison is always unequal, so those CCs are unconditionally
-///   resent on every seek regardless of whether they actually changed. This looks like an
-///   upstream oversight (missing a second `>> 7`), but it's harmless: the resent value is always
-///   the channel's actual current value (default or overridden), so it doesn't change synth state
-///   or WAV output — just adds redundant (idempotent) `controllerChange` calls. Ported literally
-///   (bug-for-bug) rather than "fixed", per this project's fidelity-over-cleanup policy.
+/// - The controller-restore comparison at the end compares the full 14-bit `ch.controllers[i]`
+///   against the 14-bit `DEFAULT_MIDI_CONTROLLERS[i]` and resends the 7-bit MSB (TS 4.3.14 fix).
+///   The older TS 4.3.0 code compared `ch.controllers[i] >> 7` (7-bit) against the 14-bit default,
+///   so any controller at its default was spuriously "changed" and resent as its 7-bit default.
+///   That is NOT harmless: it clobbers a live non-default controller (whose snapshot value equals
+///   the default at the seek point) back to its default during a seek. Concretely it reset GS NRPN
+///   vibrato rate (CC76) from 95 to 64 on J-cycle.mid ch6, disabling the LFO filter/amplitude
+///   modulation and diverging the WAV around 57-61s. Now ported to match TS 4.3.14.
 /// - `resetAllControllers(chan)` (the local seek-time emulation of receiving CC 121 "Reset All
 ///   Controllers" mid-seek) now performs the narrow RP-15 reset (`RP_15_RESET_CC_NUMS`, 8 CCs)
 ///   instead of the old "reset everything except `nonResettableCCs`" broad reset. This is a real
@@ -302,13 +301,17 @@ impl SpessaSynthSequencer {
                     } = analyzed
                     {
                         let sysex_channel = sysex_channel as usize;
-                        // Empty tracks cannot controller change
-                        if self.songs[song_idx].is_multi_port
+                        // Channel number may be above 15: GS/XG SysEx-encoded controller
+                        // changes carry their own part/channel number, which can exceed the
+                        // 0-15 MIDI channel range in double-module (32-channel) setups.
+                        let empty_track = self.songs[song_idx].is_multi_port
                             && self.songs[song_idx].tracks[track_index]
                                 .channels
-                                .is_empty()
-                        {
-                            // Break (do nothing further for this event)
+                                .is_empty();
+                        if sysex_channel >= channels_to_save {
+                            // Matches TS `break`: stop processing this event, nothing more to do.
+                        } else if empty_track {
+                            // Empty tracks cannot controller change
                         } else if controller == midi_controllers::RESET_ALL_CONTROLLERS {
                             reset_all_controllers(&mut channels, sysex_channel);
                         } else if is_cc_non_skippable(controller) {
@@ -442,10 +445,20 @@ impl SpessaSynthSequencer {
 
             // Restoring saved controllers
             // Every controller that has changed
+            // TS 4.3.14 set_time_to.ts fix: compare the full 14-bit value against the
+            // 14-bit default, then send the 7-bit MSB. The old TS 4.3.0 code compared
+            // `controllers[i] >> 7` (7-bit) against `DEFAULT_MIDI_CONTROLLERS[i]` (14-bit),
+            // so any controller sitting at its default was spuriously treated as "changed"
+            // and unconditionally resent as its 7-bit default value. That clobbers a live
+            // controller (e.g. GS NRPN vibrato rate CC76 set to 95) back to its default (64)
+            // during a seek, silently disabling vibrato/filter/amplitude LFO depth on that
+            // channel. Testcase: J-cycle.mid ch6 organ phrase around 57-61s.
             for i in 0..CONTROLLER_TABLE_SIZE {
-                let value = ch.controllers[i] >> 7;
+                // 14-bit, defaults are also 14-bit.
+                let value = ch.controllers[i];
                 if value != DEFAULT_MIDI_CONTROLLERS[i] && !is_cc_non_skippable(i as MidiController) {
-                    self.synth.controller_change(channel, i as MidiController, value as u8);
+                    self.synth
+                        .controller_change(channel, i as MidiController, (value >> 7) as u8);
                 }
             }
         }

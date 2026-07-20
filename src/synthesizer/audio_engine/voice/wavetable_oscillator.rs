@@ -86,15 +86,16 @@ impl WavetableOscillator {
         };
         let loop_end = self.loop_end;
         let loop_length = self.loop_length;
-        let loop_start = self.loop_start;
         let end = self.end;
         let mut cursor = self.cursor;
 
         if self.is_looping {
             for out in output_buffer.iter_mut().take(sample_count) {
-                // Check for loop
-                if cursor > loop_start {
-                    cursor = loop_start + ((cursor - loop_start) % loop_length);
+                // Check for loop first (end is exclusive so it's `>=` and not `>`).
+                // Extreme playback rates: a sample can loop more than once per frame,
+                // which is why this is a `while` and not an `if`.
+                while cursor >= loop_end {
+                    cursor -= loop_length;
                 }
 
                 // Grab the 2 nearest points
@@ -151,16 +152,18 @@ impl WavetableOscillator {
             Some(d) => d,
             None => return false,
         };
+        let loop_end = self.loop_end;
         let loop_length = self.loop_length;
-        let loop_start = self.loop_start;
         let end = self.end;
         let mut cursor = self.cursor;
 
         if self.is_looping {
             for out in output_buffer.iter_mut().take(sample_count) {
-                // Check for loop
-                if cursor > loop_start {
-                    cursor = loop_start + ((cursor - loop_start) % loop_length);
+                // Check for loop first (end is exclusive so it's `>=` and not `>`).
+                // Extreme playback rates: a sample can loop more than once per frame,
+                // which is why this is a `while` and not an `if`.
+                while cursor >= loop_end {
+                    cursor -= loop_length;
                 }
 
                 *out = data[cursor as usize];
@@ -198,15 +201,16 @@ impl WavetableOscillator {
         };
         let loop_end = self.loop_end;
         let loop_length = self.loop_length;
-        let loop_start = self.loop_start;
         let end = self.end;
         let mut cursor = self.cursor;
 
         if self.is_looping {
             for out in output_buffer.iter_mut().take(sample_count) {
-                // Check for loop
-                if cursor > loop_start {
-                    cursor = loop_start + ((cursor - loop_start) % loop_length);
+                // Check for loop first (end is exclusive so it's `>=` and not `>`).
+                // Extreme playback rates: a sample can loop more than once per frame,
+                // which is why this is a `while` and not an `if`.
+                while cursor >= loop_end {
+                    cursor -= loop_length;
                 }
 
                 // Grab the 4 points

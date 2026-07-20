@@ -104,7 +104,8 @@ pub struct ChannelMidiParameter {
     /// Equivalent to: pitchWheelRange
     pub pitch_wheel_range: f64,
 
-    /// The multiplier of the modulation wheel modulator.
+    /// The modulation depth in cents.
+    /// This is internally converted to a multiplier by dividing by 50.
     /// The MIDI spec assumes the default modulation depth is 50 cents, but it
     /// may vary for different sound banks.
     /// Equivalent to: modulationDepth
@@ -153,6 +154,35 @@ pub struct ChannelMidiParameter {
     /// Drum map for GS system exclusive tracking (0 melodic, 1 or 2 drum).
     /// Equivalent to: drumMap
     pub drum_map: u8,
+
+    /// The relation between the input and the actual velocity.
+    ///
+    /// If Velo Depth is increased, small differences in playing dynamics make a large
+    /// difference in the loudness of the sound. If Velo Depth is decreased, even large
+    /// differences in playing dynamics make only a small difference in the loudness.
+    ///
+    /// Examples (with offset set to normal):
+    /// - 64 is normal.
+    /// - 32 is half velocity at max volume.
+    /// - 127 is max velocity at half volume.
+    ///
+    /// Equivalent to: velocitySenseDepth
+    pub velocity_sense_depth: u8,
+
+    /// The offset to add to the input velocity.
+    ///
+    /// If Velo Offset is set higher than 64, even softly played notes (low velocity) will
+    /// be sounded loudly. If Velo Offset is set lower than 64, even strongly played notes
+    /// (high velocity) will be sounded softly.
+    ///
+    /// Examples (with depth set to normal):
+    /// - 64 is normal.
+    /// - 32 is silent until half velocity, max velocity is half volume.
+    /// - 96 starts at half volume and reaches max volume at half velocity.
+    /// - 127 always forces velocity to max.
+    ///
+    /// Equivalent to: velocitySenseOffset
+    pub velocity_sense_offset: u8,
 }
 
 /// A typed (parameter, value) pair for `MidiChannel::set_midi_parameter`.
@@ -173,6 +203,8 @@ pub enum ChannelMidiParameterValue {
     Cc1(MidiController),
     Cc2(MidiController),
     DrumMap(u8),
+    VelocitySenseDepth(u8),
+    VelocitySenseOffset(u8),
 }
 
 /// The default MIDI parameters of a channel.
@@ -181,7 +213,7 @@ pub const DEFAULT_CHANNEL_MIDI_PARAMETERS: ChannelMidiParameter = ChannelMidiPar
     pressure: 0,
     pitch_wheel: 8192,
     pitch_wheel_range: 2.0,
-    modulation_depth: 1.0,
+    modulation_depth: 50.0,
     rx_channel: 0,
     poly_mode: true,
     key_shift: 0.0,
@@ -192,6 +224,8 @@ pub const DEFAULT_CHANNEL_MIDI_PARAMETERS: ChannelMidiParameter = ChannelMidiPar
     cc1: 0x10,
     cc2: 0x11,
     drum_map: 0,
+    velocity_sense_depth: 64,
+    velocity_sense_offset: 64,
 };
 
 #[cfg(test)]

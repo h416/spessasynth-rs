@@ -57,15 +57,25 @@ use crate::utils::loggin::SpessaLog;
 
 impl SynthesizerCore {
     /// Sends note-off to a channel, dispatching events.
+    ///
+    /// In mono mode, releasing a note may uncover a still-held lower note; the channel
+    /// reports that as a `(midi_note, velocity)` legato retrigger, which is executed here
+    /// as a non-emitting Note On (mirrors TS's `this.noteOn(highest, ..., false)` call,
+    /// which `MIDIChannel.noteOff` can make directly there but not in this port, since Note
+    /// On lives on `SynthesizerCore`).
+    ///
     /// Equivalent to: midiChannels[channel].noteOff(midiNote) (SpessaSynthProcessor context)
     pub fn note_off_channel(&mut self, channel: usize, midi_note: u8) {
         let current_time = self.current_time;
         let black_midi_mode = self.system_parameters.black_midi_mode;
         let voices = &mut self.voices;
-        let events =
+        let (events, retrigger) =
             self.midi_channels[channel].note_off(midi_note, voices, current_time, black_midi_mode);
         for ev in events {
             self.call_event(ev);
+        }
+        if let Some((retrigger_note, retrigger_velocity)) = retrigger {
+            self.note_on_internal(channel, retrigger_note, retrigger_velocity, false);
         }
     }
 
@@ -84,6 +94,13 @@ impl SynthesizerCore {
             current_system,
             events_enabled,
         );
+        // TS 4.3.14 controller_change.ts sets `synthCore.delayActive = true` inside the
+        // channel's variationDepth case. The Rust channel has no core reference, so mirror
+        // it here: any variationDepth (CC#94) change activates the delay effect (sticky
+        // until the next reset recomputes it). Without this the delay send never renders.
+        if controller == crate::midi::enums::midi_controllers::VARIATION_DEPTH {
+            self.delay_active = true;
+        }
         for ev in events {
             self.call_event(ev);
         }

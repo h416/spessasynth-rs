@@ -38,11 +38,12 @@
 /// - `getInsertionSnapshot`: `{type, params, channels}` — the separate send-level fields are
 ///   gone (folded into params[20..23]).
 /// - `setMIDIVolume`/`setMasterTuning` were removed upstream (replaced by the
-///   `midiParameters.gain`/`fineTune` flow applied in the channels' `updateInternalParams`).
+///   `midiParameters.volume`/`fineTune` flow applied in the channels' `updateInternalParams`).
 ///   TODO(Task 21): they are kept here as legacy plumbing called by
 ///   `set_midi_parameter` and the (pre-4.3.0) SysEx handlers, because the current render
-///   path still consumes `midi_volume`/the MASTER_TUNING custom controller. In particular
-///   the 4.2.0 GM2 `volume^E` curve is still applied — TS 4.3.0 applies the gain linearly.
+///   path still consumes `midi_volume`/the MASTER_TUNING custom controller. `set_midi_volume`
+///   stores `Math.pow(volume, 2)` (TS 4.3.14: `updateInternalParams` squares
+///   `globalMIDI.volume` — "it corresponds to CC volume, so volume is squared").
 /// - `processMessage` lost its `force` parameter (and the force-kill Note Off branch).
 /// - `createMIDIChannel`: fires `ChannelAdded` (was `newChannel` + `sendChannelProperty`).
 ///   Pre-existing phase-1 divergence kept: the TS constructor-side `channel.setDrums(true)`
@@ -62,6 +63,7 @@
 ///   constructors taking `maxBufferSize`.
 use std::collections::HashMap;
 
+use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
@@ -364,9 +366,15 @@ impl SynthesizerCore {
             // Allocate a new voice and return it (see module doc note on the TS 4.3.0
             // duplicate-push quirk here).
             self.allocate_new_voices(1);
+            let new_idx = self.voices.len() - 1;
             self.system_parameters.voice_cap += 1;
-            SpessaLog::info("Allocating a new voice!");
-            return self.voices.len() - 1;
+            SpessaLog::info(&format!(
+                "Allocating a new voice, total count {}.",
+                self.system_parameters.voice_cap
+            ));
+            // Prevent this voice from being stolen.
+            self.voices[new_idx].priority = i32::MAX;
+            return new_idx;
         }
         self.assign_voice_priorities();
         let mut lowest_idx = 0;
@@ -408,6 +416,14 @@ impl SynthesizerCore {
             channel.drum_channel = true;
         }
 
+        // TS 4.3.14 `createMIDIChannel` does NOT fold the live global MIDI key shift
+        // into a newly created channel: it only calls `channel.setDrums(true)` when
+        // `sendEvent` is true (which recomputes the drum-branch key shift, ignoring the
+        // global), and does nothing extra otherwise. A new channel's `currentKeyShift`
+        // therefore starts at the field default (0), just like `MidiChannel::new` already
+        // computes here (its constructor calls `update_internal_params` once with
+        // `global_key_shift` at its default 0.0). Do not eagerly mirror
+        // `self.midi_parameters.key_shift` here — that would diverge from TS.
         self.midi_channels.push(channel);
 
         if send_event {
@@ -451,9 +467,6 @@ impl SynthesizerCore {
         self.set_chorus_macro(2);
         // Delay1 default
         self.set_delay_macro(0);
-        if !self.system_parameters.delay_lock {
-            self.delay_active = false;
-        }
         self.reset_insertion();
 
         let events_enabled = self.system_parameters.events_enabled;
@@ -480,6 +493,14 @@ impl SynthesizerCore {
                 events_enabled,
             );
             events.append(&mut sub);
+        }
+
+        // Delay may only be disabled if variations are all set to 0.
+        // They can still be set after a reset due to locking.
+        if !self.system_parameters.delay_lock {
+            self.delay_active = self.midi_channels.iter().any(|c| {
+                c.midi_controllers[midi_controllers::VARIATION_DEPTH as usize] > 0
+            });
         }
 
         for event in events {
@@ -1109,23 +1130,29 @@ impl SynthesizerCore {
         self.cached_voices.clear();
     }
 
-    /// Sets the global MIDI gain (applied linearly, matching 4.3.0).
+    /// Sets the global MIDI volume (squared, matching 4.3.14).
     ///
     /// 4.2.0 raised the master volume to `e` (GM2 §4.1 squared-ish curve) in
-    /// `setMIDIVolume`. 4.3.0 removed that curve: `midiParameters.gain` is applied
-    /// linearly in the channels. Keep this as the shared `midi_volume` plumbing but
-    /// store the value linearly so it equals `midi_parameters.gain`.
-    /// Equivalent to: setMIDIParameter("gain", value) (4.3.0)
+    /// `setMIDIVolume`. 4.3.0 removed that curve and applied `midiParameters.gain`
+    /// linearly. 4.3.14 renamed the parameter to `volume` and squares it again when
+    /// folding it into the channel gain (`Math.pow(globalMIDI.volume, 2)` inside
+    /// `updateInternalParams` — "it corresponds to CC volume, so volume is squared").
+    /// Keep this as the shared `midi_volume` plumbing but store the squared value
+    /// directly, so `midi_volume == midi_parameters.volume^2`.
+    /// Equivalent to: setMIDIParameter("volume", value) (4.3.14) → Math.pow(volume, 2)
     pub fn set_midi_volume(&mut self, volume: f64) {
-        self.midi_volume = volume;
+        self.midi_volume = volume.powi(2);
     }
 
     /// Sets the master tuning for all channels.
     /// Legacy 4.2.0 plumbing — removed upstream in 4.3.0 (replaced by
     /// `midiParameters.fineTune`); see module doc TODO(Task 21).
+    /// TS 4.3.14 folds `globalMIDI.fineTune` into `currentTuning` with no rounding
+    /// (full float, see `updateInternalParams` in `channel/midi_channel.ts`); the old
+    /// 4.2.0 `Math.round(cents)` in `setMasterTuning` does not exist upstream anymore.
+    /// Keep this legacy plumbing full-float too, matching the per-channel fine-tune fix.
     /// Equivalent to: setMasterTuning(cents) (4.2.0, protected)
     pub fn set_master_tuning(&mut self, cents: f64) {
-        let cents = cents.round();
         for ch in self.midi_channels.iter_mut() {
             ch.set_custom_controller(custom_controllers::MASTER_TUNING, cents);
         }

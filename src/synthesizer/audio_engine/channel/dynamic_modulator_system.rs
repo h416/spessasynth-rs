@@ -120,18 +120,21 @@ impl DynamicModulatorSystem {
         let normalized_not_centered = data as f64 / 127.0;
         match addr3 & 0x0f {
             0x00 => {
-                // Pitch Control
+                // Pitch Control.
+                // Clamp to [-24; 24] semitones: TS 4.3.14 caps the centered value before
+                // using it, to avoid absurd pitch offsets from malformed/extreme SysEx data.
+                let v = centered_value.clamp(-24.0, 24.0);
                 self.set_modulator(
                     source,
                     is_cc,
                     generator_types::FINE_TUNE,
-                    centered_value * 100.0,
+                    v * 100.0,
                     bipolar,
                     false,
                 );
                 spessa_synth_info(&format!(
                     "Channel {} {} pitch control {} semitones",
-                    self.channel, source_name, centered_value
+                    self.channel, source_name, v
                 ));
             }
             0x01 => {

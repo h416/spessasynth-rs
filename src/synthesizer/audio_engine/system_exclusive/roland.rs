@@ -8,12 +8,12 @@ use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::generator_types;
 use crate::soundbank::enums::modulator_sources;
 use crate::synthesizer::audio_engine::channel::parameters::midi::ChannelMidiParameterValue;
+use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::{
     sys_ex_logging, sys_ex_not_recognized,
 };
 use crate::synthesizer::audio_engine::synth_constants::EFX_SENDS_GAIN_CORRECTION;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
-use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::GlobalMIDIParameterChangeCallback;
 use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::spessa_synth_info;
@@ -23,6 +23,8 @@ impl SynthesizerCore {
     /// Handles a GS system exclusive message.
     /// Equivalent to: handleGS(syx, channelOffset)
     pub fn handle_gs(&mut self, syx: &[u8], channel_offset: usize) {
+        // Mutable copy: a1 === 0x50 (BLOCK B) adds 16 to reach the second bank of channels.
+        let mut channel_offset = channel_offset;
         // 0x12: DT1 (Device Transmit)
         if syx[3] != 0x12 {
             sys_ex_not_recognized(syx, "Roland GS");
@@ -37,7 +39,11 @@ impl SynthesizerCore {
 
                 // syx[5] and [6] is the system parameter, syx[7] is the value.
                 // Either patch common or SC-88 mode set.
-                if syx[4] == 0x40 || (syx[4] == 0x00 && syx[6] == 0x7f) {
+                if syx[4] == 0x40 || syx[4] == 0x50 || (syx[4] == 0x00 && syx[6] == 0x7f) {
+                    // 0x50 means BLOCK B (+16 channels). Testcase: 95043-2.KYC.mid
+                    if syx[4] == 0x50 {
+                        channel_offset += 16;
+                    }
                     // This is a channel parameter
                     if (syx[5] & 0x10) > 0 {
                         // This is an individual part (channel) parameter.
@@ -54,6 +60,20 @@ impl SynthesizerCore {
                         let enable_event_system = self.system_parameters.events_enabled;
 
                         match syx[6] {
+                            0x14 => {
+                                // Assign mode
+                                self.midi_channels[channel].set_midi_parameter(
+                                    ChannelMidiParameterValue::AssignMode(message_value),
+                                );
+                                sys_ex_logging(
+                                    syx,
+                                    channel as u8,
+                                    &message_value,
+                                    "assign mode",
+                                    "",
+                                );
+                            }
+
                             0x15 => {
                                 // Use for Drum Part sysex (multiple drums)
                                 let is_drums = message_value > 0 && (syx[5] >> 4) > 0;
@@ -73,11 +93,38 @@ impl SynthesizerCore {
                             0x16 => {
                                 // Pitch key shift sysex
                                 let key_shift = message_value as i32 - 64;
-                                self.midi_channels[channel].set_custom_controller(
-                                    custom_controllers::CHANNEL_KEY_SHIFT,
-                                    key_shift as f64,
+                                self.midi_channels[channel].set_midi_parameter(
+                                    ChannelMidiParameterValue::KeyShift(key_shift as f64),
                                 );
                                 sys_ex_logging(syx, channel as u8, &key_shift, "key shift", "keys");
+                            }
+
+                            0x1a => {
+                                // Velocity Sense Depth
+                                self.midi_channels[channel].set_midi_parameter(
+                                    ChannelMidiParameterValue::VelocitySenseDepth(message_value),
+                                );
+                                sys_ex_logging(
+                                    syx,
+                                    channel as u8,
+                                    &message_value,
+                                    "velocity sense depth",
+                                    "",
+                                );
+                            }
+
+                            0x1b => {
+                                // Velocity Sense Offset
+                                self.midi_channels[channel].set_midi_parameter(
+                                    ChannelMidiParameterValue::VelocitySenseOffset(message_value),
+                                );
+                                sys_ex_logging(
+                                    syx,
+                                    channel as u8,
+                                    &message_value,
+                                    "velocity sense offset",
+                                    "",
+                                );
                             }
 
                             0x1c => {
@@ -140,6 +187,29 @@ impl SynthesizerCore {
                                 }
                             }
 
+                            0x2a => {
+                                // Per-channel fine tune.
+                                // 14-bit value (0-16383) centered at 8192;
+                                // cents = (tune - 8192) / 81.92.
+                                let tune = ((message_value as i32) << 7) | syx[8] as i32;
+                                let cents = (tune as f64 - 8192.0) / 81.92;
+                                // TS 4.3.14 setMIDIParameter("fineTune", cents) folds into the
+                                // channel tuning consumed by render_voice. Route the full float
+                                // value into the live CHANNEL_TUNING custom controller (mirrors
+                                // the RPN fine-tune fix in channel/data_entry.rs); the previous
+                                // FineTune parameter path wrote a `current_tuning` field that no
+                                // render code reads.
+                                self.midi_channels[channel]
+                                    .set_custom_controller(custom_controllers::CHANNEL_TUNING, cents);
+                                sys_ex_logging(
+                                    syx,
+                                    channel as u8,
+                                    &(cents.round() as i32),
+                                    "fine tuning",
+                                    "cents",
+                                );
+                            }
+
                             0x40..=0x4b => {
                                 // Scale tuning: up to 12 bytes
                                 let tuning_bytes = syx.len().saturating_sub(9); // Data starts at 7, minus checksum and f7
@@ -147,8 +217,13 @@ impl SynthesizerCore {
                                 for i in 0..tuning_bytes.min(12) {
                                     new_tuning[i] = (syx[i + 7] as i16 - 64) as i8;
                                 }
+                                // TS 4.3.14 (roland.ts, case 0x40) calls ONLY
+                                // `ch.setOctaveTuning(newTuning)` here — no additional
+                                // channel-wide fine tune. A prior Rust revision also called
+                                // `set_tuning((messageValue - 64), false)`, double-applying a
+                                // channel-wide tuning offset on top of the octave tuning table;
+                                // that call does not exist upstream and has been removed.
                                 self.midi_channels[channel].set_octave_tuning(&new_tuning);
-                                let cents = message_value as i32 - 64;
                                 sys_ex_logging(
                                     syx,
                                     channel as u8,
@@ -156,7 +231,6 @@ impl SynthesizerCore {
                                     "octave scale tuning",
                                     "cents",
                                 );
-                                self.midi_channels[channel].set_tuning(cents as f64, false);
                             }
 
                             _ => {
@@ -265,9 +339,37 @@ impl SynthesizerCore {
                     } else if syx[5] == 0x00 {
                         // This is a global system parameter
                         match syx[6] {
+                            0x00 => {
+                                // Roland GS master tune.
+                                // A 16-bit value assembled from four nibbles
+                                // (syx[7..=10]); cents = (tune - 1024) / 10.
+                                let tune = ((message_value as i32) << 12)
+                                    | ((syx[8] as i32) << 8)
+                                    | ((syx[9] as i32) << 4)
+                                    | syx[10] as i32;
+                                let cents = (tune as f64 - 1024.0) / 10.0;
+                                spessa_synth_info(&format!(
+                                    "Roland GS Master Tune: {} cents with: {:02X?}",
+                                    cents, syx
+                                ));
+                                self.set_midi_parameter(
+                                    GlobalMIDIParameterChangeCallback::FineTune(cents),
+                                );
+                            }
+
                             0x7f => {
-                                // Roland mode set / GS mode set
-                                if message_value == 0x00 {
+                                // Roland mode set / GS mode set.
+                                // data === 0x01 (Double Module) is only meaningful on the true
+                                // top-level reset address (a1 === 0x00); it is not valid for the
+                                // a1 === 0x40 patch-parameter "mode set" alias.
+                                if message_value == 0x00 || (message_value == 0x01 && syx[4] == 0x00) {
+                                    if message_value == 0x01 {
+                                        // Double Module mode: ensure at least 32 channels.
+                                        spessa_synth_info("GS Mode: Double Module");
+                                        while self.midi_channels.len() < 32 {
+                                            self.create_midi_channel(true);
+                                        }
+                                    }
                                     // This is a GS reset
                                     spessa_synth_info("GS Reset received!");
                                     self.reset(MIDISystem::Gs);
@@ -279,25 +381,29 @@ impl SynthesizerCore {
                             }
 
                             0x06 => {
-                                // Roland master pan
+                                // Roland master pan.
+                                // Ranges from 1 to 127, NOT 0 to 127, hence the /63 divisor.
+                                let pan = (message_value as f64 - 64.0) / 63.0;
                                 spessa_synth_info(&format!(
                                     "Roland GS Master Pan set to: {} with: {:02X?}",
-                                    message_value, syx
+                                    pan, syx
                                 ));
                                 self.set_midi_parameter(
-                                    GlobalMIDIParameterChangeCallback::Pan(
-                                        (message_value as f64 - 64.0) / 64.0,
-                                    ),
+                                    GlobalMIDIParameterChangeCallback::Pan(pan),
                                 );
                             }
 
                             0x04 => {
                                 // Roland GS master volume.
-                                // TS 4.3.0 logs only (no-op); master volume is not applied here.
                                 spessa_synth_info(&format!(
                                     "Roland GS Master Volume: {} with: {:02X?}",
                                     message_value, syx
                                 ));
+                                self.set_midi_parameter(
+                                    GlobalMIDIParameterChangeCallback::Volume(
+                                        message_value as f64 / 127.0,
+                                    ),
+                                );
                             }
 
                             0x05 => {

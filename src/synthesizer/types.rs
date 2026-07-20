@@ -127,7 +127,8 @@ pub enum GlobalMIDIParameterChangeCallback {
     System(MIDISystem),
     KeyShift(f64),
     FineTune(f64),
-    Gain(f64),
+    /// Equivalent to: GlobalMIDIParameter.volume (renamed from `gain` in 4.3.14)
+    Volume(f64),
     Pan(f64),
 }
 
@@ -401,13 +402,13 @@ mod tests {
 
     #[test]
     fn test_global_midi_parameter_change_callback_variants() {
-        let v1 = GlobalMIDIParameterChangeCallback::Gain(1.5);
+        let v1 = GlobalMIDIParameterChangeCallback::Volume(1.5);
         let v2 = GlobalMIDIParameterChangeCallback::Pan(-0.5);
         let v3 = GlobalMIDIParameterChangeCallback::System(MIDISystem::Xg);
         let v4 = GlobalMIDIParameterChangeCallback::KeyShift(2.0);
         let v5 = GlobalMIDIParameterChangeCallback::FineTune(-10.0);
 
-        assert!(matches!(v1, GlobalMIDIParameterChangeCallback::Gain(_)));
+        assert!(matches!(v1, GlobalMIDIParameterChangeCallback::Volume(_)));
         assert!(matches!(v2, GlobalMIDIParameterChangeCallback::Pan(_)));
         assert!(matches!(v3, GlobalMIDIParameterChangeCallback::System(_)));
         assert!(matches!(v4, GlobalMIDIParameterChangeCallback::KeyShift(_)));

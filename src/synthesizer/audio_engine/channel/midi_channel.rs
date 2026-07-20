@@ -29,6 +29,8 @@ use crate::synthesizer::audio_engine::voice::compute_modulator::{
 use crate::synthesizer::audio_engine::synth_constants::{
     GENERATOR_OVERRIDE_NO_CHANGE_VALUE, MIN_NOTE_LENGTH, SPESSASYNTH_GAIN_FACTOR,
 };
+#[cfg(test)]
+use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::{ChannelProperty, ChannelPropertyChangeCallback, SynthProcessorEvent};
@@ -111,11 +113,11 @@ pub struct MidiChannel {
     /// Equivalent to: lastParameterIsRegistered
     pub last_parameter_is_registered: bool,
 
-    /// The last pressed note on this channel. -1 means none.
+    /// The last pressed note on this channel, for portamento tracking. -1 means none.
     /// Strictly internal (not a MIDI parameter); set by Portamento Control CC
     /// and by the sequencer for accurate portamento recreation.
-    /// Equivalent to: lastNote
-    pub last_note: i32,
+    /// Equivalent to: lastPortamentoNote (renamed from `lastNote` in 4.3.14)
+    pub last_portamento_note: i32,
 
     /// If the portamento should be executed once regardless of Portamento on/off.
     /// Per the MIDI spec, CC#84 (Portamento Control) ignores on/off.
@@ -163,6 +165,17 @@ pub struct MidiChannel {
     /// Current key-shift, cached from `update_internal_params`.
     /// Equivalent to: currentKeyShift (protected)
     current_key_shift: i32,
+
+    /// Global (synth-wide) MIDI key shift in semitones, pushed from
+    /// `SynthesizerCore::set_midi_parameter(KeyShift)`. TS pulls this from
+    /// `synthCore.midiParameters.keyShift` inside `updateInternalParams`; the Rust
+    /// channel has no back-reference, so the value is mirrored here and folded into
+    /// `current_key_shift` (non-drum channels only, matching TS).
+    ///
+    /// Private (like the other `current_*` caches) so it can only be changed through
+    /// `set_global_key_shift`, which keeps `current_key_shift` in sync — direct field
+    /// assignment would leave the cache stale.
+    global_key_shift: f64,
 
     /// Current gain, cached from `update_internal_params`.
     /// Equivalent to: currentGain (protected)
@@ -212,6 +225,31 @@ pub struct MidiChannel {
     /// Equivalent to: insertionEnabled
     pub insertion_enabled: bool,
 
+    /// For Mono Mode restoring notes: `playing_notes[midi_note]` is true while that note
+    /// is sounding on this channel.
+    /// Equivalent to: playingNotes
+    pub playing_notes: [bool; 128],
+
+    /// Groups voices for a specific Note On message, indexed by MIDI note.
+    /// Incremented on every non-internal Note On for that note (overlapping notes).
+    /// Equivalent to: noteOnID
+    pub note_on_id: [i32; 128],
+
+    /// Tracks the last Note Off's note ID, indexed by MIDI note.
+    /// Only advances to noteOnID once a matching Note Off is processed, so repeated
+    /// Note Offs for the same instance do not release a newer overlapping instance.
+    /// Equivalent to: noteOffID
+    pub note_off_id: [i32; 128],
+
+    /// The last note played in mono mode (-1 = none currently held).
+    /// Strictly internal (not a MIDI parameter).
+    /// Equivalent to: lastMonoNote
+    pub last_mono_note: i32,
+
+    /// The velocity of the last note played in mono mode.
+    /// Strictly internal (not a MIDI parameter).
+    /// Equivalent to: lastMonoVelocity
+    pub last_mono_velocity: u8,
 }
 
 impl MidiChannel {
@@ -242,9 +280,10 @@ impl MidiChannel {
             current_pan: 0.0,
             current_tuning: 0.0,
             current_key_shift: 0,
+            global_key_shift: 0.0,
             current_gain: 0.0,
             last_parameter_is_registered: true,
-            last_note: -1,
+            last_portamento_note: -1,
             portamento_force: false,
             patch: MidiPatch {
                 program: 0,
@@ -270,6 +309,11 @@ impl MidiChannel {
             is_muted: false,
             previous_voice_count: 0,
             insertion_enabled: false,
+            playing_notes: [false; 128],
+            note_on_id: [0; 128],
+            note_off_id: [0; 128],
+            last_mono_note: -1,
+            last_mono_velocity: 0,
         };
         ch.update_channel_tuning();
         ch.update_internal_params();
@@ -377,7 +421,7 @@ impl MidiChannel {
     /// very accurate portamento recreation.
     /// Equivalent to: setLastNote(midiNote)
     pub fn set_last_note(&mut self, midi_note: i32) {
-        self.last_note = midi_note;
+        self.last_portamento_note = midi_note;
     }
 
     /// Sets the octave tuning for all 128 notes (repeated from 12-element array).
@@ -391,10 +435,10 @@ impl MidiChannel {
     /// Sets the modulation depth in cents.
     /// Equivalent to: setModulationDepth(cents)
     pub fn set_modulation_depth(&mut self, cents: f64) {
-        // TS 4.3.0: setMIDIParameter("modulationDepth", cents / 50). The depth multiplier now
-        // lives on the channel MIDI parameters and is applied in `compute_single_modulator`.
-        // Note: the raw (unrounded) `cents / 50` is stored; only the log rounds `cents`.
-        self.midi_parameters.modulation_depth = cents / 50.0;
+        // TS 4.3.14: setMIDIParameter("modulationDepth", cents). The value is stored in cents
+        // directly and converted to a multiplier (dividing by 50) at the point of use in
+        // `compute_single_modulator`.
+        self.midi_parameters.modulation_depth = cents;
         spessa_synth_info(&format!(
             "Channel {} modulation depth. Cents: {}",
             self.channel,
@@ -670,6 +714,9 @@ impl MidiChannel {
         voices: &mut [Voice],
         current_time: f64,
     ) {
+        // Clear the note-on/off IDs for this note so the next Note On starts a fresh group.
+        self.note_off_id[midi_note as usize] = 0;
+        self.note_on_id[midi_note as usize] = 0;
         let mut vc = 0u32;
         if self.voice_count > 0 {
             for v in voices.iter_mut() {
@@ -705,6 +752,10 @@ impl MidiChannel {
 
     /// Internal helper that modifies voices without returning events.
     fn stop_all_notes_impl(&mut self, voices: &mut [Voice], current_time: f64, force: bool) {
+        // Clear IDs.
+        self.note_on_id.fill(0);
+        self.note_off_id.fill(0);
+        self.playing_notes.fill(false);
         if force {
             let mut vc = 0u32;
             if self.voice_count > 0 {
@@ -889,6 +940,8 @@ impl MidiChannel {
             Cc1(v) => self.midi_parameters.cc1 = v,
             Cc2(v) => self.midi_parameters.cc2 = v,
             DrumMap(v) => self.midi_parameters.drum_map = v,
+            VelocitySenseDepth(v) => self.midi_parameters.velocity_sense_depth = v,
+            VelocitySenseOffset(v) => self.midi_parameters.velocity_sense_offset = v,
         }
         self.update_internal_params();
     }
@@ -933,11 +986,14 @@ impl MidiChannel {
         let channel_system = &self.system_parameters;
         let channel_midi = &self.midi_parameters;
 
-        // Only Channel System is processed for drum channels.
+        // Only Channel System is processed for drum channels (drums ignore key shift).
+        // Non-drum channels also fold in the global MIDI key shift (TS sums
+        // globalSystem + globalMIDI + channelSystem + channelMIDI; only globalMIDI is
+        // set by SysEx here, mirrored into `global_key_shift`).
         let current_key_shift = if self.drum_channel {
             channel_system.key_shift
         } else {
-            channel_system.key_shift + channel_midi.key_shift
+            self.global_key_shift + channel_system.key_shift + channel_midi.key_shift
         };
         // Ensure integer.
         self.current_key_shift = current_key_shift.trunc() as i32;
@@ -955,6 +1011,15 @@ impl MidiChannel {
         self.current_pan = current_pan_normalized * 500.0;
 
         self.current_gain = SPESSASYNTH_GAIN_FACTOR * channel_system.gain;
+    }
+
+    /// Sets the global (synth-wide) MIDI key shift mirrored onto this channel and
+    /// recomputes the cached `current_key_shift` (and the other `current_*` caches).
+    /// Equivalent to the per-channel loop in
+    /// `SynthesizerCore::set_midi_parameter(GlobalMIDIParameterChangeCallback::KeyShift)`.
+    pub fn set_global_key_shift(&mut self, semitones: f64) {
+        self.global_key_shift = semitones;
+        self.update_internal_params();
     }
 
     /// Current pan in range [-500;500]. Equivalent to: currentPan
@@ -1024,5 +1089,47 @@ impl ChannelContext for MidiChannel {
 
     fn modulation_depth(&self) -> f64 {
         self.midi_parameters.modulation_depth
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// TS 4.3.14 `updateInternalParams` (non-drum branch):
+    /// `currentKeyShift = globalSystem.keyShift + globalMIDI.keyShift +
+    /// channelSystem.keyShift + channelMIDI.keyShift`, truncated to an integer.
+    /// The Rust cache omits the (still-unplumbed, identity-0) global *system* key
+    /// shift, so with global MIDI key shift = 6 and channel MIDI key shift = 3, the
+    /// sum is 6 + 0 (channelSystem default) + 3 = 9.
+    #[test]
+    fn test_current_key_shift_sums_global_and_channel_for_non_drum_channel() {
+        let mut channel = MidiChannel::new(None, None, 0);
+        assert!(!channel.drum_channel);
+
+        channel.set_global_key_shift(6.0);
+        channel.set_midi_parameter(ChannelMidiParameterValue::KeyShift(3.0));
+
+        assert_eq!(channel.current_key_shift(), 9);
+    }
+
+    /// TS 4.3.14 `updateInternalParams` (drum branch): drum channels ignore the
+    /// global and channel MIDI key shifts entirely and use only
+    /// `channelSystem.keyShift`, which defaults to 0 for GS. So even with the same
+    /// global/channel-MIDI key shifts as the non-drum test, a drum channel's
+    /// `current_key_shift()` stays 0.
+    #[test]
+    fn test_current_key_shift_ignores_global_and_channel_midi_for_drum_channel() {
+        let mut channel = MidiChannel::new(None, None, DEFAULT_PERCUSSION);
+        channel.drum_channel = true;
+
+        channel.set_global_key_shift(6.0);
+        channel.set_midi_parameter(ChannelMidiParameterValue::KeyShift(3.0));
+
+        assert_eq!(channel.current_key_shift(), 0);
     }
 }

@@ -76,7 +76,8 @@ pub trait ChannelContext {
     /// Equivalent to: `this._midiParameters.pitchWheel`
     fn pitch_wheel(&self) -> i16;
 
-    /// Channel modulation depth multiplier (default 1.0), applied to mod-wheel modulators.
+    /// Channel modulation depth in cents (default 50.0), applied to mod-wheel modulators.
+    /// Converted to a multiplier by dividing by 50 at the point of use.
     /// Equivalent to: `this._midiParameters.modulationDepth`
     fn modulation_depth(&self) -> f64;
 }
