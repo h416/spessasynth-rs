@@ -521,8 +521,8 @@ fn decoded_mod(
 
 /// The full set of default SF2 + SpessaSynth modulators applied to every voice.
 ///
-/// Layout: 9 SF2 standard modulators followed by 9 SpessaSynth custom modulators.
-/// Total: 18 entries.
+/// Layout: 9 SF2 standard modulators followed by 6 SpessaSynth custom modulators.
+/// Total: 15 entries.
 ///
 /// Equivalent to: SPESSASYNTH_DEFAULT_MODULATORS (= [...defaultSoundFont2Modulators, ...defaultSpessaSynthModulators])
 pub static SPESSASYNTH_DEFAULT_MODULATORS: LazyLock<Vec<Modulator>> = LazyLock::new(|| {
