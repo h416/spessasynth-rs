@@ -1147,9 +1147,12 @@ impl SynthesizerCore {
     /// Sets the master tuning for all channels.
     /// Legacy 4.2.0 plumbing — removed upstream in 4.3.0 (replaced by
     /// `midiParameters.fineTune`); see module doc TODO(Task 21).
+    /// TS 4.3.14 folds `globalMIDI.fineTune` into `currentTuning` with no rounding
+    /// (full float, see `updateInternalParams` in `channel/midi_channel.ts`); the old
+    /// 4.2.0 `Math.round(cents)` in `setMasterTuning` does not exist upstream anymore.
+    /// Keep this legacy plumbing full-float too, matching the per-channel fine-tune fix.
     /// Equivalent to: setMasterTuning(cents) (4.2.0, protected)
     pub fn set_master_tuning(&mut self, cents: f64) {
-        let cents = cents.round();
         for ch in self.midi_channels.iter_mut() {
             ch.set_custom_controller(custom_controllers::MASTER_TUNING, cents);
         }

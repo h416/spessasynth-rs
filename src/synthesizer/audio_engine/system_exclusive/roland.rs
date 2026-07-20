@@ -217,8 +217,13 @@ impl SynthesizerCore {
                                 for i in 0..tuning_bytes.min(12) {
                                     new_tuning[i] = (syx[i + 7] as i16 - 64) as i8;
                                 }
+                                // TS 4.3.14 (roland.ts, case 0x40) calls ONLY
+                                // `ch.setOctaveTuning(newTuning)` here — no additional
+                                // channel-wide fine tune. A prior Rust revision also called
+                                // `set_tuning((messageValue - 64), false)`, double-applying a
+                                // channel-wide tuning offset on top of the octave tuning table;
+                                // that call does not exist upstream and has been removed.
                                 self.midi_channels[channel].set_octave_tuning(&new_tuning);
-                                let cents = message_value as i32 - 64;
                                 sys_ex_logging(
                                     syx,
                                     channel as u8,
@@ -226,7 +231,6 @@ impl SynthesizerCore {
                                     "octave scale tuning",
                                     "cents",
                                 );
-                                self.midi_channels[channel].set_tuning(cents as f64, false);
                             }
 
                             _ => {
