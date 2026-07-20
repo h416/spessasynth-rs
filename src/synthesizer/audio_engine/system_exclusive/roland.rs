@@ -186,6 +186,24 @@ impl SynthesizerCore {
                                 }
                             }
 
+                            0x2a => {
+                                // Per-channel fine tune.
+                                // 14-bit value (0-16383) centered at 8192;
+                                // cents = (tune - 8192) / 81.92.
+                                let tune = ((message_value as i32) << 7) | syx[8] as i32;
+                                let cents = (tune as f64 - 8192.0) / 81.92;
+                                self.midi_channels[channel].set_midi_parameter(
+                                    ChannelMidiParameterValue::FineTune(cents),
+                                );
+                                sys_ex_logging(
+                                    syx,
+                                    channel as u8,
+                                    &(cents.round() as i32),
+                                    "fine tuning",
+                                    "cents",
+                                );
+                            }
+
                             0x40..=0x4b => {
                                 // Scale tuning: up to 12 bytes
                                 let tuning_bytes = syx.len().saturating_sub(9); // Data starts at 7, minus checksum and f7
@@ -311,6 +329,24 @@ impl SynthesizerCore {
                     } else if syx[5] == 0x00 {
                         // This is a global system parameter
                         match syx[6] {
+                            0x00 => {
+                                // Roland GS master tune.
+                                // A 16-bit value assembled from four nibbles
+                                // (syx[7..=10]); cents = (tune - 1024) / 10.
+                                let tune = ((message_value as i32) << 12)
+                                    | ((syx[8] as i32) << 8)
+                                    | ((syx[9] as i32) << 4)
+                                    | syx[10] as i32;
+                                let cents = (tune as f64 - 1024.0) / 10.0;
+                                spessa_synth_info(&format!(
+                                    "Roland GS Master Tune: {} cents with: {:02X?}",
+                                    cents, syx
+                                ));
+                                self.set_midi_parameter(
+                                    GlobalMIDIParameterChangeCallback::FineTune(cents),
+                                );
+                            }
+
                             0x7f => {
                                 // Roland mode set / GS mode set.
                                 // data === 0x01 (Double Module) is only meaningful on the true
