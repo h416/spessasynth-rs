@@ -85,8 +85,7 @@ impl SynthesizerCore {
                 // live consumer (`current_key_shift()` in note_on) sees it. Drum channels
                 // ignore the global key shift (handled in `update_internal_params`).
                 for ch in self.midi_channels.iter_mut() {
-                    ch.global_key_shift = semitones;
-                    ch.update_internal_params();
+                    ch.set_global_key_shift(semitones);
                 }
             }
 

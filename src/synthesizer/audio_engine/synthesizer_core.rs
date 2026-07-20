@@ -416,11 +416,14 @@ impl SynthesizerCore {
             channel.drum_channel = true;
         }
 
-        // Inherit the current global MIDI key shift (TS pulls this from
-        // synthCore.midiParameters in updateInternalParams; the Rust channel mirrors it).
-        channel.global_key_shift = self.midi_parameters.key_shift;
-        channel.update_internal_params();
-
+        // TS 4.3.14 `createMIDIChannel` does NOT fold the live global MIDI key shift
+        // into a newly created channel: it only calls `channel.setDrums(true)` when
+        // `sendEvent` is true (which recomputes the drum-branch key shift, ignoring the
+        // global), and does nothing extra otherwise. A new channel's `currentKeyShift`
+        // therefore starts at the field default (0), just like `MidiChannel::new` already
+        // computes here (its constructor calls `update_internal_params` once with
+        // `global_key_shift` at its default 0.0). Do not eagerly mirror
+        // `self.midi_parameters.key_shift` here — that would diverge from TS.
         self.midi_channels.push(channel);
 
         if send_event {

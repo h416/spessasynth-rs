@@ -29,6 +29,8 @@ use crate::synthesizer::audio_engine::voice::compute_modulator::{
 use crate::synthesizer::audio_engine::synth_constants::{
     GENERATOR_OVERRIDE_NO_CHANGE_VALUE, MIN_NOTE_LENGTH, SPESSASYNTH_GAIN_FACTOR,
 };
+#[cfg(test)]
+use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::{ChannelProperty, ChannelPropertyChangeCallback, SynthProcessorEvent};
@@ -169,7 +171,11 @@ pub struct MidiChannel {
     /// `synthCore.midiParameters.keyShift` inside `updateInternalParams`; the Rust
     /// channel has no back-reference, so the value is mirrored here and folded into
     /// `current_key_shift` (non-drum channels only, matching TS).
-    pub global_key_shift: f64,
+    ///
+    /// Private (like the other `current_*` caches) so it can only be changed through
+    /// `set_global_key_shift`, which keeps `current_key_shift` in sync — direct field
+    /// assignment would leave the cache stale.
+    global_key_shift: f64,
 
     /// Current gain, cached from `update_internal_params`.
     /// Equivalent to: currentGain (protected)
@@ -1007,6 +1013,15 @@ impl MidiChannel {
         self.current_gain = SPESSASYNTH_GAIN_FACTOR * channel_system.gain;
     }
 
+    /// Sets the global (synth-wide) MIDI key shift mirrored onto this channel and
+    /// recomputes the cached `current_key_shift` (and the other `current_*` caches).
+    /// Equivalent to the per-channel loop in
+    /// `SynthesizerCore::set_midi_parameter(GlobalMIDIParameterChangeCallback::KeyShift)`.
+    pub fn set_global_key_shift(&mut self, semitones: f64) {
+        self.global_key_shift = semitones;
+        self.update_internal_params();
+    }
+
     /// Current pan in range [-500;500]. Equivalent to: currentPan
     pub fn current_pan(&self) -> f64 {
         self.current_pan
@@ -1074,5 +1089,47 @@ impl ChannelContext for MidiChannel {
 
     fn modulation_depth(&self) -> f64 {
         self.midi_parameters.modulation_depth
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// TS 4.3.14 `updateInternalParams` (non-drum branch):
+    /// `currentKeyShift = globalSystem.keyShift + globalMIDI.keyShift +
+    /// channelSystem.keyShift + channelMIDI.keyShift`, truncated to an integer.
+    /// The Rust cache omits the (still-unplumbed, identity-0) global *system* key
+    /// shift, so with global MIDI key shift = 6 and channel MIDI key shift = 3, the
+    /// sum is 6 + 0 (channelSystem default) + 3 = 9.
+    #[test]
+    fn test_current_key_shift_sums_global_and_channel_for_non_drum_channel() {
+        let mut channel = MidiChannel::new(None, None, 0);
+        assert!(!channel.drum_channel);
+
+        channel.set_global_key_shift(6.0);
+        channel.set_midi_parameter(ChannelMidiParameterValue::KeyShift(3.0));
+
+        assert_eq!(channel.current_key_shift(), 9);
+    }
+
+    /// TS 4.3.14 `updateInternalParams` (drum branch): drum channels ignore the
+    /// global and channel MIDI key shifts entirely and use only
+    /// `channelSystem.keyShift`, which defaults to 0 for GS. So even with the same
+    /// global/channel-MIDI key shifts as the non-drum test, a drum channel's
+    /// `current_key_shift()` stays 0.
+    #[test]
+    fn test_current_key_shift_ignores_global_and_channel_midi_for_drum_channel() {
+        let mut channel = MidiChannel::new(None, None, DEFAULT_PERCUSSION);
+        channel.drum_channel = true;
+
+        channel.set_global_key_shift(6.0);
+        channel.set_midi_parameter(ChannelMidiParameterValue::KeyShift(3.0));
+
+        assert_eq!(channel.current_key_shift(), 0);
     }
 }
