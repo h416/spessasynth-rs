@@ -60,6 +60,10 @@ pub enum AnalyzedMidiMessage {
     MasterFineTune { value: f64 },
     /// Value in cents.
     FineTune { channel: u8, value: f64 },
+    /// Random pan (new in 4.3.16): a pan of 0 in the XG/GS part parameters selects random
+    /// panning rather than a pan position, so it is a channel MIDI parameter, not a CC.
+    /// Equivalent to: { type: "Channel MIDI Param", parameter: "randomPan", value: true }
+    RandomPan { channel: u8 },
 }
 
 /// Safe byte access: TypeScript's `arr[outOfRangeIndex]` yields `undefined`, which behaves as 0
@@ -400,11 +404,19 @@ impl MidiUtils {
                     controller: midi_controllers::MAIN_VOLUME,
                     value: data,
                 },
-                0x0e => AnalyzedMidiMessage::ControllerChange {
-                    channel,
-                    controller: midi_controllers::PAN,
-                    value: data,
-                },
+                0x0e => {
+                    // Pan, except for random,
+                    // Which is a different parameter
+                    if data == 0 {
+                        AnalyzedMidiMessage::RandomPan { channel }
+                    } else {
+                        AnalyzedMidiMessage::ControllerChange {
+                            channel,
+                            controller: midi_controllers::PAN,
+                            value: data,
+                        }
+                    }
+                }
                 0x12 => AnalyzedMidiMessage::ControllerChange {
                     channel,
                     controller: midi_controllers::CHORUS_DEPTH,
@@ -580,11 +592,16 @@ impl MidiUtils {
                     }
                 }
                 0x1c => {
-                    // Pan position
-                    AnalyzedMidiMessage::ControllerChange {
-                        channel,
-                        controller: midi_controllers::PAN,
-                        value: data,
+                    // Pan position, except for random,
+                    // Which is a different parameter
+                    if data == 0 {
+                        AnalyzedMidiMessage::RandomPan { channel }
+                    } else {
+                        AnalyzedMidiMessage::ControllerChange {
+                            channel,
+                            controller: midi_controllers::PAN,
+                            value: data,
+                        }
                     }
                 }
                 0x21 => {

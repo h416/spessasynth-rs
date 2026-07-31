@@ -86,6 +86,11 @@ impl SpessaSynthChorus {
         self.delay_gain_value = value as f64 / 127.0;
     }
 
+    /// Read back the raw GS send level (0-127). Used by `update_active_effects`.
+    pub fn send_level_to_delay(&self) -> u8 {
+        self.send_level_to_delay
+    }
+
     pub fn set_pre_lowpass(&mut self, value: u8) {
         self.pre_lowpass = value;
         let fc = 8000.0 * 0.63_f64.powi(value as i32);

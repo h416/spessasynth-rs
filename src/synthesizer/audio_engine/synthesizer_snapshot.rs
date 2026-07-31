@@ -173,6 +173,9 @@ pub fn apply_snapshot(core: &mut SynthesizerCore, snapshot: &SynthesizerSnapshot
     // TS 4.3.0 likewise iterates `Object.entries(this.systemParameters)` (the LIVE values);
     // since setSystemParameterInternal early-returns when the value is unchanged, this loop
     // is a complete no-op. Ported bug-for-bug (as a no-op).
+
+    // Then update active effects (new in 4.3.16)
+    core.update_active_effects();
 }
 
 /// Creates a snapshot of the current synthesizer state.

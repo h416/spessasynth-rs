@@ -93,6 +93,7 @@ use crate::synthesizer::types::{
 };
 use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::SpessaLog;
+use crate::utils::other::SplitMix32;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -180,6 +181,13 @@ pub struct SynthesizerCore {
 
     /// Whether delay effect is active (enabled via SysEx).
     pub delay_active: bool,
+
+    /// Deterministic random generator used for random panning (new in 4.3.16).
+    /// TS keeps this in module scope (`randomGenerator` in `utils/other.ts`); Rust stores
+    /// one per core so that renders stay reproducible with several synthesizers in one
+    /// process. See `SplitMix32` for the equivalence argument.
+    /// Equivalent to: randomGenerator (utils/other.ts)
+    pub random_generator: SplitMix32,
 
     /// Mono reverb input buffer (fixed at max_buffer_size, cleared each render call).
     reverb_input: Vec<f32>,
@@ -294,6 +302,7 @@ impl SynthesizerCore {
             chorus_processor: SpessaSynthChorus::new(sample_rate, buf_size),
             delay_processor: SpessaSynthDelay::new(sample_rate, buf_size),
             delay_active: false,
+            random_generator: SplitMix32::default(),
             reverb_input: vec![0.0; buf_size],
             chorus_input: vec![0.0; buf_size],
             delay_input: vec![0.0; buf_size],
@@ -495,13 +504,8 @@ impl SynthesizerCore {
             events.append(&mut sub);
         }
 
-        // Delay may only be disabled if variations are all set to 0.
-        // They can still be set after a reset due to locking.
-        if !self.system_parameters.delay_lock {
-            self.delay_active = self.midi_channels.iter().any(|c| {
-                c.midi_controllers[midi_controllers::VARIATION_DEPTH as usize] > 0
-            });
-        }
+        // Update if the effects should still be active.
+        self.update_active_effects();
 
         for event in events {
             self.call_event(event);
@@ -975,6 +979,32 @@ impl SynthesizerCore {
         }));
     }
 
+    /// Checks if we can disable insertion and delay effects.
+    ///
+    /// New in 4.3.16: 4.3.14 latched both flags on (`delayActive ||= ...`) from any GS
+    /// delay SysEx or variation-depth CC, so they could never be turned back off outside a
+    /// full reset. They are now recomputed from the current state at every relevant edit.
+    ///
+    /// Equivalent to: updateActiveEffects()
+    pub fn update_active_effects(&mut self) {
+        if !self.system_parameters.insertion_effect_lock {
+            // TS reads `c.midiParameters.efxAssign`; the Rust channel keeps the same flag
+            // under the legacy name `insertion_enabled`.
+            self.insertion_active = self.midi_channels.iter().any(|c| c.insertion_enabled);
+        }
+        if !self.system_parameters.delay_lock {
+            self.delay_active = if self.midi_parameters.system == MIDISystem::Xg {
+                false
+            } else {
+                self.chorus_processor.send_level_to_delay() > 0
+                    || self.insertion_processor.send_level_to_delay() > 0.0
+                    || self.midi_channels.iter().any(|c| {
+                        c.midi_controllers[midi_controllers::VARIATION_DEPTH as usize] > 0
+                    })
+            };
+        }
+    }
+
     /// Resets the insertion parameter cache to "no change" + the default sends.
     /// Equivalent to: resetInsertionParams() (protected, new in TS 4.3.0)
     pub(crate) fn reset_insertion_params(&mut self) {
@@ -991,7 +1021,9 @@ impl SynthesizerCore {
         if self.system_parameters.insertion_effect_lock {
             return;
         }
-        self.insertion_active = false;
+        // 4.3.16 dropped the `insertionActive = false` here: the flag is now derived from
+        // the per-channel efxAssign state by `update_active_effects()`, which `reset()`
+        // calls after every channel has been reset.
         self.insertion_processor = Box::new(ThruFx::new(self.sample_rate));
         self.insertion_processor.reset();
         self.insertion_processor
@@ -999,10 +1031,6 @@ impl SynthesizerCore {
         self.insertion_processor.set_send_level_to_chorus(0.0);
         self.insertion_processor.set_send_level_to_delay(0.0);
         self.reset_insertion_params();
-        // Legacy compensation (not in TS, where ch.reset handles efxAssign — Task 21):
-        for ch in self.midi_channels.iter_mut() {
-            ch.insertion_enabled = false;
-        }
         let efx_type = self.insertion_processor.effect_type();
         self.call_event(SynthProcessorEvent::EffectChange(EffectChangeCallback {
             effect: EffectKind::Insertion,

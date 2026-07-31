@@ -222,11 +222,13 @@ impl ChannelSnapshot {
         // Restore drum parameters
         core.midi_channels[channel_idx].drum_params = self.drum_params.clone();
 
-        // Restore insertion effect assignment
-        core.midi_channels[channel_idx].insertion_enabled = self.insertion_enabled;
-        if self.insertion_enabled {
-            core.insertion_active = true;
-        }
+        // Restore insertion effect assignment.
+        // 4.3.16: no longer latches `insertionActive` here — `applySnapshot` calls
+        // `update_active_effects()` once every channel has been restored.
+        core.midi_channels[channel_idx].set_midi_parameter(
+            crate::synthesizer::audio_engine::channel::parameters::midi::
+                ChannelMidiParameterValue::EfxAssign(self.insertion_enabled),
+        );
 
         // Dispatch events collected during program_change
         for ev in events {

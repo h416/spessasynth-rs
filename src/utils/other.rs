@@ -5,6 +5,53 @@
 /// Note: TS 4.3.0 renamed `consoleColors` to `ConsoleColors` (naming-only, values unchanged).
 /// Rust already uses the idiomatic `console_colors` module with SCREAMING_SNAKE_CASE constants,
 /// so no change was needed for that rename.
+/// Seedable, deterministic random generator (new in 4.3.16).
+/// Source - https://stackoverflow.com/a/47593316
+///
+/// The TypeScript version is a closure over a single `number` held in module scope
+/// (`export const randomGenerator = splitmix32(81_572)`), shared by every processor in the
+/// module instance. Rust stores one instance per `SynthesizerCore` instead: for the
+/// one-synthesizer-per-process rendering flow both are equivalent, and a per-instance state
+/// keeps renders reproducible when several synthesizers live in the same process.
+///
+/// JS uses `| 0` (int32) and `>>> ` (logical shift on the 32-bit pattern) plus `Math.imul`
+/// (low 32 bits of the product). The bit patterns are identical to `u32` wrapping
+/// arithmetic, so this produces the exact same sequence.
+///
+/// Equivalent to: splitmix32(a)
+#[derive(Clone, Debug)]
+pub struct SplitMix32 {
+    state: u32,
+}
+
+/// Seed used by the upstream `randomGenerator` export.
+/// Equivalent to: splitmix32(81_572)
+pub const RANDOM_GENERATOR_SEED: u32 = 81_572;
+
+impl SplitMix32 {
+    /// Creates a generator with the given seed.
+    pub fn new(seed: u32) -> Self {
+        Self { state: seed }
+    }
+
+    /// Returns the next value in `[0, 1)`.
+    /// Equivalent to: randomGenerator()
+    pub fn next_f64(&mut self) -> f64 {
+        self.state = self.state.wrapping_add(0x9E37_79B9);
+        let mut t = self.state ^ (self.state >> 16);
+        t = t.wrapping_mul(0x21F0_AAAD);
+        t ^= t >> 15;
+        t = t.wrapping_mul(0x735A_2D97);
+        f64::from(t ^ (t >> 15)) / 4_294_967_296.0
+    }
+}
+
+impl Default for SplitMix32 {
+    fn default() -> Self {
+        Self::new(RANDOM_GENERATOR_SEED)
+    }
+}
+
 /// Return value of format_time().
 /// Equivalent to: { minutes, seconds, time }
 pub struct FormattedTime {
@@ -159,6 +206,38 @@ mod tests {
         let s = array_to_hex_string(&[0x01, 0x02]);
         assert!(!s.ends_with(' '));
         assert_eq!(s, "01 02");
+    }
+
+    // --- SplitMix32 ---
+
+    #[test]
+    fn test_split_mix32_matches_typescript_sequence() {
+        // Reference values produced by the upstream 4.3.16 `randomGenerator` export
+        // (splitmix32(81_572)) under Node.
+        let mut g = SplitMix32::default();
+        let expected = [
+            0.416_167_726_507_410_41_f64,
+            0.887_790_377_018_973_23,
+            0.102_066_878_462_210_30,
+            0.657_098_128_693_178_30,
+            0.305_592_403_514_310_72,
+            0.907_971_704_611_554_74,
+        ];
+        for (i, &e) in expected.iter().enumerate() {
+            assert_eq!(g.next_f64(), e, "value {} differs", i);
+        }
+    }
+
+    #[test]
+    fn test_split_mix32_random_pan_values() {
+        // The note_on random pan formula: Math.round(randomGenerator() * 1000 - 500).
+        // `Math.round` is floor(x + 0.5), which differs from Rust's `f64::round`
+        // (half away from zero) on exact .5 ties at negative values.
+        let mut g = SplitMix32::default();
+        let pans: Vec<i32> = (0..6)
+            .map(|_| (g.next_f64() * 1000.0 - 500.0 + 0.5).floor() as i32)
+            .collect();
+        assert_eq!(pans, vec![-84, 388, -398, 157, -194, 408]);
     }
 
     // --- console_colors ---

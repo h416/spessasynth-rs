@@ -262,7 +262,8 @@ fn correct_bank_offset_internal(
                 | AnalyzedMidiMessage::MasterKeyShift { .. }
                 | AnalyzedMidiMessage::KeyShift { .. }
                 | AnalyzedMidiMessage::MasterFineTune { .. }
-                | AnalyzedMidiMessage::FineTune { .. } => {
+                | AnalyzedMidiMessage::FineTune { .. }
+                | AnalyzedMidiMessage::RandomPan { .. } => {
                     continue;
                 }
             }
