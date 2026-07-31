@@ -35,6 +35,7 @@ fn print_usage() {
     println!();
     println!("OPTIONS:");
     println!("  -g, --gain <value>   Set master gain (default: 1.0)");
+    println!("  -r, --sample-rate <hz>  Output sample rate (default: 44100)");
     println!("  --no-normalize       Disable audio normalization");
 }
 
@@ -52,6 +53,7 @@ fn main() {
 
     // Parse options
     let mut gain: f64 = 1.0;
+    let mut sample_rate: u32 = RenderOptions::default().sample_rate;
     let mut normalize: bool = true;
     let mut positional: Vec<String> = Vec::new();
     let mut i = 0;
@@ -70,6 +72,22 @@ fn main() {
                 });
                 if gain <= 0.0 {
                     eprintln!("Error: gain must be > 0.0");
+                    std::process::exit(1);
+                }
+            }
+            "-r" | "--sample-rate" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("Error: --sample-rate requires a value");
+                    print_usage();
+                    std::process::exit(1);
+                }
+                sample_rate = args[i].parse::<u32>().unwrap_or_else(|_| {
+                    eprintln!("Error: invalid sample rate '{}'", args[i]);
+                    std::process::exit(1);
+                });
+                if sample_rate == 0 {
+                    eprintln!("Error: sample rate must be > 0");
                     std::process::exit(1);
                 }
             }
@@ -99,6 +117,7 @@ fn main() {
         Some(RenderOptions {
             gain,
             normalize,
+            sample_rate,
             ..Default::default()
         }),
         Some(&|current, total| {
