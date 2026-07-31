@@ -936,7 +936,12 @@ impl MidiChannel {
             FineTune(v) => self.midi_parameters.fine_tune = v,
             RandomPan(v) => self.midi_parameters.random_pan = v,
             AssignMode(v) => self.midi_parameters.assign_mode = v,
-            EfxAssign(v) => self.midi_parameters.efx_assign = v,
+            EfxAssign(v) => {
+                self.midi_parameters.efx_assign = v;
+                // `insertion_enabled` is the legacy mirror read by the voice renderer and
+                // by `SynthesizerCore::update_active_effects`; keep the two in sync.
+                self.insertion_enabled = v;
+            }
             Cc1(v) => self.midi_parameters.cc1 = v,
             Cc2(v) => self.midi_parameters.cc2 = v,
             DrumMap(v) => self.midi_parameters.drum_map = v,

@@ -14,7 +14,7 @@ use crate::synthesizer::audio_engine::synth_constants::{
     GENERATOR_OVERRIDE_NO_CHANGE_VALUE, MIN_EXCLUSIVE_LENGTH,
 };
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
-use crate::synthesizer::types::{NoteOnCallback, SynthProcessorEvent};
+use crate::synthesizer::types::{CachedVoiceList, NoteOnCallback, SynthProcessorEvent};
 use crate::utils::loggin::spessa_synth_warn;
 
 /// Clamps a value between min and max.
@@ -28,6 +28,14 @@ use crate::utils::loggin::spessa_synth_warn;
 #[inline]
 fn clamp_f64(val: f64, min: f64, max: f64) -> f64 {
     val.min(max).max(min)
+}
+
+/// `Math.round` semantics: rounds half *up* (towards +infinity), which differs from
+/// Rust's `f64::round` (half away from zero) on exact `.5` ties at negative values.
+/// The random-pan values are exact multiples of `1000 / 2^32`, so ties are reachable.
+#[inline]
+fn js_round(val: f64) -> f64 {
+    (val + 0.5).floor()
 }
 
 impl SynthesizerCore {
@@ -217,64 +225,66 @@ impl SynthesizerCore {
             .key_modifier_manager
             .has_override_patch(channel as u8, sound_bank_note_u8);
 
-        let cached_voices = if override_patch {
-            // Key modifier overrides the patch for this note
-            let patch = match self
-                .key_modifier_manager
-                .get_patch(channel as u8, sound_bank_note_u8)
-            {
-                Ok(p) => p,
-                Err(_) => return,
-            };
-            // Find the bank index for the override patch
-            if let Some((_, bank_idx)) = self
-                .sound_bank_manager
-                .get_preset_and_bank_idx(patch, self.midi_parameters.system)
-            {
-                // Get a preset clone from the bank so we can release the borrow
-                let preset_clone = self.sound_bank_manager.sound_bank_list[bank_idx]
-                    .sound_bank
-                    .presets
-                    .iter()
-                    .find(|p| {
-                        p.program == patch.program
-                            && p.bank_msb == patch.bank_msb
-                            && p.bank_lsb == patch.bank_lsb
-                    })
-                    .cloned();
-                if let Some(preset) = preset_clone {
-                    self.get_cached_voices_impl(
-                        bank_idx,
-                        &preset,
-                        sound_bank_note_u8,
-                        real_velocity,
-                    )
+        // A missing preset yields an empty voice list rather than aborting the note-on:
+        // TS `getVoices` returns `[]` and execution continues, so the random-pan generator
+        // is still advanced and the note ID still consumed. Bailing out early here would
+        // desync the deterministic generator from the TS one.
+        let cached_voices: CachedVoiceList = 'voices: {
+            if override_patch {
+                // Key modifier overrides the patch for this note
+                let patch = match self
+                    .key_modifier_manager
+                    .get_patch(channel as u8, sound_bank_note_u8)
+                {
+                    Ok(p) => p,
+                    Err(_) => break 'voices Vec::new(),
+                };
+                // Find the bank index for the override patch
+                if let Some((_, bank_idx)) = self
+                    .sound_bank_manager
+                    .get_preset_and_bank_idx(patch, self.midi_parameters.system)
+                {
+                    // Get a preset clone from the bank so we can release the borrow
+                    let preset_clone = self.sound_bank_manager.sound_bank_list[bank_idx]
+                        .sound_bank
+                        .presets
+                        .iter()
+                        .find(|p| {
+                            p.program == patch.program
+                                && p.bank_msb == patch.bank_msb
+                                && p.bank_lsb == patch.bank_lsb
+                        })
+                        .cloned();
+                    if let Some(preset) = preset_clone {
+                        self.get_cached_voices_impl(
+                            bank_idx,
+                            &preset,
+                            sound_bank_note_u8,
+                            real_velocity,
+                        )
+                    } else {
+                        Vec::new()
+                    }
                 } else {
-                    return;
+                    Vec::new()
                 }
             } else {
-                return;
+                // Use channel's current preset
+                let (preset_clone, bank_idx) = {
+                    let ch = &self.midi_channels[channel];
+                    match (&ch.preset, ch.preset_bank_idx) {
+                        (Some(p), Some(bi)) => (p.clone(), bi),
+                        _ => break 'voices Vec::new(),
+                    }
+                };
+                self.get_cached_voices_impl(
+                    bank_idx,
+                    &preset_clone,
+                    sound_bank_note_u8,
+                    real_velocity,
+                )
             }
-        } else {
-            // Use channel's current preset
-            let (preset_clone, bank_idx) = {
-                let ch = &self.midi_channels[channel];
-                match (&ch.preset, ch.preset_bank_idx) {
-                    (Some(p), Some(bi)) => (p.clone(), bi),
-                    _ => return,
-                }
-            };
-            self.get_cached_voices_impl(
-                bank_idx,
-                &preset_clone,
-                sound_bank_note_u8,
-                real_velocity,
-            )
         };
-
-        if cached_voices.is_empty() {
-            return;
-        }
 
         // Drum parameters and pan override
         let mut pan_override: f64 = 0.0;
@@ -284,6 +294,13 @@ impl SynthesizerCore {
         let mut delay_send: f64 = 1.0;
         let mut exclusive_override: i32 = 0;
         let mut voice_gain = voice_gain;
+
+        if self.midi_channels[channel].midi_parameters.random_pan {
+            // The range is -500 to 500.
+            // This runs before the drum block (and before the rxNoteOn bail-out) so that
+            // the generator is advanced in the exact same order as in TS.
+            pan_override = js_round(self.random_generator.next_f64() * 1000.0 - 500.0);
+        }
 
         if self.midi_channels[channel].drum_channel {
             let p = &self.midi_channels[channel].drum_params[midi_note as usize];
@@ -298,12 +315,8 @@ impl SynthesizerCore {
             if drum_pan != 64 {
                 if drum_pan == 0 {
                     // Random pan
-                    let bits = self.current_time.to_bits();
-                    let h = bits
-                        .wrapping_mul(6_364_136_223_846_793_005)
-                        .wrapping_add(1_442_695_040_888_963_407);
-                    let normalized = (h >> 33) as f64 / u32::MAX as f64;
-                    pan_override = (normalized * 1000.0 - 500.0).round();
+                    pan_override =
+                        js_round(self.random_generator.next_f64() * 1000.0 - 500.0);
                 } else {
                     // Calculate with channel pan
                     let channel_pan = (self.midi_channels[channel].midi_controllers
@@ -331,15 +344,7 @@ impl SynthesizerCore {
             if voice_gain == 1.0 {
                 voice_gain = p.gain;
             }
-        } else if self.midi_channels[channel].midi_parameters.random_pan {
-            // Non-drum random pan
-            let bits = self.current_time.to_bits();
-            let h = bits
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            let normalized = (h >> 33) as f64 / u32::MAX as f64;
-            pan_override = (normalized * 1000.0 - 500.0).round();
-        };
+        }
 
         // Groups voices from this Note On together (overlapping notes / mono legato
         // retrigger). A non-emitting (mono legato) retrigger peeks the current ID

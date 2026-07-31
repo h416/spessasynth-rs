@@ -475,7 +475,7 @@ impl SynthesizerCore {
                                 self.insertion_processor.set_send_level_to_delay(
                                     (data as f64 / 127.0) * EFX_SENDS_GAIN_CORRECTION,
                                 );
-                                self.delay_active = true;
+                                self.update_active_effects();
                                 spessa_synth_info(&format!("GS EFX Send Level to Delay: {}", data));
                             }
 
@@ -574,10 +574,10 @@ impl SynthesizerCore {
                                 self.chorus_processor.set_send_level_to_reverb(message_value);
                             }
                             0x40 => {
-                                // Chorus send level to delay — also activates delay
+                                // Chorus send level to delay — may activate delay
                                 spessa_synth_info(&format!("GS Chorus Send To Delay: {}", message_value));
                                 self.chorus_processor.set_send_level_to_delay(message_value);
-                                self.delay_active = true;
+                                self.update_active_effects();
                             }
 
                             // --- Delay parameters (0x50-0x5A) ---
@@ -585,67 +585,56 @@ impl SynthesizerCore {
                                 // Delay macro
                                 spessa_synth_info(&format!("GS Delay Macro: {}", message_value));
                                 self.set_delay_macro(message_value);
-                                self.delay_active = true;
                             }
                             0x51 => {
                                 // Delay pre-LPF
                                 spessa_synth_info(&format!("GS Delay Pre-LPF: {}", message_value));
                                 self.delay_processor.set_pre_lowpass(message_value);
-                                self.delay_active = true;
                             }
                             0x52 => {
                                 // Delay time center
                                 spessa_synth_info(&format!("GS Delay Time Center: {}", message_value));
                                 self.delay_processor.set_time_center(message_value);
-                                self.delay_active = true;
                             }
                             0x53 => {
                                 // Delay time ratio left
                                 spessa_synth_info(&format!("GS Delay Time Ratio Left: {}", message_value));
                                 self.delay_processor.set_time_ratio_left(message_value);
-                                self.delay_active = true;
                             }
                             0x54 => {
                                 // Delay time ratio right
                                 spessa_synth_info(&format!("GS Delay Time Ratio Right: {}", message_value));
                                 self.delay_processor.set_time_ratio_right(message_value);
-                                self.delay_active = true;
                             }
                             0x55 => {
                                 // Delay level center
                                 spessa_synth_info(&format!("GS Delay Level Center: {}", message_value));
                                 self.delay_processor.set_level_center(message_value);
-                                self.delay_active = true;
                             }
                             0x56 => {
                                 // Delay level left
                                 spessa_synth_info(&format!("GS Delay Level Left: {}", message_value));
                                 self.delay_processor.set_level_left(message_value);
-                                self.delay_active = true;
                             }
                             0x57 => {
                                 // Delay level right
                                 spessa_synth_info(&format!("GS Delay Level Right: {}", message_value));
                                 self.delay_processor.set_level_right(message_value);
-                                self.delay_active = true;
                             }
                             0x58 => {
                                 // Delay level
                                 spessa_synth_info(&format!("GS Delay Level: {}", message_value));
                                 self.delay_processor.set_level(message_value);
-                                self.delay_active = true;
                             }
                             0x59 => {
                                 // Delay feedback
                                 spessa_synth_info(&format!("GS Delay Feedback: {}", message_value));
                                 self.delay_processor.set_feedback(message_value);
-                                self.delay_active = true;
                             }
                             0x5a => {
                                 // Delay send level to reverb
                                 spessa_synth_info(&format!("GS Delay Send To Reverb: {}", message_value));
                                 self.delay_processor.set_send_level_to_reverb(message_value);
-                                self.delay_active = true;
                             }
 
                             _ => {
@@ -677,15 +666,15 @@ impl SynthesizerCore {
                             0x22 => {
                                 // EFX assign
                                 let efx = message_value == 1;
-                                self.midi_channels[channel].insertion_enabled = efx;
-                                if efx {
-                                    self.insertion_active = true;
-                                }
+                                self.midi_channels[channel].set_midi_parameter(
+                                    ChannelMidiParameterValue::EfxAssign(efx),
+                                );
                                 spessa_synth_info(&format!(
                                     "Insertion for {}: {}",
                                     channel,
                                     if efx { "ON" } else { "OFF" }
                                 ));
+                                self.update_active_effects();
                             }
                             _ => {
                                 sys_ex_not_recognized(syx, "Roland GS Patch Part Parameter");

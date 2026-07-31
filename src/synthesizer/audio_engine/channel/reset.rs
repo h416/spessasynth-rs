@@ -124,6 +124,11 @@ impl MidiChannel {
         self.channel_vibrato.delay = 0.0;
         self.set_midi_parameter(ChannelMidiParameterValue::RandomPan(false));
 
+        // Clear the insertion effect assignment (TS: setMIDIParameter("efxAssign", false)).
+        // Previously compensated for in `SynthesizerCore::reset_insertion`; since 4.3.16
+        // derives `insertionActive` from this flag, it has to be reset here like in TS.
+        self.set_midi_parameter(ChannelMidiParameterValue::EfxAssign(false));
+
         // Restore poly mode.
         // TS 4.3.0 guarded this with the lockedControllers[monoModeOn/polyModeOn] check;
         // TS 4.3.14 drops the guard here (parameter locking moves to the not-yet-ported
