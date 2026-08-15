@@ -16,6 +16,10 @@ pub struct RenderOptions {
     pub gain: f64,
     pub normalize: bool,
     pub buffer_size: usize,
+    /// Mirrors the `effectsEnabled` synth option. Only reachable through this
+    /// option (no MIDI or SysEx message toggles it), so it exists to let the
+    /// insertion-EFX gating be verified against the TS reference.
+    pub effects_enabled: bool,
 }
 
 impl Default for RenderOptions {
@@ -25,6 +29,7 @@ impl Default for RenderOptions {
             gain: 1.0,
             normalize: true,
             buffer_size: 128,
+            effects_enabled: true,
         }
     }
 }
@@ -53,7 +58,7 @@ pub fn render_midi_to_wav(
         |_| {},
         SynthProcessorOptions {
             events_enabled: false,
-            effects_enabled: true,
+            effects_enabled: opts.effects_enabled,
             ..Default::default()
         },
     );

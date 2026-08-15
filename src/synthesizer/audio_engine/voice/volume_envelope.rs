@@ -169,6 +169,12 @@ impl VolumeEnvelope {
         self.state = 0;
         self.sample_time = 0.0;
         self.output_gain = 0.0;
+        // Voices are recycled, so the envelope has to start from its initial
+        // values rather than from wherever the previous note left it.
+        self.attenuation_cb = CB_SILENCE;
+        self.release_start_cb = CB_SILENCE;
+        self.release_start_time_samples = 0.0;
+        self.release_duration = 0.0;
         self.can_end_on_silent_sustain =
             modulated_generators[gt::SUSTAIN_VOL_ENV as usize] as f64 >= PERCEIVED_CB_SILENCE;
 
@@ -476,6 +482,24 @@ mod tests {
         let gens = gens_with(default_gens(), gt::ATTACK_VOL_ENV, 0);
         env.init(&gens, 60);
         assert_eq!(env.state, 0);
+    }
+
+    #[test]
+    fn test_init_resets_release_leftovers_from_previous_note() {
+        // 4.3.18: voices are recycled, so init() must clear whatever the previous
+        // note left behind instead of inheriting it.
+        let mut env = new_env();
+        env.attenuation_cb = 123.0;
+        env.release_start_cb = 45.0;
+        env.release_start_time_samples = 6789.0;
+        env.release_duration = 1234.0;
+        // Long attack so init() stays in state 0 and does not overwrite attenuation_cb.
+        let gens = gens_with(default_gens(), gt::ATTACK_VOL_ENV, 0);
+        env.init(&gens, 60);
+        assert!(approx_eq64(env.attenuation_cb, CB_SILENCE));
+        assert!(approx_eq64(env.release_start_cb, CB_SILENCE));
+        assert!(approx_eq64(env.release_start_time_samples, 0.0));
+        assert!(approx_eq64(env.release_duration, 0.0));
     }
 
     #[test]
