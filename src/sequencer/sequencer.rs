@@ -211,10 +211,16 @@ impl SpessaSynthSequencer {
     /// Sets the song index and loads the song.
     /// Equivalent to: set songIndex(value)
     pub fn set_song_index(&mut self, value: usize) {
+        // TS has no empty-list guard: there `value % 0` is NaN, which it happily
+        // assigns. Rust panics on `% 0`, so bail out instead.
         if self.songs.is_empty() {
             return;
         }
-        self.song_index = value.max(0) % self.songs.len();
+        // TS: `this._songIndex = Math.max(0, value % this.songs.length)`.
+        // `value` is usize, so the remainder is already non-negative and the
+        // Math.max is a no-op. (The preceding `this._songIndex = value` in the
+        // TS setter is a dead store, overwritten on the next line.)
+        self.song_index = value % self.songs.len();
         self.load_current_song();
     }
 

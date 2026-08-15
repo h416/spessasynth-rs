@@ -1,6 +1,6 @@
-/// tremolo.rs
-/// purpose: Tremolo (volume modulation) insertion effect.
-/// Ported from: src/synthesizer/audio_engine/effects/insertion/tremolo.ts
+//! tremolo.rs
+//! purpose: Tremolo (volume modulation) insertion effect.
+//! Ported from: src/synthesizer/audio_engine/effects/insertion/tremolo.ts
 
 use super::utils::{BiquadCoeffs, BiquadState, apply_shelves, compute_shelf_coeffs};
 use super::convert::InsertionValueConverter;

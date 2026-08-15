@@ -121,7 +121,7 @@ mod tests {
     fn test_validation_skipped_out_of_range_value_preserved() {
         // initialFilterFc normal max = 13500, but out-of-range values must be preserved
         // (validation is intentionally skipped in ReadGenerator / read_generator)
-        let out_of_range: i16 = 20000_i16.min(i16::MAX);
+        let out_of_range: i16 = 20000;
         let mut chunk = make_generators_chunk(&[(gt::INITIAL_FILTER_FC, out_of_range)]);
         let result = read_generators(&mut chunk);
         assert_eq!(result[0].generator_value, out_of_range);
