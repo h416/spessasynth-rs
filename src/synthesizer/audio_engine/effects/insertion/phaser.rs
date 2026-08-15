@@ -1,6 +1,6 @@
-/// phaser.rs
-/// purpose: 8-stage all-pass phaser insertion effect.
-/// Ported from: src/synthesizer/audio_engine/effects/insertion/phaser.ts
+//! phaser.rs
+//! purpose: 8-stage all-pass phaser insertion effect.
+//! Ported from: src/synthesizer/audio_engine/effects/insertion/phaser.ts
 
 use super::utils::{
     BiquadCoeffs, BiquadState, apply_shelves, compute_shelf_coeffs,

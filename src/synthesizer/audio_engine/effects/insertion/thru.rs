@@ -1,6 +1,6 @@
-/// thru.rs
-/// purpose: Pass-through insertion effect (no processing).
-/// Ported from: src/synthesizer/audio_engine/effects/insertion/thru.ts
+//! thru.rs
+//! purpose: Pass-through insertion effect (no processing).
+//! Ported from: src/synthesizer/audio_engine/effects/insertion/thru.ts
 
 use super::InsertionProcessor;
 

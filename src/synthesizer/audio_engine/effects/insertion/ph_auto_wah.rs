@@ -1,6 +1,6 @@
-/// ph_auto_wah.rs
-/// purpose: Parallel Phaser + Auto-wah insertion effect.
-/// Ported from: src/synthesizer/audio_engine/effects/insertion/ph_auto_wah.ts
+//! ph_auto_wah.rs
+//! purpose: Parallel Phaser + Auto-wah insertion effect.
+//! Ported from: src/synthesizer/audio_engine/effects/insertion/ph_auto_wah.ts
 
 use super::utils::{get_pan_table_left, get_pan_table_right};
 use super::phaser::PhaserFx;

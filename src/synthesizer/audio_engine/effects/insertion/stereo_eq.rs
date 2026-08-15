@@ -1,6 +1,6 @@
-/// stereo_eq.rs
-/// purpose: 4-band stereo parametric EQ insertion effect.
-/// Ported from: src/synthesizer/audio_engine/effects/insertion/stereo_eq.ts
+//! stereo_eq.rs
+//! purpose: 4-band stereo parametric EQ insertion effect.
+//! Ported from: src/synthesizer/audio_engine/effects/insertion/stereo_eq.ts
 
 use super::utils::{
     BiquadCoeffs, BiquadState, compute_peaking_eq_coeffs, compute_shelf_coeffs, process_biquad,

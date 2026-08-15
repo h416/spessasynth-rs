@@ -1,6 +1,6 @@
-/// utils.rs
-/// purpose: DSP utility types and functions for insertion effects.
-/// Ported from: src/synthesizer/audio_engine/effects/insertion/utils.ts
+//! utils.rs
+//! purpose: DSP utility types and functions for insertion effects.
+//! Ported from: src/synthesizer/audio_engine/effects/insertion/utils.ts
 
 use std::f64::consts::PI;
 use std::sync::OnceLock;

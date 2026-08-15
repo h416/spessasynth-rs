@@ -1,6 +1,6 @@
-/// convert.rs
-/// purpose: InsertionValueConverter lookup table for GS EFX parameter conversion.
-/// Ported from: src/synthesizer/audio_engine/effects/insertion/convert.ts
+//! convert.rs
+//! purpose: InsertionValueConverter lookup table for GS EFX parameter conversion.
+//! Ported from: src/synthesizer/audio_engine/effects/insertion/convert.ts
 
 // Each row: [PreDly, Dly1, Dly2, Dly3, Dly4, Rate1, Rate2, HF, Cut, EQ, LPF, Man, Azim, Accl]
 //            0       1     2     3     4     5      6      7   8    9   10   11   12    13

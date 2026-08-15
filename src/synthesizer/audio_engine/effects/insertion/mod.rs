@@ -1,7 +1,7 @@
-/// insertion/mod.rs
-/// purpose: Insertion effect trait, module declarations, and factory function.
-/// Ported from: src/synthesizer/audio_engine/effects/types.ts (InsertionProcessor interface)
-///              src/synthesizer/audio_engine/effects/insertion_list.ts
+//! insertion/mod.rs
+//! purpose: Insertion effect trait, module declarations, and factory function.
+//! Ported from: src/synthesizer/audio_engine/effects/types.ts (InsertionProcessor interface)
+//!              src/synthesizer/audio_engine/effects/insertion_list.ts
 
 pub mod auto_pan;
 pub mod auto_wah;

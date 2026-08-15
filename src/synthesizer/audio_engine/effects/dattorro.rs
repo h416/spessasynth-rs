@@ -1,7 +1,7 @@
-/// Dattorro Reverb
-/// Based on DattorroReverbNode by khoin on GitHub (public domain).
-/// https://github.com/khoin/DattorroReverbNode/
-/// Adapted for spessasynth by spessasus, ported to Rust.
+//! Dattorro Reverb
+//! Based on DattorroReverbNode by khoin on GitHub (public domain).
+//! <https://github.com/khoin/DattorroReverbNode/>
+//! Adapted for spessasynth by spessasus, ported to Rust.
 
 /// Internal delay line with power-of-2 buffer for fast masking.
 struct DattorroDelayLine {
