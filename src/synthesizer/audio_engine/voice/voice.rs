@@ -323,6 +323,11 @@ impl Voice {
         self.override_release_vol_env = 0;
         self.portamento_duration = 0.0;
         self.portamento_from_key = -1;
+        // The tuning ratio is only recomputed when the rounded cents change,
+        // so a stale pair left by the previous note on this voice would be
+        // reused as-is whenever the new note rounds to the same cents.
+        self.tuning_cents = 0.0;
+        self.tuning_ratio = 1.0;
         // Important, these start at 1/4 way there!
         self.vib_lfo_phase = 0.25;
         self.mod_lfo_phase = 0.25;
@@ -673,6 +678,18 @@ mod tests {
         v.setup(0.0, 0, 60, 0);
         assert_eq!(v.portamento_from_key, -1);
         assert!((v.portamento_duration - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_setup_resets_tuning_cache() {
+        // 4.3.18: voices are recycled, and render_voice only recomputes `tuning_ratio`
+        // when the rounded cents change — a stale pair would be reused verbatim.
+        let mut v = Voice::new(SAMPLE_RATE);
+        v.tuning_cents = 137.0;
+        v.tuning_ratio = 1.0824;
+        v.setup(0.0, 0, 60, 0);
+        assert!((v.tuning_cents - 0.0).abs() < f64::EPSILON);
+        assert!((v.tuning_ratio - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]

@@ -372,8 +372,9 @@ impl MidiChannel {
 
         let buffer = &voice.buffer;
 
-        // If insertion is enabled for this channel, route to insertion buffers instead
-        if self.insertion_enabled && insertion_active {
+        // Straight into the insertion EFX, but only if it is active
+        // (`insertion_enabled` is the Rust name for `midiParameters.efxAssign`).
+        if self.insertion_enabled && enable_effects && insertion_active {
             for (i, &s) in buffer.iter().enumerate().take(sample_count) {
                 insertion_input_l[i] = (insertion_input_l[i] as f64 + gain_left * s as f64) as f32;
                 insertion_input_r[i] = (insertion_input_r[i] as f64 + gain_right * s as f64) as f32;

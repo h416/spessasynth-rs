@@ -352,13 +352,14 @@ impl BasicMidi {
                                             loop_start = Some(ticks);
                                         }
                                     }
-                                    // EMIDI/XMI loop start (unconditional).
-                                    116 => {
+                                    // EMIDI/XMI loop start (cc116) and EMIDI global
+                                    // loop start (cc118), both unconditional.
+                                    116 | 118 => {
                                         loop_start = Some(ticks);
                                     }
-                                    // Touhou (cc4) / EMIDI (cc117) loop end.
-                                    // For Touhou loops, the data value must be 0.
-                                    4 | 117 => {
+                                    // Touhou (cc4) / EMIDI (cc117) / EMIDI global (cc119)
+                                    // loop end. For Touhou loops, the data value must be 0.
+                                    4 | 117 | 119 => {
                                         let cc_num = data[0];
                                         let value = data.get(1).copied().unwrap_or(0);
                                         if loop_end.is_none()
@@ -1072,6 +1073,68 @@ mod tests {
         t.push_event(make_msg(0, 0x90, vec![60, 100]));
         t.push_event(make_msg(200, 0xB0, vec![117, 0]));
         t.push_event(make_msg(300, 0xB0, vec![117, 0]));
+        t.push_event(make_msg(480, midi_message_types::END_OF_TRACK, vec![]));
+        m.tracks.push(t);
+        m.flush(false);
+        assert_eq!(m.midi_loop.loop_type, MidiLoopType::Hard);
+    }
+
+    // ── EMIDI global loop markers (4.3.18) ─────────────────────────────
+
+    #[test]
+    fn test_flush_cc118_global_loop_start_unconditional_on_value() {
+        // CC118 (EMIDI global loop start) behaves like CC116: unconditional.
+        let mut m = BasicMidi::new();
+        m.time_division = 480;
+        let mut t = MidiTrack::new();
+        t.push_event(make_msg(0, 0x90, vec![60, 100]));
+        t.push_event(make_msg(120, 0xB0, vec![118, 42]));
+        t.push_event(make_msg(480, midi_message_types::END_OF_TRACK, vec![]));
+        m.tracks.push(t);
+        m.flush(false);
+        assert_eq!(m.midi_loop.start, 120);
+    }
+
+    #[test]
+    fn test_flush_cc119_global_loop_end_unconditional_on_value() {
+        // CC119 (EMIDI global loop end) behaves like CC117: unconditional.
+        let mut m = BasicMidi::new();
+        m.time_division = 480;
+        let mut t = MidiTrack::new();
+        t.push_event(make_msg(0, 0x90, vec![60, 100]));
+        t.push_event(make_msg(300, 0xB0, vec![119, 42]));
+        t.push_event(make_msg(480, midi_message_types::END_OF_TRACK, vec![]));
+        m.tracks.push(t);
+        m.flush(false);
+        assert_eq!(m.midi_loop.end, 300);
+        assert_eq!(m.midi_loop.loop_type, MidiLoopType::Soft);
+    }
+
+    #[test]
+    fn test_flush_cc118_cc119_pair_sets_both_loop_points() {
+        let mut m = BasicMidi::new();
+        m.time_division = 480;
+        let mut t = MidiTrack::new();
+        t.push_event(make_msg(0, 0x90, vec![60, 100]));
+        t.push_event(make_msg(100, 0xB0, vec![118, 0]));
+        t.push_event(make_msg(400, 0xB0, vec![119, 0]));
+        t.push_event(make_msg(480, midi_message_types::END_OF_TRACK, vec![]));
+        m.tracks.push(t);
+        m.flush(false);
+        assert_eq!(m.midi_loop.start, 100);
+        assert_eq!(m.midi_loop.end, 400);
+        assert_eq!(m.midi_loop.loop_type, MidiLoopType::Soft);
+    }
+
+    #[test]
+    fn test_flush_cc119_duplicate_loop_end_resets_loop_type_to_hard() {
+        // CC119 shares the loop-end arm with CC4/CC117, so a duplicate invalidates it.
+        let mut m = BasicMidi::new();
+        m.time_division = 480;
+        let mut t = MidiTrack::new();
+        t.push_event(make_msg(0, 0x90, vec![60, 100]));
+        t.push_event(make_msg(200, 0xB0, vec![119, 0]));
+        t.push_event(make_msg(300, 0xB0, vec![119, 0]));
         t.push_event(make_msg(480, midi_message_types::END_OF_TRACK, vec![]));
         m.tracks.push(t);
         m.flush(false);

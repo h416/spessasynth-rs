@@ -16,7 +16,7 @@ cargo run --release --example midi_to_wav -- GeneralUser-GS.sf2 J-cycle.mid J-cy
 
 ## Differences from the original
 
-This is a partial port of [spessasynth_core v4.3.16](https://github.com/spessasus/spessasynth_core/releases/tag/v4.3.16),
+This is a partial port of [spessasynth_core v4.3.18](https://github.com/spessasus/spessasynth_core/releases/tag/v4.3.18),
 ported file-by-file and function-by-function. The following limitations apply:
 
 - **MIDI to WAV offline rendering only** — real-time playback and other features are not included
@@ -25,7 +25,7 @@ ported file-by-file and function-by-function. The following limitations apply:
 
 ## Accuracy
 
-The renderer is verified against the upstream TypeScript spessasynth_core v4.3.16. Rendering the
+The renderer is verified against the upstream TypeScript spessasynth_core v4.3.18. Rendering the
 same MIDI + SoundFont at 44100 Hz, every output sample matches the reference within **±1 (16-bit)**
 across the test corpus — i.e. bit-accurate up to the last-place rounding difference inherent to
 f64-vs-f64 float ordering between the two languages. Under 0.02% of samples differ at all, and none
@@ -48,7 +48,9 @@ cargo run --release --example midi_to_wav -- <soundfont.sf2> <input.mid> <output
 | Option | Description |
 |---|---|
 | `-g`, `--gain <value>` | Master gain (default: 1.0) |
+| `-r`, `--sample-rate <hz>` | Output sample rate (default: 44100) |
 | `--no-normalize` | Disable audio normalization |
+| `--no-effects` | Disable reverb/chorus/delay/insertion effects |
 | `-h`, `--help` | Show help |
 
 ```bash
@@ -99,7 +101,7 @@ fn main() {
 
 ## Credits
 
-- [SpessaSynth](https://github.com/spessasus/SpessaSynth) by spessasus - Original TypeScript implementation (spessasynth_core v4.3.16)
+- [SpessaSynth](https://github.com/spessasus/SpessaSynth) by spessasus - Original TypeScript implementation (spessasynth_core v4.3.18)
 - Rust port by h416
 - Ported with the assistance of [Claude Code](https://claude.ai/code)
 
