@@ -220,15 +220,20 @@ impl WavetableOscillator {
                 let mut y3 = y0 + 3; // Point 2 after cursor
                 let t = cursor - y0 as f64; // Distance from y0 to cursor [0;1]
 
+                // Ensure that the points above do not go over the loop.
+                // Use `while` here: when the loop is very short (or the cursor wraps
+                // near the loop end), a single subtraction is not enough to bring
+                // the points back into the loop range.
+                // Testcase: OmegaGMGS2.sf2 drum kit, Crash Cymbal (loop length 1, shortest valid)
                 let loop_end_usize = loop_end as usize;
                 let loop_length_usize = loop_length as usize;
-                if y1 >= loop_end_usize {
+                while y1 >= loop_end_usize {
                     y1 -= loop_length_usize;
                 }
-                if y2 >= loop_end_usize {
+                while y2 >= loop_end_usize {
                     y2 -= loop_length_usize;
                 }
-                if y3 >= loop_end_usize {
+                while y3 >= loop_end_usize {
                     y3 -= loop_length_usize;
                 }
 
@@ -465,6 +470,33 @@ mod tests {
         assert!(
             approx(buf[0], 1.0),
             "hermite at integer cursor should return data[cursor+1], got {}",
+            buf[0]
+        );
+    }
+
+    #[test]
+    fn hermite_loop_length_one_wraps_fully() {
+        // A loop of length 1 (shortest valid loop, e.g. OmegaGMGS2.sf2 Crash Cymbal)
+        // requires more than one subtraction to bring y2/y3 back under loop_end.
+        // A single `if` (pre-4.3.19 TS) leaves y2/y3 pointing past the loop, mixing
+        // in unrelated samples; with a 1-sample loop the interpolated output must
+        // be perfectly flat (every wrapped point resolves to the same sample).
+        let data = vec![10.0f32, 20.0, 30.0];
+        let mut osc = WavetableOscillator::new(interpolation_types::HERMITE);
+        osc.sample_data = Some(data);
+        osc.is_looping = true;
+        osc.loop_start = 0.0;
+        osc.loop_end = 1.0;
+        osc.loop_length = 1.0;
+        osc.end = 3.0;
+        osc.playback_step = 0.0;
+        osc.cursor = 0.5;
+
+        let mut buf = vec![0.0f32; 1];
+        osc.process(1, 1.0, &mut buf);
+        assert!(
+            approx(buf[0], 10.0),
+            "1-sample loop must be flat at the loop sample, got {}",
             buf[0]
         );
     }

@@ -53,6 +53,12 @@ impl SynthesizerCore {
                             [9u8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15];
                         let channel =
                             channel_table[(syx[5] & 0x0f) as usize] as usize + channel_offset;
+                        // For example, 0x1A means A = 11, which corresponds to channel 12 (counting from 1)
+                        if channel >= self.midi_channels.len() {
+                            // Testcase: Sarah Geronimo - Maybe This Time
+                            sys_ex_not_recognized(syx, "Roland GS Patch Parameter");
+                            return;
+                        }
 
                         // Extract borrow-checker-safe copies of self fields
                         let current_time = self.current_time;
