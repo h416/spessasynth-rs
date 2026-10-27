@@ -61,6 +61,7 @@
 ///   implemented), `ch.setMIDIParameter("pressure", ...)`, `ch.destroy()`, per-channel
 ///   `systemParameters.presetLock` juggling in the preset-list refresh, and effect processor
 ///   constructors taking `maxBufferSize`.
+use crate::synthesizer::audio_engine::effects::xg::implementation::reverb::DefaultXGReverb;
 use std::collections::HashMap;
 use crate::synthesizer::audio_engine::channel::midi_channel::DrumLocks;
 
@@ -181,6 +182,10 @@ pub struct SynthesizerCore {
 
     /// Reverb effect processor.
     pub reverb_processor: SpessaSynthReverb,
+    /// The synthesizer's XG reverb block.
+    /// Used when `GlobalMIDIParameter.system` is `xg`.
+    /// Equivalent to: xgReverbBlock
+    pub xg_reverb_block: DefaultXGReverb,
 
     /// Chorus effect processor.
     pub chorus_processor: SpessaSynthChorus,
@@ -351,6 +356,7 @@ impl SynthesizerCore {
             current_time: options.initial_time,
             midi_volume: 1.0,
             reverb_processor: SpessaSynthReverb::new(sample_rate, buf_size),
+            xg_reverb_block: DefaultXGReverb::new(sample_rate, buf_size),
             chorus_processor: SpessaSynthChorus::new(sample_rate, buf_size),
             delay_processor: DefaultGSDelay::new(sample_rate, buf_size),
             gs_delay_active: false,
@@ -555,6 +561,11 @@ impl SynthesizerCore {
         // Delay1 default
         self.set_delay_macro(0);
         self.reset_insertion();
+
+        // Reset XG params
+        if !self.system_parameters.xg_reverb_lock {
+            self.xg_reverb_block.reset();
+        }
 
         let events_enabled = self.system_parameters.events_enabled;
         let current_time = self.current_time;
@@ -765,19 +776,38 @@ impl SynthesizerCore {
             }
 
             // Dry level is only active in XG with variation connection set to SYSTEM.
-            // TODO(XG effects): `midiParameters.dryLevel / 127` gain when is_xg && !variation_insertion.
-            // Mix down normally
-            for i in 0..sample_count {
-                let idx = start_index + i;
-                left[idx] = (left[idx] as f64 + output_left[i]) as f32;
-                right[idx] = (right[idx] as f64 + output_right[i]) as f32;
+            if is_xg && !variation_insertion {
+                // Mix down taking dry level into account
+                let gain = ch.midi_parameters.dry_level as f64 / 127.0;
+                for i in 0..sample_count {
+                    let idx = start_index + i;
+                    left[idx] = (left[idx] as f64 + output_left[i] * gain) as f32;
+                    right[idx] = (right[idx] as f64 + output_right[i] * gain) as f32;
+                }
+            } else {
+                // Mix down normally
+                for i in 0..sample_count {
+                    let idx = start_index + i;
+                    left[idx] = (left[idx] as f64 + output_left[i]) as f32;
+                    right[idx] = (right[idx] as f64 + output_right[i]) as f32;
+                }
             }
         }
 
         // Process effects
         if fx {
             if is_xg {
-                // TODO(XG effects): variation (system), chorus and reverb blocks.
+                // TODO(XG effects): variation (system) and chorus blocks.
+
+                // Reverb last, doesn't feed to anything.
+                self.xg_reverb_block.process(
+                    &self.xg_reverb_input_l,
+                    &self.xg_reverb_input_r,
+                    left,
+                    right,
+                    start_index,
+                    sample_count,
+                );
             } else {
                 // Insertion first
                 if self.gs_insertion_active {

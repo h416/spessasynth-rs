@@ -76,16 +76,53 @@ impl SynthesizerCore {
             return;
         }
 
+        // XG EFFECT 1 (reverb, chorus, variation)
         if a1 == 0x02 && a2 == 0x01 {
-            let effect = a3;
-            let effect_type = if effect <= 0x15 {
-                "Reverb"
-            } else if effect <= 0x35 {
-                "Chorus"
-            } else {
-                "Variation"
-            };
-            spessa_synth_info(&format!("Unsupported XG {} Parameter: {:02X}", effect_type, effect));
+            let is_reverb = a3 == 0x00 || (0x02..=0x0d).contains(&a3) || (0x10..=0x15).contains(&a3);
+            if is_reverb && self.system_parameters.xg_reverb_lock {
+                return;
+            }
+            let is_chorus = a3 == 0x20 || (0x22..=0x2e).contains(&a3) || (0x30..=0x35).contains(&a3);
+            if is_chorus && self.system_parameters.xg_chorus_lock {
+                return;
+            }
+            let is_variation =
+                a3 == 0x40 || (0x42..=0x5b).contains(&a3) || (0x70..=0x75).contains(&a3);
+            if is_variation && self.system_parameters.xg_variation_lock {
+                return;
+            }
+            let data = data as i32;
+            match a3 {
+                0x00 => {
+                    let effect_type = ((data << 8) | syx[7] as i32) as u16;
+                    self.xg_reverb_block.system.effect.set_type(effect_type);
+                    spessa_synth_info(&format!("XG Reverb Type: {:x}", effect_type));
+                }
+
+                0x02..=0x0b => {
+                    self.xg_reverb_block.system.effect.set_parameter(a3 as i32 - 0x02, data);
+                    spessa_synth_info(&format!("XG Reverb Parameter {}: {}", a3 - 0x01, data));
+                }
+
+                0x0c => {
+                    self.xg_reverb_block.system.r#return = data;
+                    spessa_synth_info(&format!("XG Reverb Return: {}", data));
+                }
+
+                0x0d => {
+                    self.xg_reverb_block.system.pan = data;
+                    spessa_synth_info(&format!("XG Reverb Pan: {}", data));
+                }
+
+                0x10..=0x15 => {
+                    self.xg_reverb_block.system.effect.set_parameter(a3 as i32 - 0x06, data);
+                    spessa_synth_info(&format!("XG Reverb Parameter {}: {}", a3 - 0x05, data));
+                }
+
+                _ => {
+                    sys_ex_not_recognized(&[a3], "Yamaha XG EFFECT 1 Parameter");
+                }
+            }
             return;
         }
 

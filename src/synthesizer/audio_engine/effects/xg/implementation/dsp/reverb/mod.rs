@@ -1,0 +1,20 @@
+//! The XG reverb programs.
+pub mod basement;
+pub mod gm_plate;
+pub mod hall1;
+pub mod hall2;
+pub mod hall_l;
+pub mod hall_m;
+pub mod plate;
+pub mod reverb_tables;
+pub mod room1;
+pub mod room2;
+pub mod room3;
+pub mod room_l;
+pub mod room_m;
+pub mod room_s;
+pub mod stage1;
+pub mod stage2;
+pub mod tunnel;
+pub mod white_room;
+pub mod xg_reverb;
