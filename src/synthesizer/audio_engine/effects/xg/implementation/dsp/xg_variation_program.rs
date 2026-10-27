@@ -186,10 +186,10 @@ pub fn variation_process<P: XGVariationProgram + ?Sized>(
 /// Implements `XGProgram` for a variation program struct with the fields
 /// `program: XGDSPProgram` and `var: XGVariationState`.
 /// The category supplies `push_coefficients` and `reset_xg`; the struct supplies the
-/// inherent methods `convert_impl` and `reset_state_impl`.
+/// inherent methods `convert_impl` and `reset_state_impl` (and optionally a `clampParameter` override).
 #[macro_export]
 macro_rules! impl_xg_variation_program {
-    ($ty:ty, push = $push:path, reset = $reset:path) => {
+    ($ty:ty, push = $push:path, reset = $reset:path $(, clamp = $clamp:path)?) => {
         impl $crate::synthesizer::audio_engine::effects::xg::implementation::dsp::xg_dsp_program::XGProgram
             for $ty
         {
@@ -222,6 +222,12 @@ macro_rules! impl_xg_variation_program {
             fn reset_xg(&mut self, memory: &mut [f32]) {
                 $reset(self, memory);
             }
+
+            $(
+                fn clamp_parameter(&self, param: usize, value: i32) -> i32 {
+                    $clamp(self, param, value)
+                }
+            )?
 
             fn process(
                 &mut self,

@@ -1,6 +1,7 @@
 //! The default implementation of an XG insertion block.
 //! Ported from: src/synthesizer/audio_engine/effects/xg/implementation/insertion.ts
 
+use super::dsp::auto_wah::auto_wah::XGAutoWah;
 use super::dsp::chorus::{
     celeste1, celeste2, celeste3, celeste4, chorus1, chorus2, chorus3, chorus4, flanger1,
     flanger2, flanger3,
@@ -11,6 +12,7 @@ use super::dsp::equalizer::three_band_eq::XGThreeBandEQ;
 use super::dsp::equalizer::two_band_eq::XGTwoBandEQ;
 use super::dsp::effect_processor::DefaultXGEffectProcessor;
 use super::dsp::rotary::rotary_speaker::XGRotarySpeaker;
+use super::dsp::karaoke::{karaoke1, karaoke2, karaoke3};
 use super::dsp::phaser::phaser1;
 use super::dsp::reverb::{hall1, hall2, plate, room1, room2, room3, stage1, stage2};
 use super::dsp::symphonic::symphonic::XGSymphonic;
@@ -34,7 +36,9 @@ fn insertion_map(sr: f64, buf: usize) -> Vec<(u16, Box<dyn DefaultXGEffectProces
         (0x06_00, Box::new(delay_lr::new(sr, buf))),
         (0x07_00, Box::new(echo::new(sr, buf))),
         (0x08_00, Box::new(cross_delay::new(sr, buf))),
-        // TODO(XG effects): 0x1400-0x1402 KARAOKE 1-3
+        (0x14_00, Box::new(karaoke1::new(sr, buf))),
+        (0x14_01, Box::new(karaoke2::new(sr, buf))),
+        (0x14_02, Box::new(karaoke3::new(sr, buf))),
         (0x41_00, Box::new(chorus1::new(sr, buf, true))),
         (0x41_01, Box::new(chorus2::new(sr, buf, true))),
         (0x41_02, Box::new(chorus3::new(sr, buf, true))),
@@ -58,7 +62,7 @@ fn insertion_map(sr: f64, buf: usize) -> Vec<(u16, Box<dyn DefaultXGEffectProces
         (0x4b_00, Box::new(amp_simulator::new(sr, buf))),
         (0x4c_00, Box::new(XGThreeBandEQ::new(sr, buf))),
         (0x4d_00, Box::new(XGTwoBandEQ::new(sr, buf))),
-        // TODO(XG effects): 0x4e00 AUTO WAH
+        (0x4e_00, Box::new(XGAutoWah::new(sr, buf))),
     ]
 }
 
