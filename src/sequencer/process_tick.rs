@@ -29,7 +29,12 @@ impl SpessaSynthSequencer {
         while self.played_time < current_time {
             // Find the next event and process it
             let timeline_len = self.songs[song_idx].timeline.len();
-            let e = self.songs[song_idx].timeline[self.index];
+            let Some(&e) = self.songs[song_idx].timeline.get(self.index) else {
+                // Past the end (for example, after jumping beyond the last event)
+                self.index += 1;
+                self.song_is_finished();
+                return;
+            };
             self.index += 1;
             let event = self.songs[song_idx].tracks[e.tr].events[e.ev].clone();
             let event_ticks = event.ticks;

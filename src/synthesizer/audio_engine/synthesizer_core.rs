@@ -541,6 +541,8 @@ impl SynthesizerCore {
     pub fn reset(&mut self, system: MIDISystem) {
         // Call here because there are returns in this function.
         self.call_event(SynthProcessorEvent::Reset(system));
+        // 4.4.0: a reset also stops all notes (gracefully)
+        self.stop_all_channels(false);
         self.reset_midi_parameters(system);
         // Reset private props
         self.tunings.fill(-1.0);

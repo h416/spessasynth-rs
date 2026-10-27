@@ -21,17 +21,22 @@ fn get_tuning(byte1: u8, byte2: u8, byte3: u8) -> f64 {
         return -1.0;
     }
 
-    // Calculate cent tuning (divide cents by 100 so it works in semitones)
-    midi_note + fraction as f64 * 0.000_061
+    // The fraction is in 1/16384 semitone units (100/16384 cents)
+    midi_note + fraction as f64 / 16_384.0
 }
 
 impl SynthesizerCore {
     /// Handles a Universal system exclusive message (realtime/non-realtime).
     /// Equivalent to: universalSystemExclusive(syx, channelOffset)
     pub fn handle_gm(&mut self, syx: &[u8], channel_offset: usize) {
+        let is_realtime = syx[0] == 0x7f;
         match syx[2] {
             0x04 => {
-                // Device control
+                // Device control (realtime only, non-realtime 04 is MIDI Time Code)
+                if !is_realtime {
+                    sys_ex_not_recognized(syx, "Universal System Exclusive");
+                    return;
+                }
                 match syx[3] {
                     0x01 => {
                         // Master volume
@@ -186,13 +191,18 @@ impl SynthesizerCore {
             }
 
             0x09 => {
-                // General MIDI
+                // General MIDI (non-realtime)
+                if is_realtime {
+                    sys_ex_not_recognized(syx, "Universal System Exclusive");
+                    return;
+                }
                 match syx[3] {
                     0x01 => {
                         spessa_synth_info("MIDI System: General MIDI 1");
                         self.reset(MIDISystem::Gm);
                     }
                     0x02 => {
+                        // GM System Off
                         spessa_synth_info("MIDI System: Roland GS");
                         self.reset(MIDISystem::Gs);
                     }
@@ -213,6 +223,11 @@ impl SynthesizerCore {
                 match syx[3] {
                     // Bulk tuning dump: all 128 notes
                     0x01 => {
+                        // Bulk tuning dump: all 128 notes (non-realtime)
+                        if is_realtime {
+                            sys_ex_not_recognized(syx, "MIDI Tuning Standard");
+                            return;
+                        }
                         let program = syx[current_message_index] as usize;
                         current_message_index += 1;
                         // Read the name
@@ -244,6 +259,11 @@ impl SynthesizerCore {
                     // Single note change
                     // Single note change bank
                     0x02 | 0x07 => {
+                        if syx[3] == 0x02 && !is_realtime {
+                            // Non-realtime 02 is a bulk dump request
+                            sys_ex_not_recognized(syx, "MIDI Tuning Standard");
+                            return;
+                        }
                         if syx[3] == 0x07 {
                             // Skip the bank
                             current_message_index += 1;
@@ -291,20 +311,23 @@ impl SynthesizerCore {
                         // Apply to channels (ordered from 0)
                         // Bit 1: channels 14 and 15
                         if (syx[4] & 1) == 1 {
-                            self.midi_channels[14 + channel_offset]
-                                .set_octave_tuning(&new_octave_tuning);
+                            if let Some(ch) = self.midi_channels.get_mut(14 + channel_offset) {
+                                ch.set_octave_tuning(&new_octave_tuning);
+                            }
                         }
                         if ((syx[4] >> 1) & 1) == 1 {
-                            self.midi_channels[15 + channel_offset]
-                                .set_octave_tuning(&new_octave_tuning);
+                            if let Some(ch) = self.midi_channels.get_mut(15 + channel_offset) {
+                                ch.set_octave_tuning(&new_octave_tuning);
+                            }
                         }
 
                         // Bit 2: channels 7 to 13
                         for i in 0..7usize {
                             let bit = (syx[5] >> i) & 1;
                             if bit == 1 {
-                                self.midi_channels[7 + i + channel_offset]
-                                    .set_octave_tuning(&new_octave_tuning);
+                                if let Some(ch) = self.midi_channels.get_mut(7 + i + channel_offset) {
+                                    ch.set_octave_tuning(&new_octave_tuning);
+                                }
                             }
                         }
 
@@ -312,8 +335,9 @@ impl SynthesizerCore {
                         for i in 0..7usize {
                             let bit = (syx[6] >> i) & 1;
                             if bit == 1 {
-                                self.midi_channels[i + channel_offset]
-                                    .set_octave_tuning(&new_octave_tuning);
+                                if let Some(ch) = self.midi_channels.get_mut(i + channel_offset) {
+                                    ch.set_octave_tuning(&new_octave_tuning);
+                                }
                             }
                         }
 

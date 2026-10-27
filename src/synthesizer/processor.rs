@@ -335,8 +335,8 @@ impl SynthesizerCore {
                     self.system_exclusive(message.get(1..).unwrap_or(&[]), channel_offset);
                 }
                 midi_message_types::RESET => {
-                    // Do not **force** stop channels (breaks seamless loops, for example th06)
-                    self.stop_all_channels(false);
+                    // reset() stops the notes itself (not forced: breaks seamless loops,
+                    // for example th06)
                     self.reset(DEFAULT_SYNTH_MODE);
                 }
                 _ => {}

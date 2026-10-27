@@ -128,9 +128,8 @@ impl SpessaSynthSequencer {
             }
 
             midi_message_types::RESET => {
-                self.synth.stop_all_channels(false);
-                self.synth
-                    .reset();
+                // 4.4.0 dropped the separate stopAllChannels(); reset() stops all notes itself.
+                self.synth.reset();
             }
 
             // Recognized but ignored
