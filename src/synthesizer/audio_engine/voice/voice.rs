@@ -1,6 +1,5 @@
-/// voice.rs
-/// purpose: prepares Voices from sample and generator data
-/// Ported from: src/synthesizer/audio_engine/engine_components/voice.ts
+//! Prepares Voices from sample and generator data.
+//! Ported from: src/synthesizer/audio_engine/voice/voice.ts
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 use crate::soundbank::basic_soundbank::generator_types::GENERATORS_AMOUNT;
 use crate::soundbank::basic_soundbank::modulator::DecodedModulator;
@@ -79,10 +78,6 @@ pub struct Voice {
     /// Equivalent to: volEnv: VolumeEnvelope
     pub vol_env: VolumeEnvelope,
 
-    /// Per-voice render buffer; reused each frame to avoid allocation.
-    /// Equivalent to: buffer: Float32Array(128)
-    pub buffer: Vec<f32>,
-
     /// Current resonance offset from the default resonant modulator.
     /// Equivalent to: resonanceOffset
     pub resonance_offset: f64,
@@ -133,10 +128,12 @@ pub struct Voice {
     pub target_key: i16,
 
     /// Polyphonic key pressure (0–127).
-    /// Equivalent to: pressure
+    /// TS 4.4.0 removed this field: modulators read `channel.polyPressures[voice.midiNote]`.
+    /// Rust keeps a per-voice copy that is kept in sync with the channel array
+    /// (set in note_on, updated by poly_pressure), which reads the same value.
     pub pressure: u8,
 
-    /// Linear gain modifier (set by Key Modifiers).
+    /// Linear gain of the voice.
     /// Equivalent to: gainModifier
     pub gain_modifier: f64,
 
@@ -184,17 +181,28 @@ pub struct Voice {
     /// Equivalent to: overrideReleaseVolEnv
     pub override_release_vol_env: i32,
 
-    /// Reverb send multiplier (default 1.0, used by drum parameters).
-    pub reverb_send: f64,
+    /// Reverb gain of the voice, used for drum parts, otherwise 1.
+    /// Equivalent to: reverbGain
+    pub reverb_gain: f64,
 
-    /// Chorus send multiplier (default 1.0, used by drum parameters).
-    pub chorus_send: f64,
+    /// Chorus gain of the voice, used for drum parts, otherwise 1.
+    /// Equivalent to: chorusGain
+    pub chorus_gain: f64,
 
-    /// Delay send multiplier (default 1.0, used by drum parameters).
-    pub delay_send: f64,
+    /// Delay/variation gain of the voice, used for drum parts, otherwise 1.
+    /// Equivalent to: variationGain
+    pub variation_gain: f64,
 
     /// Pitch offset in cents (used by drum parameters).
     pub pitch_offset: f64,
+
+    /// Start time of the vibrato LFO (set in note_on).
+    /// Equivalent to: vibLfoStartTime
+    pub vib_lfo_start_time: f64,
+
+    /// Start time of the modulation LFO (set in note_on).
+    /// Equivalent to: modLfoStartTime
+    pub mod_lfo_start_time: f64,
 
     /// Current phase (0..1) of the vibrato LFO triangle wave.
     /// Equivalent to: vibLfoPhase
@@ -232,7 +240,6 @@ impl Voice {
             modulator_values: Vec::new(),
             mod_env: ModulationEnvelope::new(),
             vol_env: VolumeEnvelope::new(sample_rate),
-            buffer: vec![0.0; 128],
             resonance_offset: 0.0,
             priority: 0,
             is_active: false,
@@ -257,10 +264,12 @@ impl Voice {
             override_pan: 0.0,
             exclusive_class: 0,
             override_release_vol_env: 0,
-            reverb_send: 1.0,
-            chorus_send: 1.0,
-            delay_send: 1.0,
+            reverb_gain: 1.0,
+            chorus_gain: 1.0,
+            variation_gain: 1.0,
             pitch_offset: 0.0,
+            vib_lfo_start_time: 0.0,
+            mod_lfo_start_time: 0.0,
             vib_lfo_phase: 0.0,
             mod_lfo_phase: 0.0,
             note_id: 0,
@@ -539,18 +548,6 @@ mod tests {
     fn test_new_modulated_generators_are_zero() {
         let v = Voice::new(SAMPLE_RATE);
         assert!(v.modulated_generators.iter().all(|&x| x == 0));
-    }
-
-    #[test]
-    fn test_new_buffer_length_128() {
-        let v = Voice::new(SAMPLE_RATE);
-        assert_eq!(v.buffer.len(), 128);
-    }
-
-    #[test]
-    fn test_new_buffer_all_zeros() {
-        let v = Voice::new(SAMPLE_RATE);
-        assert!(v.buffer.iter().all(|&x| x == 0.0));
     }
 
     #[test]

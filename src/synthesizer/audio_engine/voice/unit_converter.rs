@@ -1,6 +1,9 @@
-/// unit_converter.rs
-/// purpose: Converts SoundFont units to usable values using lookup tables for performance.
-/// Ported from: src/synthesizer/audio_engine/engine_components/unit_converter.ts
+//! Converts sound bank units into more usable values, using lookup tables to improve performance.
+//! Ported from: src/synthesizer/audio_engine/voice/unit_converter.ts
+//!
+//! The tables are Float32Array in TS, so a table hit is an f32 widened to f64, while the
+//! out-of-table fallbacks are full f64 `Math.pow` results. All functions return f64 so
+//! that the fallback keeps its precision.
 use std::sync::LazyLock;
 
 // ---------------------------------------------------------------------------
@@ -23,18 +26,15 @@ static TIMECENT_LOOKUP_TABLE: LazyLock<Vec<f32>> = LazyLock::new(|| {
 
 /// Converts timecents to seconds.
 /// Equivalent to: timecentsToSeconds
-pub fn timecents_to_seconds(timecents: i32) -> f32 {
+pub fn timecents_to_seconds(timecents: i32) -> f64 {
     if timecents <= -32_767 {
         return 0.0;
     }
     if timecents < MIN_TIMECENT || timecents > MAX_TIMECENT {
-        // Match TS behavior: the TS timecentsToSeconds function does NOT have a range
-        // check before the lookup table access. In JavaScript, Float32Array[negativeIndex]
-        // returns undefined, which becomes NaN in arithmetic. This affects envelope timing
-        // when generators have extreme values (e.g., attackModEnv = -25148).
-        return f32::NAN;
+        // Key scaling can push the value outside the table
+        return 2f64.powf(timecents as f64 / 1200.0);
     }
-    TIMECENT_LOOKUP_TABLE[(timecents - MIN_TIMECENT) as usize]
+    TIMECENT_LOOKUP_TABLE[(timecents - MIN_TIMECENT) as usize] as f64
 }
 
 // ---------------------------------------------------------------------------
@@ -57,11 +57,11 @@ static ABSOLUTE_CENT_LOOKUP_TABLE: LazyLock<Vec<f32>> = LazyLock::new(|| {
 
 /// Converts absolute cents to frequency in Hz.
 /// Equivalent to: absCentsToHz
-pub fn abs_cents_to_hz(cents: i32) -> f32 {
+pub fn abs_cents_to_hz(cents: i32) -> f64 {
     if !(MIN_ABS_CENT..=MAX_ABS_CENT).contains(&cents) {
-        return (440.0f64 * 2f64.powf((cents as f64 - 6900.0) / 1200.0)) as f32;
+        return 440.0f64 * 2f64.powf((cents as f64 - 6900.0) / 1200.0);
     }
-    ABSOLUTE_CENT_LOOKUP_TABLE[(cents - MIN_ABS_CENT) as usize]
+    ABSOLUTE_CENT_LOOKUP_TABLE[(cents - MIN_ABS_CENT) as usize] as f64
 }
 
 // ---------------------------------------------------------------------------
@@ -82,41 +82,38 @@ static CENTIBEL_LOOKUP_TABLE: LazyLock<Vec<f32>> = LazyLock::new(|| {
     table
 });
 
-/// Converts centibel attenuation to linear gain (integer index version).
+/// Converts centibel attenuation to linear gain (integer argument).
 /// Equivalent to: cbAttenuationToGain when called with an integer argument.
-pub fn cb_attenuation_to_gain(centibels: i32) -> f32 {
-    if centibels < MIN_CENTIBELS || centibels > MAX_CENTIBELS {
-        return 10f64.powf(-centibels as f64 / 200.0) as f32;
-    }
-    CENTIBEL_LOOKUP_TABLE[(centibels - MIN_CENTIBELS) as usize]
+pub fn cb_attenuation_to_gain(centibels: i32) -> f64 {
+    cb_attenuation_to_gain_f64(centibels as f64)
 }
 
-/// Converts centibel attenuation to linear gain (f64 version).
+/// Converts centibel attenuation to linear gain.
 ///
-/// Matches the TS behavior exactly: `centibelLookUpTable[(centibels - MIN_CENTIBELS) | 0]`
-/// where `centibels` is a JS number (f64). The `| 0` operator in JS truncates the
-/// f64 result of `centibels - MIN_CENTIBELS` toward zero to an integer index.
-///
-/// This is different from first converting centibels to i32 then subtracting MIN_CENTIBELS,
-/// because the subtraction in f64 can yield a fractional value that truncates differently
-/// (e.g., `-11.27 - (-16600)` = `16588.73`, truncated to `16588`,
-///  vs. `-11 - (-16600)` = `16589`).
-pub fn cb_attenuation_to_gain_f64(centibels: f64) -> f32 {
-    let index_f64 = centibels - MIN_CENTIBELS as f64;
-    let index = index_f64 as i32; // Rust `as i32` truncates toward zero, same as JS `| 0`
-    if index < 0 || index > (MAX_CENTIBELS - MIN_CENTIBELS) {
-        return 10f64.powf(-centibels / 200.0) as f32;
+/// `centibels` is a JS number, so the table index is `(centibels - MIN_CENTIBELS) | 0`:
+/// the subtraction happens in f64 and is then truncated, which is not the same as
+/// truncating `centibels` first (`-11.27 - (-16600)` = `16588.73` → `16588`,
+/// vs. `-11 - (-16600)` = `16589`).
+/// Equivalent to: cbAttenuationToGain
+pub fn cb_attenuation_to_gain_f64(centibels: f64) -> f64 {
+    if centibels >= MIN_CENTIBELS as f64 && centibels <= MAX_CENTIBELS as f64 {
+        return CENTIBEL_LOOKUP_TABLE[(centibels - MIN_CENTIBELS as f64) as i32 as usize] as f64;
     }
-    CENTIBEL_LOOKUP_TABLE[index as usize]
+    // Clamp to the table, NaN is treated as silence
+    if centibels < MIN_CENTIBELS as f64 {
+        CENTIBEL_LOOKUP_TABLE[0] as f64
+    } else {
+        0.0
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const EPS: f32 = 1e-4;
+    const EPS: f64 = 1e-4;
 
-    fn approx_eq(a: f32, b: f32) -> bool {
+    fn approx_eq(a: f64, b: f64) -> bool {
         (a - b).abs() < EPS
     }
 
@@ -168,12 +165,18 @@ mod tests {
     }
 
     #[test]
-    fn test_timecents_out_of_range_returns_nan() {
-        // Match TS behavior: out-of-range values (between -32766 and -15001, or > 15000)
-        // return NaN (TS: Float32Array[negativeIndex] → undefined → NaN)
-        assert!(timecents_to_seconds(-25148).is_nan());
-        assert!(timecents_to_seconds(-15001).is_nan());
-        assert!(timecents_to_seconds(15001).is_nan());
+    fn test_timecents_out_of_range_uses_pow() {
+        // 4.4.0: key scaling can push the value outside the table, computed directly.
+        assert_eq!(timecents_to_seconds(-15_001), 2f64.powf(-15_001.0 / 1200.0));
+        assert_eq!(timecents_to_seconds(15_001), 2f64.powf(15_001.0 / 1200.0));
+    }
+
+    #[test]
+    fn test_cb_out_of_range_clamps() {
+        // Below the table: the first entry. Above it (and NaN): silence.
+        assert_eq!(cb_attenuation_to_gain(-20_000), cb_attenuation_to_gain(-16_600));
+        assert_eq!(cb_attenuation_to_gain(20_000), 0.0);
+        assert_eq!(cb_attenuation_to_gain_f64(f64::NAN), 0.0);
     }
 
     #[test]
@@ -208,14 +211,14 @@ mod tests {
     #[test]
     fn test_abs_cents_out_of_range_high() {
         // Above MAX_ABS_CENT falls back to direct calculation
-        let direct = (440.0f64 * 2f64.powf((20_000.0 - 6900.0) / 1200.0)) as f32;
+        let direct = 440.0f64 * 2f64.powf((20_000.0 - 6900.0) / 1200.0);
         assert!(approx_eq(abs_cents_to_hz(20_000), direct));
     }
 
     #[test]
     fn test_abs_cents_out_of_range_low() {
         // Below MIN_ABS_CENT falls back to direct calculation
-        let direct = (440.0f64 * 2f64.powf((-25_000.0 - 6900.0) / 1200.0)) as f32;
+        let direct = 440.0f64 * 2f64.powf((-25_000.0 - 6900.0) / 1200.0);
         assert!(approx_eq(abs_cents_to_hz(-25_000), direct));
     }
 
@@ -254,7 +257,7 @@ mod tests {
     #[test]
     fn test_cb_negative_boosts_gain() {
         // 10^(100/200) = 10^0.5 ≈ 3.162
-        let expected = 10f32.powf(100.0 / 200.0);
+        let expected = 10f64.powf(100.0 / 200.0);
         assert!(approx_eq(cb_attenuation_to_gain(-100), expected));
     }
 

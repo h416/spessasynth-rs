@@ -22,13 +22,8 @@
 ///   state) instead of `snapshot.*` — so chorus/delay/midi/system values are effectively
 ///   NOT restored from the snapshot (the system-parameter loop is a complete no-op thanks
 ///   to the equality early-return; the midi-parameter loop re-sets current values, firing
-///   events and legacy plumbing updates only). Only keyMappings, channels, reverb, and
-///   insertion are actually restored.
-///
-/// # Design note
-/// TypeScript `keyMappings: (KeyModifier | undefined)[][]` is stored in Rust as
-/// `HashMap<(channel, midi_note), KeyModifier>`, matching `KeyModifierManager`'s
-/// internal representation.
+///   events and legacy plumbing updates only). Only channels, reverb, and
+///   insertion are actually restored. (4.4.0 removed Key Modifiers and `keyMappings`.)
 ///
 /// TODO(Task 21, channel restructuring): `midi_channels` still uses the 4.2.0-shaped
 /// `ChannelSnapshot` (flat fields) until `channel_snapshot.rs` is restructured to the 4.3.0
@@ -37,10 +32,9 @@ use std::collections::HashMap;
 
 use crate::midi::midi_tools::midi_utils::MidiUtils;
 use crate::synthesizer::audio_engine::channel::channel_snapshot::ChannelSnapshot;
-use crate::synthesizer::audio_engine::effects::chorus::ChorusSnapshot;
-use crate::synthesizer::audio_engine::effects::delay::DelaySnapshot;
-use crate::synthesizer::audio_engine::effects::reverb::ReverbSnapshot;
-use crate::synthesizer::audio_engine::key_modifier_manager::KeyModifier;
+use crate::synthesizer::audio_engine::effects::gs::implementation::chorus::ChorusSnapshot;
+use crate::synthesizer::audio_engine::effects::gs::implementation::delay::DelaySnapshot;
+use crate::synthesizer::audio_engine::effects::gs::implementation::reverb::ReverbSnapshot;
 use crate::synthesizer::audio_engine::parameters::midi::GlobalMIDIParameter;
 use crate::synthesizer::audio_engine::parameters::system::GlobalSystemParameter;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
@@ -70,9 +64,6 @@ pub struct SynthesizerSnapshot {
     /// Equivalent to: midiChannels: ChannelSnapshot[]
     pub midi_channels: Vec<ChannelSnapshot>,
 
-    /// Key modifiers.
-    /// Equivalent to: keyMappings: (KeyModifier | undefined)[][]
-    pub key_mappings: HashMap<(u8, u8), KeyModifier>,
 
     /// Equivalent to: systemParameters: GlobalSystemParameter
     pub system_parameters: GlobalSystemParameter,
@@ -96,10 +87,6 @@ pub struct SynthesizerSnapshot {
 /// Applies the snapshot to the synthesizer.
 /// Equivalent to: applySnapshot(this: SynthesizerCore, snapshot)
 pub fn apply_snapshot(core: &mut SynthesizerCore, snapshot: &SynthesizerSnapshot) {
-    // Restore key modifiers
-    core.key_modifier_manager
-        .set_mappings(snapshot.key_mappings.clone());
-
     // Add channels if more needed
     while core.midi_channels.len() < snapshot.midi_channels.len() {
         core.create_midi_channel(true);
@@ -187,7 +174,6 @@ pub fn get_synthesizer_snapshot(core: &SynthesizerCore) -> SynthesizerSnapshot {
         midi_channels: (0..core.midi_channels.len())
             .map(|i| ChannelSnapshot::create(core, i))
             .collect(),
-        key_mappings: core.key_modifier_manager.get_mappings().clone(),
         reverb_processor: core.reverb_processor.get_snapshot(),
         chorus_processor: core.chorus_processor.get_snapshot(),
         delay_processor: core.delay_processor.get_snapshot(),
@@ -198,8 +184,7 @@ pub fn get_synthesizer_snapshot(core: &SynthesizerCore) -> SynthesizerSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::synthesizer::audio_engine::key_modifier_manager::KeyModifier;
-    use crate::synthesizer::audio_engine::parameters::system::GlobalSystemParameterChange;
+        use crate::synthesizer::audio_engine::parameters::system::GlobalSystemParameterChange;
     use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
     use crate::synthesizer::types::{SynthProcessorEvent, SynthProcessorOptions};
     use std::sync::{Arc, Mutex};
@@ -284,22 +269,6 @@ mod tests {
     }
 
     #[test]
-    fn test_create_captures_empty_key_mappings() {
-        let (core, _) = make_core();
-        let snap = get_synthesizer_snapshot(&core);
-        assert!(snap.key_mappings.is_empty());
-    }
-
-    #[test]
-    fn test_create_captures_key_mappings_with_entry() {
-        let (mut core, _) = make_core();
-        core.key_modifier_manager
-            .add_mapping(0, 60, KeyModifier::default());
-        let snap = get_synthesizer_snapshot(&core);
-        assert!(snap.key_mappings.contains_key(&(0, 60)));
-    }
-
-    #[test]
     fn test_create_captures_insertion_snapshot_shape() {
         let (core, _) = make_core_with_channels(4);
         let snap = get_synthesizer_snapshot(&core);
@@ -321,28 +290,6 @@ mod tests {
     // -----------------------------------------------------------------------
     // apply_snapshot — writes back to SynthesizerCore
     // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_apply_restores_key_mappings() {
-        let (mut core, _) = make_core();
-        let mut snap = get_synthesizer_snapshot(&core);
-        snap.key_mappings.insert((2, 48), KeyModifier::default());
-        apply_snapshot(&mut core, &snap);
-        assert!(core.key_modifier_manager.get_mappings().contains_key(&(2, 48)));
-    }
-
-    #[test]
-    fn test_apply_clears_existing_key_mappings() {
-        let (mut core, _) = make_core();
-        core.key_modifier_manager
-            .add_mapping(0, 60, KeyModifier::default());
-
-        // Snapshot has empty key mappings → existing should be cleared
-        let (core2, _) = make_core();
-        let snap = get_synthesizer_snapshot(&core2);
-        apply_snapshot(&mut core, &snap);
-        assert!(core.key_modifier_manager.get_mappings().is_empty());
-    }
 
     #[test]
     fn test_apply_adds_missing_channels() {
@@ -447,8 +394,6 @@ mod tests {
         let snap = get_synthesizer_snapshot(&core);
         let mut copy = snap.clone();
         copy.system_parameters.gain = 0.123;
-        copy.key_mappings.insert((1, 64), KeyModifier::default());
         assert!((snap.system_parameters.gain - 1.0).abs() < 1e-9);
-        assert!(!snap.key_mappings.contains_key(&(1, 64)));
     }
 }

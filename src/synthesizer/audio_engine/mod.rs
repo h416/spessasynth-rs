@@ -1,6 +1,5 @@
 pub mod channel;
 pub mod effects;
-pub mod key_modifier_manager;
 pub mod parameters;
 pub mod sound_bank_manager;
 pub mod synth_constants;

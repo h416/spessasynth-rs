@@ -110,17 +110,17 @@ pub fn apply_snapshot_internal(midi: &mut BasicMidi, snapshot: &SynthesizerSnaps
     // TS 4.3.0: locked GS effect parameters are baked into the sequence when their
     // corresponding `*Lock` system parameter is set.
     let sys = &snapshot.system_parameters;
-    let reverb_params = if sys.reverb_lock {
+    let reverb_params = if sys.gs_reverb_lock {
         Some(ClearableParameter::Value(snapshot.reverb_processor.clone()))
     } else {
         None
     };
-    let chorus_params = if sys.chorus_lock {
+    let chorus_params = if sys.gs_chorus_lock {
         Some(ClearableParameter::Value(snapshot.chorus_processor.clone()))
     } else {
         None
     };
-    let delay_params = if sys.delay_lock {
+    let delay_params = if sys.gs_delay_lock {
         Some(ClearableParameter::Value(snapshot.delay_processor.clone()))
     } else {
         None

@@ -1,6 +1,6 @@
 use std::f64::consts::PI;
 
-use super::delay_line::DelayLine;
+use crate::synthesizer::audio_engine::effects::implementation::delay_line::DelayLine;
 
 const DELAY_GAIN: f64 = 1.66;
 

@@ -13,8 +13,9 @@ use crate::soundbank::basic_soundbank::generator_types::{
 };
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::soundbank::enums::modulator_sources;
-use crate::synthesizer::audio_engine::channel::drum_parameters::DrumParameters;
+use crate::midi::drum_parameters::{DEFAULT_DRUM_REVERB, DrumParameter, DrumParameterUtils};
 use crate::synthesizer::audio_engine::channel::dynamic_modulator_system::DynamicModulatorSystem;
+use crate::synthesizer::audio_engine::channel::render_voice::VoiceSendBuffer;
 use crate::synthesizer::audio_engine::channel::parameters::midi::{
     CONTROLLER_TABLE_SIZE, CUSTOM_CONTROLLER_TABLE_SIZE, CUSTOM_RESET_ARRAY,
     ChannelMidiParameter, ChannelMidiParameterValue, DEFAULT_CHANNEL_MIDI_PARAMETERS,
@@ -95,7 +96,7 @@ pub struct MidiChannel {
     pub drum_channel: bool,
 
     /// Per-drum-note parameters (128 entries, one per MIDI note).
-    pub drum_params: Vec<DrumParameters>,
+    pub drum_params: Vec<DrumParameter>,
 
     /// All MIDI parameters of this channel (state driven by MIDI/SysEx).
     /// Source of truth for values such as `poly_mode` and `random_pan`.
@@ -184,6 +185,37 @@ pub struct MidiChannel {
     /// Current voice count for this channel.
     /// Equivalent to: voiceCount
     pub voice_count: u32,
+
+    /// If true, this skips sends as they all go through insertion.
+    /// Set by the processor.
+    /// Equivalent to: xgInsertionAssigned
+    pub xg_insertion_assigned: bool,
+
+    /// Current left PCM output of this channel. Will be routed to either EFX or EQ if needed.
+    /// Always 0-based index.
+    /// Double precision (Float64Array), as voices accumulate into it.
+    /// Sized to the processor's max buffer size when the channel is created.
+    /// Equivalent to: outputLeft
+    pub output_left: Vec<f64>,
+
+    /// Current right PCM output of this channel. See `output_left`.
+    /// Equivalent to: outputRight
+    pub output_right: Vec<f64>,
+
+    /// If the output buffers may contain audio.
+    /// If not, clearing and mixing them can be skipped.
+    /// Set by the processor.
+    /// Equivalent to: outputDirty
+    pub output_dirty: bool,
+
+    /// The voice send buffers of this channel.
+    /// Used for grouping sends for better performance.
+    /// Equivalent to: voiceSendBuffers
+    pub voice_send_buffers: Vec<VoiceSendBuffer>,
+
+    /// The number of voice send buffers used in the current rendering block.
+    /// Equivalent to: voiceSendBufferCount
+    pub voice_send_buffer_count: usize,
 
     /// This channel's 0-based index.
     /// Equivalent to: channel: number
@@ -298,6 +330,12 @@ impl MidiChannel {
             lock_gs_nrpn_params: false,
             channel_vibrato: ChannelVibrato::default(),
             voice_count: 0,
+            xg_insertion_assigned: false,
+            output_left: Vec::new(),
+            output_right: Vec::new(),
+            output_dirty: true,
+            voice_send_buffers: Vec::new(),
+            voice_send_buffer_count: 0,
             channel,
             per_note_pitch: false,
             channel_tuning_cents: 0.0,
@@ -305,7 +343,7 @@ impl MidiChannel {
             generator_offsets_enabled: false,
             generator_overrides,
             generator_overrides_enabled: false,
-            drum_params: (0..128).map(|_| DrumParameters::default()).collect(),
+            drum_params: (0..128).map(DrumParameterUtils::default_data).collect(),
             is_muted: false,
             previous_voice_count: 0,
             insertion_enabled: false,
@@ -636,6 +674,24 @@ impl MidiChannel {
         self.channel_vibrato.depth = 0.0;
     }
 
+    /// Resets the drum parameters of a drum channel to the defaults.
+    /// Mirrors reverb as the chorus and variation send on XG only (GS has none by default).
+    /// `drum_lock` is `systemParameters.drumLock`.
+    /// Equivalent to: resetDrumParams()
+    pub fn reset_drum_params(&mut self, drum_lock: bool, current_system: MIDISystem) {
+        if drum_lock || !self.drum_channel {
+            return;
+        }
+        let is_xg = self.channel_system(current_system) == MIDISystem::Xg;
+        for index in 0..128 {
+            let p = &mut self.drum_params[index];
+            DrumParameterUtils::copy_into(&DrumParameterUtils::default_data(index), p);
+            // Mirror reverb on XG only, GS has no chorus by default
+            p.chorus_send = if is_xg { DEFAULT_DRUM_REVERB[index] } else { 0 };
+            p.variation_send = if is_xg { DEFAULT_DRUM_REVERB[index] } else { 0 };
+        }
+    }
+
     /// Resets all generator overrides to the "no override" sentinel value.
     /// Equivalent to: resetGeneratorOverrides()
     pub fn reset_generator_overrides(&mut self) {
@@ -889,6 +945,7 @@ impl MidiChannel {
         is_drum: bool,
         sound_bank_manager: &crate::synthesizer::audio_engine::sound_bank_manager::SoundBankManager,
         current_system: MIDISystem,
+        drum_lock: bool,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
         let ch_system = self.channel_system(current_system);
@@ -907,7 +964,7 @@ impl MidiChannel {
         }
         self.set_drum_flag(is_drum);
         let program = self.patch.program;
-        self.program_change(program, sound_bank_manager, current_system, enable_event_system)
+        self.program_change(program, sound_bank_manager, current_system, drum_lock, enable_event_system)
     }
 
     // -----------------------------------------------------------------------

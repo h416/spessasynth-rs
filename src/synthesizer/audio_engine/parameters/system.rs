@@ -51,21 +51,33 @@ pub struct GlobalSystemParameter {
     pub auto_allocate_voices: bool,
     /// The reverb effect gain. From 0 to any number. 1 is 100% reverb.
     pub reverb_gain: f64,
-    /// If the synthesizer should prevent editing of the reverb parameters.
-    pub reverb_lock: bool,
+    /// If the synthesizer should prevent editing of the GS reverb parameters.
+    pub gs_reverb_lock: bool,
+    /// If the synthesizer should prevent editing of the XG reverb block.
+    pub xg_reverb_lock: bool,
     /// The chorus effect gain. From 0 to any number. 1 is 100% chorus.
     pub chorus_gain: f64,
-    /// If the synthesizer should prevent editing of the chorus parameters.
-    pub chorus_lock: bool,
-    /// The delay effect gain. From 0 to any number. 1 is 100% delay.
-    pub delay_gain: f64,
-    /// If the synthesizer should prevent editing of the delay parameters.
-    pub delay_lock: bool,
-    /// If the synthesizer should prevent changing the insertion effect type and parameters
+    /// If the synthesizer should prevent editing of the GS chorus parameters.
+    pub gs_chorus_lock: bool,
+    /// If the synthesizer should prevent editing of the XG chorus block.
+    pub xg_chorus_lock: bool,
+    /// The GS delay effect gain. From 0 to any number. 1 is 100% delay.
+    pub gs_delay_gain: f64,
+    /// If the synthesizer should prevent editing of the GS delay parameters.
+    pub gs_delay_lock: bool,
+    /// The XG variation gain when in system mode.
+    pub xg_variation_gain: f64,
+    /// If the synthesizer should prevent editing of the XG variation block.
+    pub xg_variation_lock: bool,
+    /// If the synthesizer should prevent changing the GS insertion effect type and parameters
     /// (including enabling/disabling it on channels).
-    pub insertion_effect_lock: bool,
+    pub gs_insertion_lock: bool,
+    /// If the synthesizer should prevent editing of _ALL_ the XG insertion (EFFECT 2) blocks.
+    pub xg_insertion_lock: bool,
     /// If the synthesizer should prevent editing of the drum parameters.
     pub drum_lock: bool,
+    /// If the synthesizer should prevent editing of the GS user drum sets.
+    pub user_drum_lock: bool,
     /// Forces note killing instead of releasing. Improves performance in black MIDIs.
     pub black_midi_mode: bool,
     /// Synthesizer's device ID for system exclusive messages. Set to -1 to accept all.
@@ -88,6 +100,9 @@ pub struct GlobalSystemParameter {
     /// This emulates the behavior of Microsoft GS Wavetable Synth,
     /// where a new note will kill the previous one if it is still playing.
     pub monophonic_retrigger: bool,
+    /// If the synthesizer should use the custom vibrato implementation.
+    /// Disabled by default to avoid altering songs that don't expect it.
+    pub custom_vibrato: bool,
 }
 
 /// Equivalent to: DEFAULT_GLOBAL_SYSTEM_PARAMETERS
@@ -99,16 +114,24 @@ pub const DEFAULT_GLOBAL_SYSTEM_PARAMETERS: GlobalSystemParameter = GlobalSystem
     auto_allocate_voices: false,
 
     reverb_gain: 1.0,
-    reverb_lock: false,
+    gs_reverb_lock: false,
+    xg_reverb_lock: false,
 
     chorus_gain: 1.0,
-    chorus_lock: false,
+    gs_chorus_lock: false,
+    xg_chorus_lock: false,
 
-    delay_gain: 1.0,
-    delay_lock: false,
+    gs_delay_gain: 1.0,
+    gs_delay_lock: false,
 
-    insertion_effect_lock: false,
+    xg_variation_gain: 1.0,
+    xg_variation_lock: false,
+
+    gs_insertion_lock: false,
+    xg_insertion_lock: false,
+
     drum_lock: false,
+    user_drum_lock: false,
 
     black_midi_mode: false,
     device_id: -1,
@@ -122,6 +145,7 @@ pub const DEFAULT_GLOBAL_SYSTEM_PARAMETERS: GlobalSystemParameter = GlobalSystem
     interpolation_type: interpolation_types::HERMITE,
     nrpn_param_lock: false,
     monophonic_retrigger: false,
+    custom_vibrato: false,
 };
 
 impl Default for GlobalSystemParameter {
@@ -140,13 +164,19 @@ pub enum GlobalSystemParameterChange {
     VoiceCap(u32),
     AutoAllocateVoices(bool),
     ReverbGain(f64),
-    ReverbLock(bool),
+    GsReverbLock(bool),
+    XgReverbLock(bool),
     ChorusGain(f64),
-    ChorusLock(bool),
-    DelayGain(f64),
-    DelayLock(bool),
-    InsertionEffectLock(bool),
+    GsChorusLock(bool),
+    XgChorusLock(bool),
+    GsDelayGain(f64),
+    GsDelayLock(bool),
+    XgVariationGain(f64),
+    XgVariationLock(bool),
+    GsInsertionLock(bool),
+    XgInsertionLock(bool),
     DrumLock(bool),
+    UserDrumLock(bool),
     BlackMidiMode(bool),
     DeviceId(i32),
     Gain(f64),
@@ -156,6 +186,7 @@ pub enum GlobalSystemParameterChange {
     InterpolationType(InterpolationType),
     NrpnParamLock(bool),
     MonophonicRetrigger(bool),
+    CustomVibrato(bool),
 }
 
 impl SynthesizerCore {
@@ -177,13 +208,19 @@ impl SynthesizerCore {
             C::EventsEnabled(v) => set_or_return!(events_enabled, v),
             C::AutoAllocateVoices(v) => set_or_return!(auto_allocate_voices, v),
             C::ReverbGain(v) => set_or_return!(reverb_gain, v),
-            C::ReverbLock(v) => set_or_return!(reverb_lock, v),
+            C::GsReverbLock(v) => set_or_return!(gs_reverb_lock, v),
+            C::XgReverbLock(v) => set_or_return!(xg_reverb_lock, v),
             C::ChorusGain(v) => set_or_return!(chorus_gain, v),
-            C::ChorusLock(v) => set_or_return!(chorus_lock, v),
-            C::DelayGain(v) => set_or_return!(delay_gain, v),
-            C::DelayLock(v) => set_or_return!(delay_lock, v),
-            C::InsertionEffectLock(v) => set_or_return!(insertion_effect_lock, v),
+            C::GsChorusLock(v) => set_or_return!(gs_chorus_lock, v),
+            C::XgChorusLock(v) => set_or_return!(xg_chorus_lock, v),
+            C::GsDelayGain(v) => set_or_return!(gs_delay_gain, v),
+            C::GsDelayLock(v) => set_or_return!(gs_delay_lock, v),
+            C::XgVariationGain(v) => set_or_return!(xg_variation_gain, v),
+            C::XgVariationLock(v) => set_or_return!(xg_variation_lock, v),
+            C::GsInsertionLock(v) => set_or_return!(gs_insertion_lock, v),
+            C::XgInsertionLock(v) => set_or_return!(xg_insertion_lock, v),
             C::DrumLock(v) => set_or_return!(drum_lock, v),
+            C::UserDrumLock(v) => set_or_return!(user_drum_lock, v),
             C::BlackMidiMode(v) => set_or_return!(black_midi_mode, v),
             C::DeviceId(v) => set_or_return!(device_id, v),
             C::Gain(v) => set_or_return!(gain, v),
@@ -191,6 +228,7 @@ impl SynthesizerCore {
             C::InterpolationType(v) => set_or_return!(interpolation_type, v),
             C::NrpnParamLock(v) => set_or_return!(nrpn_param_lock, v),
             C::MonophonicRetrigger(v) => set_or_return!(monophonic_retrigger, v),
+            C::CustomVibrato(v) => set_or_return!(custom_vibrato, v),
 
             C::Pan(v) => {
                 set_or_return!(pan, v);
@@ -300,11 +338,17 @@ mod tests {
     #[test]
     fn test_default_locks_are_false() {
         let d = &DEFAULT_GLOBAL_SYSTEM_PARAMETERS;
-        assert!(!d.reverb_lock);
-        assert!(!d.chorus_lock);
-        assert!(!d.delay_lock);
-        assert!(!d.insertion_effect_lock);
+        assert!(!d.gs_reverb_lock);
+        assert!(!d.xg_reverb_lock);
+        assert!(!d.gs_chorus_lock);
+        assert!(!d.xg_chorus_lock);
+        assert!(!d.gs_delay_lock);
+        assert!(!d.xg_variation_lock);
+        assert!(!d.gs_insertion_lock);
+        assert!(!d.xg_insertion_lock);
         assert!(!d.drum_lock);
+        assert!(!d.user_drum_lock);
+        assert!(!d.custom_vibrato);
         assert!(!d.nrpn_param_lock);
     }
 
@@ -318,7 +362,8 @@ mod tests {
         let d = &DEFAULT_GLOBAL_SYSTEM_PARAMETERS;
         assert!((d.reverb_gain - 1.0).abs() < f64::EPSILON);
         assert!((d.chorus_gain - 1.0).abs() < f64::EPSILON);
-        assert!((d.delay_gain - 1.0).abs() < f64::EPSILON);
+        assert!((d.gs_delay_gain - 1.0).abs() < f64::EPSILON);
+        assert!((d.xg_variation_gain - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -418,12 +463,12 @@ mod tests {
     #[test]
     fn test_set_locks() {
         let (mut core, _) = make_core();
-        core.set_system_parameter(GlobalSystemParameterChange::ReverbLock(true));
+        core.set_system_parameter(GlobalSystemParameterChange::GsReverbLock(true));
         core.set_system_parameter(GlobalSystemParameterChange::DrumLock(true));
-        core.set_system_parameter(GlobalSystemParameterChange::InsertionEffectLock(true));
-        assert!(core.system_parameters.reverb_lock);
+        core.set_system_parameter(GlobalSystemParameterChange::GsInsertionLock(true));
+        assert!(core.system_parameters.gs_reverb_lock);
         assert!(core.system_parameters.drum_lock);
-        assert!(core.system_parameters.insertion_effect_lock);
+        assert!(core.system_parameters.gs_insertion_lock);
     }
 
     #[test]

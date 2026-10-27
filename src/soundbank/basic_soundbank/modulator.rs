@@ -470,6 +470,7 @@ fn generator_type_name(gt: GeneratorType) -> String {
         generator_types::VIB_LFO_RATE => "vibLfoRate".to_string(),
         generator_types::VIB_LFO_AMPLITUDE_DEPTH => "vibLfoAmplitudeDepth".to_string(),
         generator_types::VIB_LFO_TO_FILTER_FC => "vibLfoToFilterFc".to_string(),
+        generator_types::VIB_LFO_TO_VOLUME => "vibLfoToVolume".to_string(),
         generator_types::MOD_LFO_RATE => "modLfoRate".to_string(),
         generator_types::MOD_LFO_AMPLITUDE_DEPTH => "modLfoAmplitudeDepth".to_string(),
         v => v.to_string(),

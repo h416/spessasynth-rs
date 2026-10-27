@@ -86,21 +86,23 @@ pub mod generator_types {
     pub const VIB_LFO_AMPLITUDE_DEPTH: i16 = 63;
     // Like modLfoToFilterFc
     pub const VIB_LFO_TO_FILTER_FC: i16 = 64;
+    // Like modLfoToVolume (new in 4.4.0, shifts the two below by one)
+    pub const VIB_LFO_TO_VOLUME: i16 = 65;
     // [-1000;1000] -> Hz/100
-    pub const MOD_LFO_RATE: i16 = 65;
+    pub const MOD_LFO_RATE: i16 = 66;
     // [0;1000] -> 1/10%
-    pub const MOD_LFO_AMPLITUDE_DEPTH: i16 = 66;
+    pub const MOD_LFO_AMPLITUDE_DEPTH: i16 = 67;
 }
 
 /// Equivalent to: GeneratorType
 pub type GeneratorType = i16;
 
 /// Maximum valid generator index.
-/// Equivalent to: MAX_GENERATOR = Math.max(...Object.values(GeneratorTypes)) = 66
-pub const MAX_GENERATOR: i16 = 66;
+/// Equivalent to: MAX_GENERATOR = Math.max(...Object.values(GeneratorTypes)) = 67
+pub const MAX_GENERATOR: i16 = 67;
 
 /// Total number of generator slots.
-/// Equivalent to: GENERATORS_AMOUNT = MAX_GENERATOR + 1 = 67
+/// Equivalent to: GENERATORS_AMOUNT = MAX_GENERATOR + 1 = 68
 pub const GENERATORS_AMOUNT: usize = MAX_GENERATOR as usize + 1;
 
 /// Min/max/default/nrpn-scale for a single generator.
@@ -133,7 +135,7 @@ const fn lim(min: i32, max: i32, def: i32, nrpn: u8) -> Option<GeneratorLimit> {
 /// Equivalent to: `[GeneratorTypes.invalid]: { min: 0, max: 0, def: 0, nrpn: 0 }`
 pub const INVALID_GENERATOR_LIMIT: GeneratorLimit = GeneratorLimit::new(0, 0, 0, 0);
 
-/// Generator limits indexed by generator index 0-66 (67 entries).
+/// Generator limits indexed by generator index 0-67 (68 entries).
 /// None means no limit is defined for that generator
 /// (indices removed from the TS 4.3.0 `GeneratorLimits` record: 14, 18-20, 42, 49, 55, 59).
 /// The `invalid` (-1) entry of the TS record is [`INVALID_GENERATOR_LIMIT`].
@@ -269,9 +271,11 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; GENERATORS_AMOUNT] = [
     lim(0, 1_000, 0, 1),
     // 64 vibLfoToFilterFc (NON-STANDARD)
     lim(-12_000, 12_000, 0, 2),
-    // 65 modLfoRate (NON-STANDARD)
+    // 65 vibLfoToVolume (NON-STANDARD)
+    lim(-960, 960, 0, 1),
+    // 66 modLfoRate (NON-STANDARD)
     lim(-1_000, 1_000, 0, 1),
-    // 66 modLfoAmplitudeDepth (NON-STANDARD)
+    // 67 modLfoAmplitudeDepth (NON-STANDARD)
     lim(0, 1_000, 0, 1),
 ];
 
@@ -287,7 +291,7 @@ const fn compute_default_values() -> [i16; GENERATORS_AMOUNT] {
     arr
 }
 
-/// Default generator values as a 67-element i16 array.
+/// Default generator values as a 68-element i16 array.
 /// Equivalent to: defaultGeneratorValues (Int16Array of size GENERATORS_AMOUNT;
 /// moved into basic_preset.ts as a module-private constant in TS 4.3.0)
 pub const DEFAULT_GENERATOR_VALUES: [i16; GENERATORS_AMOUNT] = compute_default_values();
@@ -346,24 +350,24 @@ mod tests {
 
     #[test]
     fn test_mod_lfo_rate() {
-        assert_eq!(gt::MOD_LFO_RATE, 65);
+        assert_eq!(gt::MOD_LFO_RATE, 66);
     }
 
     #[test]
     fn test_mod_lfo_amplitude_depth() {
-        assert_eq!(gt::MOD_LFO_AMPLITUDE_DEPTH, 66);
+        assert_eq!(gt::MOD_LFO_AMPLITUDE_DEPTH, 67);
     }
 
     // --- module-level constants ---
 
     #[test]
     fn test_generators_amount() {
-        assert_eq!(GENERATORS_AMOUNT, 67);
+        assert_eq!(GENERATORS_AMOUNT, 68);
     }
 
     #[test]
     fn test_max_generator() {
-        assert_eq!(MAX_GENERATOR, 66);
+        assert_eq!(MAX_GENERATOR, 67);
     }
 
     // --- GENERATOR_LIMITS ---
@@ -475,7 +479,7 @@ mod tests {
 
     #[test]
     fn test_limits_length() {
-        assert_eq!(GENERATOR_LIMITS.len(), 67);
+        assert_eq!(GENERATOR_LIMITS.len(), 68);
     }
 
     #[test]
@@ -532,6 +536,6 @@ mod tests {
 
     #[test]
     fn test_default_values_length() {
-        assert_eq!(DEFAULT_GENERATOR_VALUES.len(), 67);
+        assert_eq!(DEFAULT_GENERATOR_VALUES.len(), 68);
     }
 }

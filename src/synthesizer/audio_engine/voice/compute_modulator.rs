@@ -329,9 +329,13 @@ pub fn compute_modulators<C: ChannelContext, V: VoiceContext>(
                 // Equivalent to:
                 //   modulatedGenerators[destination] = Math.max(limits.min,
                 //       Math.min(outputValue, limits.max))
-                if let Some(Some(limit)) = GENERATOR_LIMITS.get(dest) {
-                    modulated_generators[dest] = output.max(limit.min).min(limit.max) as i16;
-                }
+                // Apply the limits instantly to prevent -32k overflow
+                // Testcase: gm.dls polysynth
+                modulated_generators[dest] = match GENERATOR_LIMITS.get(dest) {
+                    Some(Some(limit)) => output.min(limit.max).max(limit.min) as i16,
+                    // Unused generator, only prevent the overflow
+                    _ => output.min(32_767).max(-32_768) as i16,
+                };
             }
         }
     }

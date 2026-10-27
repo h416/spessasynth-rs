@@ -138,6 +138,7 @@ impl SynthesizerCore {
                         data,
                         &self.sound_bank_manager,
                         current_system,
+                        self.system_parameters.drum_lock,
                         enable_event_system,
                     );
                     for ev in evs {
@@ -185,6 +186,7 @@ impl SynthesizerCore {
                         drums,
                         &self.sound_bank_manager,
                         current_system,
+                        self.system_parameters.drum_lock,
                         enable_event_system,
                     );
                     for ev in evs {
@@ -443,6 +445,8 @@ impl SynthesizerCore {
 
         if a1 >> 4 == 3 {
             // Drum part setup
+            // TODO(4.4.1 yamaha.ts): drum setup number -> channel drum map filtering,
+            // variation send (0x07).
             if self.system_parameters.drum_lock {
                 return;
             }
@@ -450,12 +454,12 @@ impl SynthesizerCore {
             match a3 {
                 0x00 => {
                     // Drum pitch coarse
-                    let pitch = (data as f64 - 64.0) * 100.0;
+                    let pitch = data as f64 - 64.0;
                     for ch in self.midi_channels.iter_mut() {
                         if !ch.drum_channel {
                             continue;
                         }
-                        ch.drum_params[drum_key].pitch = pitch;
+                        ch.drum_params[drum_key].pitch_coarse = pitch;
                     }
                     spessa_synth_info(&format!(
                         "Drum Pitch for key {}: {} semitones",
@@ -470,7 +474,7 @@ impl SynthesizerCore {
                         if !ch.drum_channel {
                             continue;
                         }
-                        ch.drum_params[drum_key].pitch += pitch;
+                        ch.drum_params[drum_key].pitch_fine = pitch;
                     }
                     spessa_synth_info(&format!("Drum Pitch Fine for key {}: {}", drum_key, pitch));
                 }
@@ -481,7 +485,7 @@ impl SynthesizerCore {
                         if !ch.drum_channel {
                             continue;
                         }
-                        ch.drum_params[drum_key].gain = data as f64 / 120.0;
+                        ch.drum_params[drum_key].level = data;
                     }
                     spessa_synth_info(&format!("Drum Level for key {}: {}", drum_key, data));
                 }
@@ -492,7 +496,7 @@ impl SynthesizerCore {
                         if !ch.drum_channel {
                             continue;
                         }
-                        ch.drum_params[drum_key].exclusive_class = data;
+                        ch.drum_params[drum_key].assign_group = data;
                     }
                     spessa_synth_info(&format!(
                         "Drum Alternate Group for key {}: {}",
@@ -517,7 +521,7 @@ impl SynthesizerCore {
                         if !ch.drum_channel {
                             continue;
                         }
-                        ch.drum_params[drum_key].reverb_gain = data as f64 / 127.0;
+                        ch.drum_params[drum_key].reverb_send = data;
                     }
                     spessa_synth_info(&format!("Drum Reverb for key {}: {}", drum_key, data));
                 }
@@ -528,7 +532,7 @@ impl SynthesizerCore {
                         if !ch.drum_channel {
                             continue;
                         }
-                        ch.drum_params[drum_key].chorus_gain = data as f64 / 127.0;
+                        ch.drum_params[drum_key].chorus_send = data;
                     }
                     spessa_synth_info(&format!("Drum Chorus for key {}: {}", drum_key, data));
                 }

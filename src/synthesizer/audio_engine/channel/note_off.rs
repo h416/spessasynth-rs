@@ -1,6 +1,5 @@
-/// note_off.rs
-/// purpose: MIDI note-off handler for MidiChannel.
-/// Ported from: src/synthesizer/audio_engine/engine_methods/stopping_notes/note_off.ts
+//! MIDI note-off handler for MidiChannel.
+//! Ported from: src/synthesizer/audio_engine/channel/note_off.ts
 use crate::midi::enums::midi_controllers;
 use crate::synthesizer::audio_engine::synth_constants::MIN_NOTE_LENGTH;
 use crate::synthesizer::audio_engine::voice::voice::Voice;
@@ -35,18 +34,27 @@ impl MidiChannel {
             return (Vec::new(), None);
         }
 
+        // The key is released in both paths, so mono mode does not restore it
+        self.playing_notes[midi_note as usize] = false;
+
         let event = SynthProcessorEvent::NoteOff(NoteOffCallback {
             midi_note,
             channel: self.channel,
         });
 
-        // Black MIDI mode: kill the note immediately
-        if black_midi_mode && !self.drum_channel {
+        if
+        // If high performance mode, kill notes instead of stopping them
+        (black_midi_mode
+            // If the channel is percussion channel, do not kill the notes
+            && !self.drum_channel)
+            // If "receive note off" is enabled, kill the note (force quick release)
+            || (self.drum_channel && self.drum_params[midi_note as usize].rx_note_off)
+        {
+            // Instantly kill the note
             self.kill_note(midi_note, -12_000, voices, current_time);
             return (vec![event], None);
         }
 
-        self.playing_notes[midi_note as usize] = false;
         // Mono mode overrides sustain.
         let mono = !self.midi_parameters.poly_mode;
         let sustain =

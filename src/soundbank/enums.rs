@@ -219,11 +219,11 @@ mod tests {
 
     #[test]
     fn test_reexport_generators_amount() {
-        assert_eq!(GENERATORS_AMOUNT, 67);
+        assert_eq!(GENERATORS_AMOUNT, 68);
     }
 
     #[test]
     fn test_reexport_max_generator() {
-        assert_eq!(MAX_GENERATOR, 66);
+        assert_eq!(MAX_GENERATOR, 67);
     }
 }

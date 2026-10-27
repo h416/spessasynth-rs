@@ -22,6 +22,7 @@ impl MidiChannel {
         program: u8,
         sound_bank_manager: &SoundBankManager,
         current_system: MIDISystem,
+        drum_lock: bool,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
         if self.lock_preset {
@@ -50,6 +51,8 @@ impl MidiChannel {
         {
             events.push(ev);
         }
+
+        self.reset_drum_params(drum_lock, current_system);
 
         // Fire program change event
         let preset_ref = self.preset.as_ref().unwrap();

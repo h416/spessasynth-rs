@@ -217,6 +217,14 @@ impl MidiChannel {
                 self.portamento_force = true;
             }
 
+            midi_controllers::PAN => {
+                // Pan disables random pan
+                if self.midi_parameters.random_pan {
+                    self.set_midi_parameter(ChannelMidiParameterValue::RandomPan(false));
+                }
+                self.compute_modulators_all_impl(voices, 1, controller as usize);
+            }
+
             // Default: compute modulators for all active voices
             _ => {
                 self.compute_modulators_all_impl(voices, 1, controller as usize);

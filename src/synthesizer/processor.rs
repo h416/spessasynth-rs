@@ -115,6 +115,7 @@ impl SynthesizerCore {
             program,
             &self.sound_bank_manager,
             current_system,
+            self.system_parameters.drum_lock,
             events_enabled,
         );
         for ev in events {

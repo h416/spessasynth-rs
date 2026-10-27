@@ -199,35 +199,35 @@ impl MidiChannel {
                 events.append(&mut sub);
             }
 
-            // Drum pitch: it is actually 50 cents (not for XG, and not when the SC-55
-            // preset is explicitly requested via MAP1 / bank LSB 1, where it is 100 cents).
             // https://github.com/spessasus/spessasynth_core/pull/58#issuecomment-3893343073
+            // it's actually 50 cents! (not for XG though)
+            // also if SC-55 preset is explicitly requested (MAP1 - LSB 1), it's 100 cents as well!
             non_registered_msb::DRUM_PITCH => {
                 let pitch = if self.channel_system(current_system) == MIDISystem::Xg
                     || self.patch.bank_lsb == 1
                 {
-                    (data_coarse as i32 - 64) * 100
+                    data_coarse as f64 - 64.0
                 } else {
-                    (data_coarse as i32 - 64) * 50
+                    (data_coarse as f64 - 64.0) * 0.5
                 };
-                self.drum_params[param_fine as usize].pitch = pitch as f64;
+                self.drum_params[param_fine as usize].pitch_coarse = pitch;
                 spessa_synth_info(&format!(
-                    "Drum {} pitch for {}: {} cents",
+                    "Drum {} pitch for {}: {} semitones",
                     param_fine, self.channel, pitch
                 ));
             }
 
             non_registered_msb::DRUM_PITCH_FINE => {
-                let pitch = data_coarse as i32 - 64;
-                self.drum_params[param_fine as usize].pitch += pitch as f64;
+                let pitch = data_coarse as f64 - 64.0;
+                self.drum_params[param_fine as usize].pitch_fine = pitch;
                 spessa_synth_info(&format!(
                     "Drum {} pitch fine for {}: {} cents",
-                    param_fine, self.channel, self.drum_params[param_fine as usize].pitch
+                    param_fine, self.channel, pitch
                 ));
             }
 
             non_registered_msb::DRUM_LEVEL => {
-                self.drum_params[param_fine as usize].gain = data_coarse as f64 / 120.0;
+                self.drum_params[param_fine as usize].level = data_coarse;
                 spessa_synth_info(&format!(
                     "Drum {} level for {}: {}",
                     param_fine, self.channel, data_coarse
@@ -237,31 +237,32 @@ impl MidiChannel {
             non_registered_msb::DRUM_PAN => {
                 self.drum_params[param_fine as usize].pan = data_coarse;
                 spessa_synth_info(&format!(
-                    "Drum {} pan for {}: {}",
+                    "Drum {} Pan for {}: {}",
                     param_fine, self.channel, data_coarse
                 ));
             }
 
             non_registered_msb::DRUM_REVERB => {
-                self.drum_params[param_fine as usize].reverb_gain = data_coarse as f64 / 127.0;
+                self.drum_params[param_fine as usize].reverb_send = data_coarse;
                 spessa_synth_info(&format!(
-                    "Drum {} reverb level for {}: {}",
+                    "Drum {} Reverb Send for {}: {}",
                     param_fine, self.channel, data_coarse
                 ));
             }
 
             non_registered_msb::DRUM_CHORUS => {
-                self.drum_params[param_fine as usize].chorus_gain = data_coarse as f64 / 127.0;
+                self.drum_params[param_fine as usize].chorus_send = data_coarse;
                 spessa_synth_info(&format!(
-                    "Drum {} chorus level for {}: {}",
+                    "Drum {} Chorus Send for {}: {}",
                     param_fine, self.channel, data_coarse
                 ));
             }
 
+            // TS: NonRegisteredParameterTypesMSB.drumVariation
             non_registered_msb::DRUM_DELAY => {
-                self.drum_params[param_fine as usize].delay_gain = data_coarse as f64 / 127.0;
+                self.drum_params[param_fine as usize].variation_send = data_coarse;
                 spessa_synth_info(&format!(
-                    "Drum {} delay level for {}: {}",
+                    "Drum {} Variation Send for {}: {}",
                     param_fine, self.channel, data_value
                 ));
             }

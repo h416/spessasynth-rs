@@ -67,15 +67,17 @@ use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
-use crate::synthesizer::audio_engine::effects::chorus::SpessaSynthChorus;
-use crate::synthesizer::audio_engine::effects::delay::SpessaSynthDelay;
-use crate::synthesizer::audio_engine::effects::insertion::{
+use crate::synthesizer::audio_engine::channel::render_voice::{
+    EffectSends, RenderVoiceContext, VoiceSendBuffer,
+};
+use crate::synthesizer::audio_engine::effects::gs::implementation::chorus::SpessaSynthChorus;
+use crate::synthesizer::audio_engine::effects::gs::implementation::delay::SpessaSynthDelay;
+use crate::synthesizer::audio_engine::effects::gs::implementation::insertion::{
     self, InsertionProcessor,
     thru::ThruFx,
 };
-use crate::synthesizer::audio_engine::effects::reverb::SpessaSynthReverb;
+use crate::synthesizer::audio_engine::effects::gs::implementation::reverb::SpessaSynthReverb;
 use crate::synthesizer::audio_engine::voice::lowpass_filter::LowpassFilter;
-use crate::synthesizer::audio_engine::key_modifier_manager::KeyModifierManager;
 use crate::synthesizer::audio_engine::parameters::midi::{
     DEFAULT_GLOBAL_MIDI_PARAMETERS, GlobalMIDIParameter,
 };
@@ -118,6 +120,15 @@ struct ScheduledEvent {
     time: f64,
 }
 
+/// Moves the voice sends into an effect input buffer, clearing the sends for the next quantum.
+/// Equivalent to: moveSends(sends, input, sampleCount)
+fn move_sends(sends: &mut [f64], input: &mut [f32], sample_count: usize) {
+    for i in 0..sample_count {
+        input[i] = sends[i] as f32;
+        sends[i] = 0.0;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SynthesizerCore
 // ---------------------------------------------------------------------------
@@ -136,10 +147,6 @@ pub struct SynthesizerCore {
     /// Sound bank manager.
     /// Equivalent to: soundBankManager: SoundBankManager
     pub sound_bank_manager: SoundBankManager,
-
-    /// Key modifier manager for custom key overrides.
-    /// Equivalent to: keyModifierManager: KeyModifierManager
-    pub key_modifier_manager: KeyModifierManager,
 
     /// Audio sample rate in Hz.
     /// Equivalent to: sampleRate
@@ -180,7 +187,7 @@ pub struct SynthesizerCore {
     pub delay_processor: SpessaSynthDelay,
 
     /// Whether delay effect is active (enabled via SysEx).
-    pub delay_active: bool,
+    pub gs_delay_active: bool,
 
     /// Deterministic random generator used for random panning (new in 4.3.16).
     /// TS keeps this in module scope (`randomGenerator` in `utils/other.ts`); Rust stores
@@ -189,14 +196,43 @@ pub struct SynthesizerCore {
     /// Equivalent to: randomGenerator (utils/other.ts)
     pub random_generator: SplitMix32,
 
-    /// Mono reverb input buffer (fixed at max_buffer_size, cleared each render call).
-    reverb_input: Vec<f32>,
+    /// The voice buffer: the wavetable oscillator output of the voice being rendered.
+    /// Equivalent to: voiceBuffer (Float64Array)
+    pub(crate) voice_buffer: Vec<f64>,
 
-    /// Mono chorus input buffer (fixed at max_buffer_size, cleared each render call).
-    chorus_input: Vec<f32>,
+    /// Used by voices when a channel runs out of voice send buffers.
+    /// Equivalent to: sharedVoiceSendBuffer
+    pub(crate) shared_voice_send_buffer: VoiceSendBuffer,
 
-    /// Mono delay input buffer (fixed at max_buffer_size, cleared each render call).
-    delay_input: Vec<f32>,
+    /// Effect inputs (Float32Array), overwritten with the voice sends each block.
+    /// Equivalent to: gsReverbInput, gsChorusInput, gsDelayInput
+    gs_reverb_input: Vec<f32>,
+    gs_chorus_input: Vec<f32>,
+    gs_delay_input: Vec<f32>,
+    /// Equivalent to: xgReverbInputL/R, xgChorusInputL/R, xgVariationInputL/R
+    xg_reverb_input_l: Vec<f32>,
+    xg_reverb_input_r: Vec<f32>,
+    xg_chorus_input_l: Vec<f32>,
+    xg_chorus_input_r: Vec<f32>,
+    xg_variation_input_l: Vec<f32>,
+    xg_variation_input_r: Vec<f32>,
+
+    /// Double precision voice sends (Float64Array), moved into the inputs each block.
+    /// Equivalent to: gsReverbSend, gsChorusSend, gsDelaySend
+    gs_reverb_send: Vec<f64>,
+    gs_chorus_send: Vec<f64>,
+    gs_delay_send: Vec<f64>,
+    /// Equivalent to: xgReverbSendL/R, xgChorusSendL/R, xgVariationSendL/R
+    xg_reverb_send_l: Vec<f64>,
+    xg_reverb_send_r: Vec<f64>,
+    xg_chorus_send_l: Vec<f64>,
+    xg_chorus_send_r: Vec<f64>,
+    xg_variation_send_l: Vec<f64>,
+    xg_variation_send_r: Vec<f64>,
+
+    /// TODO(XG effects): `xgVariationBlock.insertionMode`. The XG blocks are not ported yet;
+    /// the variation block defaults to system mode.
+    pub(crate) xg_variation_insertion_mode: bool,
 
     /// The pan of the left channel (0.0–1.0), derived from
     /// `system_parameters.pan + midi_parameters.pan`.
@@ -242,9 +278,10 @@ pub struct SynthesizerCore {
     pub insertion_processor: Box<dyn InsertionProcessor>,
 
     /// True if any channel has insertion enabled (optimization flag).
-    pub insertion_active: bool,
+    pub gs_insertion_active: bool,
 
-    /// Stereo insertion input buffers (fixed at max_buffer_size).
+    /// Stereo insertion input buffers (Float32Array, fixed at max_buffer_size).
+    /// Equivalent to: insertionInputL/R
     insertion_input_l: Vec<f32>,
     insertion_input_r: Vec<f32>,
 
@@ -290,7 +327,6 @@ impl SynthesizerCore {
             voices,
             midi_channels: Vec::new(),
             sound_bank_manager: SoundBankManager::new(|| {}),
-            key_modifier_manager: KeyModifierManager::new(),
             sample_rate,
             max_buffer_size: buf_size,
             tunings,
@@ -301,11 +337,29 @@ impl SynthesizerCore {
             reverb_processor: SpessaSynthReverb::new(sample_rate, buf_size),
             chorus_processor: SpessaSynthChorus::new(sample_rate, buf_size),
             delay_processor: SpessaSynthDelay::new(sample_rate, buf_size),
-            delay_active: false,
+            gs_delay_active: false,
             random_generator: SplitMix32::default(),
-            reverb_input: vec![0.0; buf_size],
-            chorus_input: vec![0.0; buf_size],
-            delay_input: vec![0.0; buf_size],
+            voice_buffer: vec![0.0; buf_size],
+            shared_voice_send_buffer: VoiceSendBuffer::new(buf_size),
+            gs_reverb_input: vec![0.0; buf_size],
+            gs_chorus_input: vec![0.0; buf_size],
+            gs_delay_input: vec![0.0; buf_size],
+            xg_reverb_input_l: vec![0.0; buf_size],
+            xg_reverb_input_r: vec![0.0; buf_size],
+            xg_chorus_input_l: vec![0.0; buf_size],
+            xg_chorus_input_r: vec![0.0; buf_size],
+            xg_variation_input_l: vec![0.0; buf_size],
+            xg_variation_input_r: vec![0.0; buf_size],
+            gs_reverb_send: vec![0.0; buf_size],
+            gs_chorus_send: vec![0.0; buf_size],
+            gs_delay_send: vec![0.0; buf_size],
+            xg_reverb_send_l: vec![0.0; buf_size],
+            xg_reverb_send_r: vec![0.0; buf_size],
+            xg_chorus_send_l: vec![0.0; buf_size],
+            xg_chorus_send_r: vec![0.0; buf_size],
+            xg_variation_send_l: vec![0.0; buf_size],
+            xg_variation_send_r: vec![0.0; buf_size],
+            xg_variation_insertion_mode: false,
             pan_left: 0.5,
             pan_right: 0.5,
             gain_smoothing_factor,
@@ -317,7 +371,7 @@ impl SynthesizerCore {
             event_queue: Vec::new(),
             sample_time: 1.0 / sample_rate,
             insertion_processor: Box::new(ThruFx::new(sample_rate)),
-            insertion_active: false,
+            gs_insertion_active: false,
             insertion_input_l: vec![0.0; buf_size],
             insertion_input_r: vec![0.0; buf_size],
             insertion_params: [255u8; 23],
@@ -418,6 +472,9 @@ impl SynthesizerCore {
         let channel_number = self.midi_channels.len() as u8;
         let (preset, bank_idx) = self.get_default_preset_and_idx();
         let mut channel = MidiChannel::new(preset, bank_idx, channel_number);
+        // TS allocates these in the MIDIChannel constructor from `synthCore.maxBufferSize`.
+        channel.output_left = vec![0.0; self.max_buffer_size];
+        channel.output_right = vec![0.0; self.max_buffer_size];
 
         // Channel 9 (0-based) is the default percussion channel.
         // (Pre-existing phase-1 divergence from TS's `channel.setDrums(true)` — see module doc.)
@@ -492,6 +549,7 @@ impl SynthesizerCore {
                 &mut self.voices,
                 current_time,
                 system,
+                self.system_parameters.drum_lock,
                 events_enabled,
             );
             events.append(&mut sub);
@@ -499,6 +557,7 @@ impl SynthesizerCore {
             let mut sub = self.midi_channels[ch_idx].reset_preset(
                 &self.sound_bank_manager,
                 system,
+                self.system_parameters.drum_lock,
                 events_enabled,
             );
             events.append(&mut sub);
@@ -513,201 +572,240 @@ impl SynthesizerCore {
     }
 
     /// Renders audio for the current quantum.
-    /// Equivalent to: process(outputs, effectsLeft, effectsRight, startIndex, samples)
+    /// The main rendering pipeline, renders all voices and processes the effects:
+    /// voices -> (insertion) -> chorus -> delay -> reverb -> stereo output.
+    /// Equivalent to: process(left, right, startIndex, sampleCount)
     pub fn render_audio(
         &mut self,
         outputs: &mut [Vec<f32>],
         start_index: usize,
         sample_count: usize,
     ) {
-        // Process scheduled events.
+        // Process event queue
         self.process_event_queue();
 
-        let quantum_size = if sample_count > 0 {
+        // Validate
+        let sample_count = if sample_count > 0 {
             sample_count
         } else {
             outputs[0].len().saturating_sub(start_index)
         };
-
-        // TS 4.3.0: throw if the requested quantum exceeds the fixed buffer size.
         assert!(
-            quantum_size <= self.max_buffer_size,
+            sample_count <= self.max_buffer_size,
             "Requested {} samples, but maxBufferSize is {}",
-            quantum_size,
+            sample_count,
             self.max_buffer_size
         );
 
-        // Clear the buffers (fixed size — the 4.2.0 grow-on-demand path is gone).
-        self.reverb_input.fill(0.0);
-        self.chorus_input.fill(0.0);
-        if self.delay_active {
-            self.delay_input.fill(0.0);
-        }
-        if self.insertion_active {
+        let is_xg = self.midi_parameters.system == MIDISystem::Xg;
+        let variation_insertion = self.xg_variation_insertion_mode;
+        let fx = self.system_parameters.effects_enabled;
+
+        // TODO(XG effects): for XG, renderVoice always checks if insertion is assigned to
+        // bypass effect sends (`channel.xgInsertionAssigned`, from the XG insertion blocks).
+
+        // Clear the buffers
+        // (The effect inputs are overwritten with the voice sends after rendering)
+        if self.gs_insertion_active {
             self.insertion_input_l.fill(0.0);
             self.insertion_input_r.fill(0.0);
         }
-
-        // Clear voice counts.
-        for ch in self.midi_channels.iter_mut() {
-            ch.clear_voice_count();
+        for c in self.midi_channels.iter_mut() {
+            // And voice count
+            c.clear_voice_count();
+            // Silent channels are already cleared
+            if c.output_dirty {
+                c.output_right.fill(0.0);
+                c.output_left.fill(0.0);
+                c.output_dirty = false;
+            }
         }
         self.voice_count = 0;
 
-        let effects_enabled = self.system_parameters.effects_enabled;
-        let master_gain = self.system_parameters.gain;
-        let reverb_gain = self.system_parameters.reverb_gain;
-        let chorus_gain = self.system_parameters.chorus_gain;
-        let delay_gain = self.system_parameters.delay_gain;
-        let midi_volume = self.midi_volume;
-        // 4.3.0: global master pan normalized to [-1, 1] (globalSystem.pan + globalMIDI.pan),
-        // folded additively into the per-voice pan index inside render_voice.
-        let global_pan = self.system_parameters.pan + self.midi_parameters.pan;
-        let pan_smoothing_factor = self.pan_smoothing_factor;
-        let current_time = self.current_time;
-        let delay_active = self.delay_active;
-        let insertion_active = self.insertion_active;
-        let out_len = outputs[0].len();
+        // Process voices
+        {
+            let mut ctx = RenderVoiceContext {
+                sample_rate: self.sample_rate,
+                max_buffer_size: self.max_buffer_size,
+                tunings: &self.tunings,
+                pan_smoothing_factor: self.pan_smoothing_factor,
+                effects_enabled: fx,
+                reverb_gain: self.system_parameters.reverb_gain,
+                chorus_gain: self.system_parameters.chorus_gain,
+                gs_delay_gain: self.system_parameters.gs_delay_gain,
+                xg_variation_gain: self.system_parameters.xg_variation_gain,
+                custom_vibrato: self.system_parameters.custom_vibrato,
+                is_xg,
+                xg_variation_insertion_mode: variation_insertion,
+                gs_delay_active: self.gs_delay_active,
+                gs_insertion_active: self.gs_insertion_active,
+                master_gain: self.system_parameters.gain,
+                midi_volume: self.midi_volume,
+                // 4.3.0: global master pan normalized to [-1, 1] (globalSystem.pan + globalMIDI.pan)
+                global_pan: self.system_parameters.pan + self.midi_parameters.pan,
+                voice_buffer: &mut self.voice_buffer,
+                shared_voice_send_buffer: &mut self.shared_voice_send_buffer,
+                sends: EffectSends {
+                    gs_reverb_send: &mut self.gs_reverb_send,
+                    gs_chorus_send: &mut self.gs_chorus_send,
+                    gs_delay_send: &mut self.gs_delay_send,
+                    xg_reverb_send_l: &mut self.xg_reverb_send_l,
+                    xg_reverb_send_r: &mut self.xg_reverb_send_r,
+                    xg_chorus_send_l: &mut self.xg_chorus_send_l,
+                    xg_chorus_send_r: &mut self.xg_chorus_send_r,
+                    xg_variation_send_l: &mut self.xg_variation_send_l,
+                    xg_variation_send_r: &mut self.xg_variation_send_r,
+                },
+            };
+            let cap = (self.system_parameters.voice_cap as usize).min(self.voices.len());
+            let current_time = self.current_time;
+            for i in 0..cap {
+                let v = &mut self.voices[i];
+                if !v.is_active {
+                    continue;
+                }
+                let ch = &mut self.midi_channels[v.channel as usize];
+                // TODO(Task 21): TS 4.3.0 removed this skip (muting moved into the channel gain);
+                // kept because the current channel code has no gain-based muting yet.
+                if ch.is_muted {
+                    continue;
+                }
 
-        // Render active voices.
-        // SAFETY: voices, midi_channels, and effect buffers are separate Vec fields — no aliasing.
-        // We use raw pointers for the output slices to avoid borrow conflicts while
-        // also mutably borrowing self.midi_channels[ch_idx].
-        let out_l_ptr = outputs[0].as_mut_ptr();
-        let out_r_ptr = outputs[1].as_mut_ptr();
-        let rev_ptr = self.reverb_input.as_mut_ptr();
-        let chr_ptr = self.chorus_input.as_mut_ptr();
-        let dly_ptr = self.delay_input.as_mut_ptr();
-        let rev_len = self.reverb_input.len();
-        let chr_len = self.chorus_input.len();
-        let dly_len = self.delay_input.len();
-        let ins_l_ptr = self.insertion_input_l.as_mut_ptr();
-        let ins_r_ptr = self.insertion_input_r.as_mut_ptr();
-        let ins_l_len = self.insertion_input_l.len();
-        let ins_r_len = self.insertion_input_r.len();
+                ch.render_voice(v, current_time, sample_count, &mut ctx);
 
-        // Process voices (up to the cap, matching TS).
-        let cap = (self.system_parameters.voice_cap as usize).min(self.voices.len());
-        for v_idx in 0..cap {
-            if !self.voices[v_idx].is_active {
-                continue;
+                // Update voice count
+                ch.voice_count += 1;
+                ch.output_dirty = true;
+                self.voice_count += 1;
             }
-            let ch_idx = self.voices[v_idx].channel as usize;
-            // TODO(Task 21): TS 4.3.0 removed this skip (muting moved into the channel gain);
-            // kept because the current channel code has no gain-based muting yet.
-            if self.midi_channels[ch_idx].is_muted {
-                continue;
+            for c in self.midi_channels.iter_mut() {
+                c.mix_voice_send_buffers(&mut ctx.sends, is_xg, sample_count);
             }
-
-            self.midi_channels[ch_idx].voice_count += 1;
-            self.voice_count += 1;
-
-            let out_l_slice = unsafe { std::slice::from_raw_parts_mut(out_l_ptr, out_len) };
-            let out_r_slice = unsafe { std::slice::from_raw_parts_mut(out_r_ptr, out_len) };
-            let rev_slice = unsafe { std::slice::from_raw_parts_mut(rev_ptr, rev_len) };
-            let chr_slice = unsafe { std::slice::from_raw_parts_mut(chr_ptr, chr_len) };
-            let dly_slice = unsafe { std::slice::from_raw_parts_mut(dly_ptr, dly_len) };
-            let ins_l_slice = unsafe { std::slice::from_raw_parts_mut(ins_l_ptr, ins_l_len) };
-            let ins_r_slice = unsafe { std::slice::from_raw_parts_mut(ins_r_ptr, ins_r_len) };
-
-            self.midi_channels[ch_idx].render_voice(
-                &mut self.voices[v_idx],
-                current_time,
-                out_l_slice,
-                out_r_slice,
-                rev_slice,
-                chr_slice,
-                dly_slice,
-                start_index,
-                quantum_size,
-                self.sample_rate,
-                master_gain,
-                reverb_gain,
-                chorus_gain,
-                delay_gain,
-                midi_volume,
-                global_pan,
-                effects_enabled,
-                delay_active,
-                pan_smoothing_factor,
-                &self.tunings,
-                ins_l_slice,
-                ins_r_slice,
-                insertion_active,
-            );
-
         }
 
-        // Process effect chain: Insertion → Chorus → Delay → Reverb
-        if effects_enabled {
-            let (out_left, out_rest) = outputs.split_at_mut(1);
-            let out_l = &mut out_left[0];
-            let out_r = &mut out_rest[0];
-
-            // Insertion first (if active)
-            if insertion_active {
-                let ins_l = self.insertion_input_l[..quantum_size].to_vec();
-                let ins_r = self.insertion_input_r[..quantum_size].to_vec();
-                self.insertion_processor.process(
-                    &ins_l,
-                    &ins_r,
-                    out_l,
-                    out_r,
-                    &mut self.reverb_input,
-                    &mut self.chorus_input,
-                    &mut self.delay_input,
-                    start_index,
-                    quantum_size,
-                );
-            }
-
-            // Chorus sends to reverb and delay
-            let chorus_in = self.chorus_input[..quantum_size].to_vec();
-            self.chorus_processor.process(
-                &chorus_in,
-                out_l,
-                out_r,
-                &mut self.reverb_input,
-                &mut self.delay_input,
-                start_index,
-                quantum_size,
+        // Move the voice sends into the effect inputs
+        if is_xg {
+            move_sends(&mut self.xg_reverb_send_l, &mut self.xg_reverb_input_l, sample_count);
+            move_sends(&mut self.xg_reverb_send_r, &mut self.xg_reverb_input_r, sample_count);
+            move_sends(&mut self.xg_chorus_send_l, &mut self.xg_chorus_input_l, sample_count);
+            move_sends(&mut self.xg_chorus_send_r, &mut self.xg_chorus_input_r, sample_count);
+            move_sends(
+                &mut self.xg_variation_send_l,
+                &mut self.xg_variation_input_l,
+                sample_count,
             );
-
-            // CC#94 in XG is variation, not delay
-            if delay_active && self.midi_parameters.system != MIDISystem::Xg {
-                // Process delay
-                let delay_in = self.delay_input[..quantum_size].to_vec();
-                self.delay_processor.process(
-                    &delay_in,
-                    out_l,
-                    out_r,
-                    &mut self.reverb_input,
-                    start_index,
-                    quantum_size,
-                );
-            }
-
-            // Reverb goes directly to output
-            let reverb_in = self.reverb_input[..quantum_size].to_vec();
-            self.reverb_processor.process(
-                &reverb_in,
-                out_l,
-                out_r,
-                start_index,
-                quantum_size,
+            move_sends(
+                &mut self.xg_variation_send_r,
+                &mut self.xg_variation_input_r,
+                sample_count,
             );
+        } else {
+            move_sends(&mut self.gs_reverb_send, &mut self.gs_reverb_input, sample_count);
+            move_sends(&mut self.gs_chorus_send, &mut self.gs_chorus_input, sample_count);
+            if self.gs_delay_active {
+                move_sends(&mut self.gs_delay_send, &mut self.gs_delay_input, sample_count);
+            }
         }
 
-        // (TS 4.3.0 removed the per-channel updateVoiceCount() event loop here.)
+        // TODO(XG effects): process the XG insertion blocks and route the sends of
+        // channels with insertion assigned (`processXGInsertion`).
+
+        let (out_left, out_rest) = outputs.split_at_mut(1);
+        let left = &mut out_left[0];
+        let right = &mut out_rest[0];
+
+        // Mix channel data
+        for ch in self.midi_channels.iter() {
+            // Nothing to mix
+            if !ch.output_dirty {
+                continue;
+            }
+            let output_left = &ch.output_left;
+            let output_right = &ch.output_right;
+
+            // Straight into the insertion EFX, but only if it is active
+            // (`insertion_enabled` is the Rust name for `midiParameters.efxAssign`).
+            if ch.insertion_enabled && fx && self.gs_insertion_active {
+                // Index is 0-based here as it's internal
+                for i in 0..sample_count {
+                    self.insertion_input_l[i] =
+                        (self.insertion_input_l[i] as f64 + output_left[i]) as f32;
+                    self.insertion_input_r[i] =
+                        (self.insertion_input_r[i] as f64 + output_right[i]) as f32;
+                }
+                continue;
+            }
+
+            // Dry level is only active in XG with variation connection set to SYSTEM.
+            // TODO(XG effects): `midiParameters.dryLevel / 127` gain when is_xg && !variation_insertion.
+            // Mix down normally
+            for i in 0..sample_count {
+                let idx = start_index + i;
+                left[idx] = (left[idx] as f64 + output_left[i]) as f32;
+                right[idx] = (right[idx] as f64 + output_right[i]) as f32;
+            }
+        }
+
+        // Process effects
+        if fx {
+            if is_xg {
+                // TODO(XG effects): variation (system), chorus and reverb blocks.
+            } else {
+                // Insertion first
+                if self.gs_insertion_active {
+                    self.insertion_processor.process(
+                        &self.insertion_input_l,
+                        &self.insertion_input_r,
+                        left,
+                        right,
+                        &mut self.gs_reverb_input,
+                        &mut self.gs_chorus_input,
+                        &mut self.gs_delay_input,
+                        start_index,
+                        sample_count,
+                    );
+                }
+
+                // Chorus first, it feeds to reverb and delay
+                self.chorus_processor.process(
+                    &self.gs_chorus_input,
+                    left,
+                    right,
+                    &mut self.gs_reverb_input,
+                    &mut self.gs_delay_input,
+                    start_index,
+                    sample_count,
+                );
+                if self.gs_delay_active {
+                    // Process delay
+                    self.delay_processor.process(
+                        &self.gs_delay_input,
+                        left,
+                        right,
+                        &mut self.gs_reverb_input,
+                        start_index,
+                        sample_count,
+                    );
+                }
+                // Finally process the reverb processor (it goes directly into the output buffer)
+                self.reverb_processor.process(
+                    &self.gs_reverb_input,
+                    left,
+                    right,
+                    start_index,
+                    sample_count,
+                );
+            }
+        }
 
         // Advance the time appropriately
-        self.current_time += quantum_size as f64 * self.sample_time;
+        self.current_time += sample_count as f64 * self.sample_time;
     }
 
     /// Sets the reverb macro (SC-8850 manual page 81).
     /// Equivalent to: setReverbMacro(macro)
     pub fn set_reverb_macro(&mut self, macro_num: u8) {
-        if self.system_parameters.reverb_lock {
+        if self.system_parameters.gs_reverb_lock {
             return;
         }
         let rev = &mut self.reverb_processor;
@@ -782,7 +880,7 @@ impl SynthesizerCore {
     /// Sets the chorus macro (SC-8850 manual page 83).
     /// Equivalent to: setChorusMacro(macro)
     pub fn set_chorus_macro(&mut self, macro_num: u8) {
-        if self.system_parameters.chorus_lock {
+        if self.system_parameters.gs_chorus_lock {
             return;
         }
         let chr = &mut self.chorus_processor;
@@ -865,7 +963,7 @@ impl SynthesizerCore {
     /// Sets the delay macro (SC-8850 manual page 85).
     /// Equivalent to: setDelayMacro(macro)
     pub fn set_delay_macro(&mut self, macro_num: u8) {
-        if self.system_parameters.delay_lock {
+        if self.system_parameters.gs_delay_lock {
             return;
         }
         let dly = &mut self.delay_processor;
@@ -987,13 +1085,13 @@ impl SynthesizerCore {
     ///
     /// Equivalent to: updateActiveEffects()
     pub fn update_active_effects(&mut self) {
-        if !self.system_parameters.insertion_effect_lock {
+        if !self.system_parameters.gs_insertion_lock {
             // TS reads `c.midiParameters.efxAssign`; the Rust channel keeps the same flag
             // under the legacy name `insertion_enabled`.
-            self.insertion_active = self.midi_channels.iter().any(|c| c.insertion_enabled);
+            self.gs_insertion_active = self.midi_channels.iter().any(|c| c.insertion_enabled);
         }
-        if !self.system_parameters.delay_lock {
-            self.delay_active = if self.midi_parameters.system == MIDISystem::Xg {
+        if !self.system_parameters.gs_delay_lock {
+            self.gs_delay_active = if self.midi_parameters.system == MIDISystem::Xg {
                 false
             } else {
                 self.chorus_processor.send_level_to_delay() > 0
@@ -1018,7 +1116,7 @@ impl SynthesizerCore {
     /// Resets the insertion effect to defaults.
     /// Equivalent to: resetInsertion()
     pub fn reset_insertion(&mut self) {
-        if self.system_parameters.insertion_effect_lock {
+        if self.system_parameters.gs_insertion_lock {
             return;
         }
         // 4.3.16 dropped the `insertionActive = false` here: the flag is now derived from
@@ -1056,32 +1154,13 @@ impl SynthesizerCore {
         }
     }
 
-    /// Gets voices for a channel+note+velocity, applying key modifier overrides.
+    /// Gets voices for a channel+note+velocity.
     /// Equivalent to: getVoices(channel, midiNote, velocity)
     pub fn get_voices(&self, channel: u8, midi_note: u8, velocity: u8) -> CachedVoiceList {
-        let channel_obj = &self.midi_channels[channel as usize];
+        let channel_object = &self.midi_channels[channel as usize];
 
-        let override_patch = self
-            .key_modifier_manager
-            .has_override_patch(channel, midi_note);
-
-        if override_patch {
-            let patch = match self.key_modifier_manager.get_patch(channel, midi_note) {
-                Ok(p) => p,
-                Err(_) => return Vec::new(),
-            };
-            if let Some((preset, bank_idx)) = self
-                .sound_bank_manager
-                .get_preset_and_bank_idx(patch, self.midi_parameters.system)
-            {
-                let bank = &self.sound_bank_manager.sound_bank_list[bank_idx].sound_bank;
-                return self.get_voices_for_preset(preset, bank, midi_note, velocity);
-            }
-            return Vec::new();
-        }
-
-        // Use channel's stored preset.
-        if let (Some(preset), Some(bank_idx)) = (&channel_obj.preset, channel_obj.preset_bank_idx) {
+        // Warning is handled in program change
+        if let (Some(preset), Some(bank_idx)) = (&channel_object.preset, channel_object.preset_bank_idx) {
             let bank = &self.sound_bank_manager.sound_bank_list[bank_idx].sound_bank;
             return self.get_voices_for_preset(preset, bank, midi_note, velocity);
         }

@@ -8,7 +8,7 @@
 /// `&SynthesizerCore` / `&mut SynthesizerCore` directly, eliminating the
 /// dependency on the (not-yet-ported) `processor.rs`.
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatchFull;
-use crate::synthesizer::audio_engine::channel::drum_parameters::DrumParameters;
+use crate::midi::drum_parameters::{DrumParameter, DrumParameterUtils};
 use crate::synthesizer::audio_engine::channel::midi_channel::ChannelVibrato;
 use crate::synthesizer::audio_engine::channel::parameters::midi::{
     CONTROLLER_TABLE_SIZE, CUSTOM_CONTROLLER_TABLE_SIZE,
@@ -74,7 +74,7 @@ pub struct ChannelSnapshot {
     pub channel_number: u8,
 
     /// Per-drum-note parameters (128 entries).
-    pub drum_params: Vec<DrumParameters>,
+    pub drum_params: Vec<DrumParameter>,
 
     /// Whether insertion effect routing is enabled for this channel.
     pub insertion_enabled: bool,
@@ -98,7 +98,7 @@ impl ChannelSnapshot {
         is_muted: bool,
         drum_channel: bool,
         channel_number: u8,
-        drum_params: Vec<DrumParameters>,
+        drum_params: Vec<DrumParameter>,
     ) -> Self {
         Self {
             patch,
@@ -211,6 +211,7 @@ impl ChannelSnapshot {
             patch.program,
             &core.sound_bank_manager,
             current_system,
+            core.system_parameters.drum_lock,
             enable_event_system,
         );
 
@@ -317,7 +318,7 @@ use crate::soundbank::types::MIDISystem;
             true,
             false,
             3,
-            (0..128).map(|_| DrumParameters::default()).collect(),
+            (0..128).map(DrumParameterUtils::default_data).collect(),
         );
 
         assert_eq!(snap.patch.name, "Piano");
@@ -356,7 +357,7 @@ use crate::soundbank::types::MIDISystem;
             false,
             false,
             0,
-            (0..128).map(|_| DrumParameters::default()).collect(),
+            (0..128).map(DrumParameterUtils::default_data).collect(),
         );
         let mut copy = ChannelSnapshot::copy_from(&snap);
 
@@ -393,7 +394,7 @@ use crate::soundbank::types::MIDISystem;
             true,
             true,
             9,
-            (0..128).map(|_| DrumParameters::default()).collect(),
+            (0..128).map(DrumParameterUtils::default_data).collect(),
         );
         let copy = ChannelSnapshot::copy_from(&snap);
 

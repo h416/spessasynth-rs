@@ -448,12 +448,12 @@ impl SynthesizerCore {
                             0x00 => {
                                 // EFX Type selection (16-bit: data << 8 | syx[8])
                                 let efx_type = (data as u16) << 8 | syx.get(8).copied().unwrap_or(0) as u16;
-                                if let Some(proc) = crate::synthesizer::audio_engine::effects::insertion::create_insertion_processor(efx_type, self.sample_rate, self.max_buffer_size) {
+                                if let Some(proc) = crate::synthesizer::audio_engine::effects::gs::implementation::insertion::create_insertion_processor(efx_type, self.sample_rate, self.max_buffer_size) {
                                     spessa_synth_info(&format!("GS EFX Type: {:04X}", efx_type));
                                     self.insertion_processor = proc;
                                 } else {
                                     spessa_synth_info(&format!("Unsupported EFX processor: {:04X}, using Thru", efx_type));
-                                    self.insertion_processor = Box::new(crate::synthesizer::audio_engine::effects::insertion::thru::ThruFx::new(self.sample_rate));
+                                    self.insertion_processor = Box::new(crate::synthesizer::audio_engine::effects::gs::implementation::insertion::thru::ThruFx::new(self.sample_rate));
                                 }
                                 self.reset_insertion_params();
                                 self.insertion_processor.reset();

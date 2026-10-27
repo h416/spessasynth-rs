@@ -2,7 +2,6 @@
 /// purpose: Controller reset handlers for MidiChannel.
 /// Ported from: src/synthesizer/audio_engine/engine_methods/controller_control/reset_controllers.ts
 use crate::midi::enums::midi_controllers;
-use crate::synthesizer::audio_engine::channel::drum_parameters::reset_drum_params;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
 use crate::synthesizer::audio_engine::channel::parameters::midi::{
     ChannelMidiParameterValue, CUSTOM_RESET_ARRAY, DEFAULT_MIDI_CONTROLLER_VALUES,
@@ -77,6 +76,7 @@ impl MidiChannel {
         voices: &mut [Voice],
         current_time: f64,
         current_system: MIDISystem,
+        drum_lock: bool,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
         self.channel_octave_tuning.fill(0);
@@ -161,7 +161,7 @@ impl MidiChannel {
         self.playing_notes.fill(false);
 
         // Reset drum parameters (SC-88 standard reverb values, etc.)
-        reset_drum_params(&mut self.drum_params);
+        self.reset_drum_params(drum_lock, current_system);
 
         events
     }
@@ -176,6 +176,7 @@ impl MidiChannel {
         &mut self,
         sound_bank_manager: &crate::synthesizer::audio_engine::sound_bank_manager::SoundBankManager,
         current_system: MIDISystem,
+        drum_lock: bool,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
         let ch_system = self.channel_system(current_system);
@@ -188,6 +189,7 @@ impl MidiChannel {
             is_drum,
             sound_bank_manager,
             current_system,
+            drum_lock,
             enable_event_system,
         );
 
