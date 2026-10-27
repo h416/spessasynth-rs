@@ -12,7 +12,10 @@ use crate::synthesizer::audio_engine::channel::portamento_time::portamento_time_
 use crate::synthesizer::audio_engine::synth_constants::{
     GENERATOR_OVERRIDE_NO_CHANGE_VALUE, MIN_EXCLUSIVE_LENGTH,
 };
+use crate::soundbank::types::VoiceParameters;
+use crate::synthesizer::audio_engine::sound_bank_manager::SoundBankManager;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
+use crate::synthesizer::audio_engine::user_drum_set::FALLBACK_PATCH;
 use crate::synthesizer::audio_engine::voice::unit_converter::timecents_to_seconds;
 use crate::synthesizer::types::{CachedVoiceList, NoteOnCallback, SynthProcessorEvent};
 use crate::utils::loggin::spessa_synth_warn;
@@ -526,6 +529,44 @@ impl SynthesizerCore {
         }
     }
 
+    /// Returns the voice parameters of a GS user drum set key, with the index of the bank
+    /// they come from.
+    /// Equivalent to: UserDrumSet.getVoiceParameters(midiNote, velocity)
+    fn get_user_drum_voice_parameters(
+        &self,
+        drum_set: usize,
+        midi_note: u8,
+        velocity: u8,
+    ) -> Option<(Vec<VoiceParameters>, usize)> {
+        let set = &self.sound_bank_manager.user_drum_sets[drum_set];
+        let binding = &set.key_params[midi_note as usize];
+        // TS: soundBankManager.systemGetter = () => this.midiParameters.system
+        let system = self.midi_parameters.system;
+        let resolve = |patch| {
+            self.sound_bank_manager
+                .get_preset_and_bank_idx(patch, system)
+                // Protect from binding to self as well
+                .filter(|&(_, bank_idx)| SoundBankManager::user_drum_set_of(bank_idx).is_none())
+        };
+        let (resolved, bank_idx) =
+            resolve(set.bound_patch(midi_note as usize)).or_else(|| resolve(FALLBACK_PATCH))?;
+        let bank = &self.sound_bank_manager.sound_bank_list[bank_idx].sound_bank;
+        let mut params = resolved.get_voice_parameters(
+            binding.source_note_number,
+            velocity,
+            &bank.instruments,
+            &bank.default_modulators,
+        );
+
+        // Ensure that the key sounds as intended, similarly to 'PGAL' DLS chunk alias
+        for p in params.iter_mut() {
+            if p.generators[gt::KEY_NUM as usize] < 0 {
+                p.generators[gt::KEY_NUM as usize] = binding.source_note_number as i16;
+            }
+        }
+        Some((params, bank_idx))
+    }
+
     /// Gets or computes (and caches) voices for a specific bank index and preset.
     ///
     /// Called from `note_on` after cloning the preset out of the channel/bank to
@@ -551,19 +592,43 @@ impl SynthesizerCore {
         let cache_key = self.get_cached_voice_index(&patch, midi_note, velocity);
 
         // Check cache first
-        if let Some(cached) = self.cached_voices.get(&cache_key) {
-            return cached.clone();
+        let user_drum_generation = SoundBankManager::user_drum_set_of(bank_idx)
+            .map(|i| self.sound_bank_manager.user_drum_sets[i].generation.get());
+        match user_drum_generation {
+            Some(generation) => {
+                if let Some((g, cached)) = self.user_drum_cached_voices.get(&cache_key)
+                    && *g == generation
+                {
+                    return cached.clone();
+                }
+            }
+            None => {
+                if let Some(cached) = self.cached_voices.get(&cache_key) {
+                    return cached.clone();
+                }
+            }
         }
 
         // Not cached: compute voice parameters (borrow bank immutably, release after block)
-        let voice_params = {
-            let bank = &self.sound_bank_manager.sound_bank_list[bank_idx].sound_bank;
-            preset.get_voice_parameters(
-                midi_note,
-                velocity,
-                &bank.instruments,
-                &bank.default_modulators,
-            )
+        // A GS user drum set takes its voices from the drum set each key is bound to.
+        let (voice_params, bank_idx) = match SoundBankManager::user_drum_set_of(bank_idx) {
+            Some(drum_set) => match self.get_user_drum_voice_parameters(drum_set, midi_note, velocity) {
+                Some(found) => found,
+                // No drums at all (only user drum sets are present)
+                None => (Vec::new(), bank_idx),
+            },
+            None => {
+                let bank = &self.sound_bank_manager.sound_bank_list[bank_idx].sound_bank;
+                (
+                    preset.get_voice_parameters(
+                        midi_note,
+                        velocity,
+                        &bank.instruments,
+                        &bank.default_modulators,
+                    ),
+                    bank_idx,
+                )
+            }
         };
 
         // Build CachedVoice list
@@ -616,7 +681,15 @@ impl SynthesizerCore {
         }
 
         // Cache the result and return
-        self.cached_voices.insert(cache_key, voices.clone());
+        match user_drum_generation {
+            Some(generation) => {
+                self.user_drum_cached_voices
+                    .insert(cache_key, (generation, voices.clone()));
+            }
+            None => {
+                self.cached_voices.insert(cache_key, voices.clone());
+            }
+        }
         voices
     }
 }
@@ -625,7 +698,6 @@ impl SynthesizerCore {
 mod tests {
     use super::*;
     use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
-use crate::synthesizer::audio_engine::voice::unit_converter::timecents_to_seconds;
     use crate::synthesizer::types::{SynthProcessorEvent, SynthProcessorOptions};
     use std::sync::{Arc, Mutex};
 

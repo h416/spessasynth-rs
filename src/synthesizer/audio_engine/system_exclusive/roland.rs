@@ -19,6 +19,7 @@ use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::spessa_synth_info;
 use crate::utils::byte_functions::string::read_binary_string;
 use crate::midi::midi_tools::sysex_data::{DEFAULT_GS_DRUM_MAP, MELODIC_MAP};
+use crate::midi::drum_parameters::UserDrumSetParameterChange;
 
 impl SynthesizerCore {
     /// Handles a GS system exclusive message.
@@ -856,6 +857,12 @@ impl SynthesizerCore {
                     // 51 means BLOCK B (+16 channels)
                     // Testcase: 95043-2.KYC.mid
                     self.handle_gs_drum_setup(syx);
+                } else if syx[4] == 0x21 {
+                    // User Drum Set
+                    self.handle_user_drum(syx[5], syx[6], syx[7].min(127), syx);
+                } else if syx[4] == 0x29 {
+                    // User Drum Set Bulk Dump
+                    self.handle_user_drum_bulk_dump(syx);
                 } else {
                     // This is some other GS sysex...
                     sys_ex_not_recognized(syx, "Roland GS");
@@ -906,6 +913,123 @@ impl SynthesizerCore {
 }
 
 impl SynthesizerCore {
+    /// GS User Drum Set parameter (a1 = 0x21).
+    /// Equivalent to: handleUserDrum(a2, a3, data, syx)
+    fn handle_user_drum(&mut self, a2: u8, a3: u8, data: u8, syx: &[u8]) {
+        use UserDrumSetParameterChange as C;
+        if self.system_parameters.user_drum_lock {
+            return;
+        }
+        let drum_set = (a2 >> 4) as usize;
+        let midi_note = a3 as usize;
+        let command = a2 & 0xf;
+        let change = match command {
+            // User drum set name
+            0x0 => {
+                let new_name = read_binary_string(syx, 12, 7);
+                spessa_synth_info(&format!(
+                    "GS User Drum Set {} Name: {}",
+                    drum_set,
+                    new_name.trim()
+                ));
+                return;
+            }
+            // Here it's relative to 60, not 64 like NRPN. For some reason...
+            // Use the full 100 cents here as we choose the correct pitch (50 or 100 cents)
+            // when committing changes
+            0x1 => C::PitchCoarse(data as f64 - 60.0),
+            // Drum Level
+            0x2 => C::Level(data),
+            // Drum Assign Group (exclusive class)
+            0x3 => C::AssignGroup(data),
+            // Pan
+            0x4 => C::Pan(data),
+            // Reverb
+            0x5 => C::ReverbSend(data),
+            // Chorus
+            0x6 => C::ChorusSend(data),
+            // Receive Note Off
+            0x7 => C::RxNoteOff(data == 1),
+            // Receive Note On
+            0x8 => C::RxNoteOn(data == 1),
+            // Delay
+            0x9 => C::VariationSend(data),
+            // Source drum set
+            0xa => C::SourceDrumSet(data),
+            // Program number
+            0xb => C::Program(data),
+            // Source note number
+            0xc => C::SourceNoteNumber(data),
+            _ => {
+                sys_ex_not_recognized(syx, "GS User Drum set");
+                return;
+            }
+        };
+        self.set_user_drum_set_param(drum_set, midi_note, change);
+    }
+
+    /// GS User Drum Set bulk dump (a1 = 0x29).
+    /// Top half of a2 stays the same (indicates which user drum)
+    /// While the bottom param is something else
+    /// Guessed by analyzing 95043-2.KYC.mid
+    /// Equivalent to: the `a1 === 0x29` branch of rolandSystemExclusive
+    fn handle_user_drum_bulk_dump(&mut self, syx: &[u8]) {
+        let a2 = syx[5];
+        let data_length = syx.len().saturating_sub(9);
+        spessa_synth_info(&format!(
+            "User Drum Set Bulk Dump detected! Keys: {}",
+            data_length
+        ));
+
+        let actual_drum_param = match a2 & 0x0f {
+            // Most at 60 = play note?
+            0x0 => 1,
+            // Level?
+            0x1 => 2,
+            // Matches gm.dls exclusive class pretty well, assign group?
+            0x2 => 3,
+            // Most at 64, so pan?
+            0x3 => 4,
+            // 0 on bass, so reverb?
+            0x4 => 5,
+            // 0 on all, so chorus?
+            0x5 => 6,
+            0x6 => {
+                // 16 on all
+                // In the order, rx notes should be here, it's 0x10, so maybe
+                // It's both? on << 4 | off?
+                // Special handling is needed
+                let address2_off = (a2 & 0xf0) | 7;
+                let address2_on = (a2 & 0xf0) | 8;
+                for midi_note in 0..data_length {
+                    let v = syx[midi_note + 7];
+                    self.handle_user_drum(address2_off, midi_note as u8, v & 0xf, syx);
+                    self.handle_user_drum(address2_on, midi_note as u8, v >> 4, syx);
+                }
+                return;
+            }
+            // All 0, so delay
+            0x7 => 9,
+            // All 2 and this is a 88pro midi, so the map is 2
+            0x8 => 0xa,
+            // 0xA matches note number so the only one left is the program
+            0x9 => 0xb,
+            // Drum numbers increase so source note
+            0xa => 0xc,
+            // 16 chars, seems to be a name (spec is wrong? says 12)
+            0xb => 0,
+            _ => {
+                sys_ex_not_recognized(syx, "User Drum Bulk Dump System Exclusive");
+                return;
+            }
+        };
+
+        let address2 = (a2 & 0xf0) | actual_drum_param;
+        for midi_note in 0..data_length {
+            self.handle_user_drum(address2, midi_note as u8, syx[midi_note + 7], syx);
+        }
+    }
+
     /// GS Drum Setup (a1 = 0x41 / 0x51).
     /// Applies to every channel whose drum map matches.
     /// Equivalent to: the `a1 === 0x41 || a1 === 0x51` branch of rolandSystemExclusive

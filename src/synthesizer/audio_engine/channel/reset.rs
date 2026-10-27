@@ -4,7 +4,7 @@
 use crate::midi::enums::midi_controllers;
 use crate::midi::midi_tools::sysex_data::{DEFAULT_GS_DRUM_MAP, DEFAULT_XG_DRUM_MAP, MELODIC_MAP};
 use crate::soundbank::enums::modulator_sources;
-use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
+use crate::synthesizer::audio_engine::channel::midi_channel::{DrumLocks, MidiChannel};
 use crate::synthesizer::audio_engine::channel::parameters::midi::{
     ChannelMidiParameterValue, CUSTOM_RESET_ARRAY, DEFAULT_MIDI_CONTROLLER_VALUES,
 };
@@ -78,7 +78,7 @@ impl MidiChannel {
         voices: &mut [Voice],
         current_time: f64,
         current_system: MIDISystem,
-        drum_lock: bool,
+        locks: DrumLocks,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
         self.channel_octave_tuning.fill(0);
@@ -180,7 +180,7 @@ impl MidiChannel {
         self.playing_notes.fill(false);
 
         // Reset drum parameters (SC-88 standard reverb values, etc.)
-        self.reset_drum_params(drum_lock, current_system);
+        self.reset_drum_params(locks.drum, current_system);
 
         events
     }
@@ -195,7 +195,7 @@ impl MidiChannel {
         &mut self,
         sound_bank_manager: &crate::synthesizer::audio_engine::sound_bank_manager::SoundBankManager,
         current_system: MIDISystem,
-        drum_lock: bool,
+        locks: DrumLocks,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
         // Reset program: default bank, program 0,
@@ -204,13 +204,13 @@ impl MidiChannel {
         self.set_bank_msb(BankSelectHacks::get_default_bank(ch_system));
         self.set_bank_lsb(0);
         let mut events =
-            self.program_change(0, sound_bank_manager, current_system, drum_lock, enable_event_system);
+            self.program_change(0, sound_bank_manager, current_system, locks, enable_event_system);
         let is_drum = self.channel % 16 == MIDI_DRUM_CHANNEL;
         events.append(&mut self.set_drums(
             is_drum,
             sound_bank_manager,
             current_system,
-            drum_lock,
+            locks,
             enable_event_system,
         ));
 

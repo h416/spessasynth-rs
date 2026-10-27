@@ -62,11 +62,13 @@
 ///   `systemParameters.presetLock` juggling in the preset-list refresh, and effect processor
 ///   constructors taking `maxBufferSize`.
 use std::collections::HashMap;
+use crate::synthesizer::audio_engine::channel::midi_channel::DrumLocks;
 
 use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
+use crate::midi::drum_parameters::UserDrumSetParameterChange;
 use crate::synthesizer::audio_engine::channel::render_voice::{
     EffectSends, RenderVoiceContext, VoiceSendBuffer,
 };
@@ -94,7 +96,7 @@ use crate::synthesizer::types::{
     CachedVoiceList, EffectChangeCallback, EffectKind, SynthProcessorEvent, SynthProcessorOptions,
 };
 use crate::soundbank::types::MIDISystem;
-use crate::utils::loggin::SpessaLog;
+use crate::utils::loggin::{SpessaLog, spessa_synth_info};
 use crate::utils::other::SplitMix32;
 
 // ---------------------------------------------------------------------------
@@ -268,6 +270,11 @@ pub struct SynthesizerCore {
     /// Equivalent to: cachedVoices: Map<number, CachedVoiceList>
     pub cached_voices: HashMap<u64, CachedVoiceList>,
 
+    /// The cached voices of the GS user drum sets, tagged with the drum set generation
+    /// they were built in (see `UserDrumSet::generation`).
+    /// Equivalent to: the user drum entries of cachedVoices + purgeCachedPatch
+    pub(crate) user_drum_cached_voices: HashMap<u64, (u32, CachedVoiceList)>,
+
     /// Total active voice count. Private in TS 4.3.0 (`_voiceCount` + getter).
     pub(crate) voice_count: u32,
 
@@ -377,6 +384,7 @@ impl SynthesizerCore {
             pan_smoothing_factor,
             event_callback: Box::new(event_callback),
             cached_voices: HashMap::new(),
+            user_drum_cached_voices: HashMap::new(),
             voice_count: 0,
             last_priority_assignment_time: 0.0,
             event_queue: Vec::new(),
@@ -550,6 +558,13 @@ impl SynthesizerCore {
         let current_time = self.current_time;
         let mut events = Vec::new();
 
+        // Reset GS user drums
+        if !self.system_parameters.user_drum_lock {
+            for user_drum in self.sound_bank_manager.user_drum_sets.iter_mut() {
+                user_drum.reset();
+            }
+        }
+
         // Reset channels
         // Do not send CC changes as we call reset
         // TODO(Task 21): TS 4.3.0 calls ch.reset(false) — the legacy
@@ -560,7 +575,7 @@ impl SynthesizerCore {
                 &mut self.voices,
                 current_time,
                 system,
-                self.system_parameters.drum_lock,
+                DrumLocks::of(&self.system_parameters),
                 events_enabled,
             );
             events.append(&mut sub);
@@ -568,7 +583,7 @@ impl SynthesizerCore {
             let mut sub = self.midi_channels[ch_idx].reset_preset(
                 &self.sound_bank_manager,
                 system,
-                self.system_parameters.drum_lock,
+                DrumLocks::of(&self.system_parameters),
                 events_enabled,
             );
             events.append(&mut sub);
@@ -1165,6 +1180,29 @@ impl SynthesizerCore {
         }
     }
 
+    /// Sets a parameter of a GS user drum set key.
+    /// Equivalent to: setUserDrumSetParam(drumSet, midiNote, parameter, value)
+    pub(crate) fn set_user_drum_set_param(
+        &mut self,
+        drum_set: usize,
+        midi_note: usize,
+        parameter: UserDrumSetParameterChange,
+    ) {
+        let Some(set) = self.sound_bank_manager.user_drum_sets.get_mut(drum_set) else {
+            return;
+        };
+        let key = &mut set.key_params[midi_note];
+        // Optimization for bulk dump: skip unchanged values (no event)
+        // Testcase FADED88.mid
+        if !parameter.apply(key) {
+            return;
+        }
+        spessa_synth_info(&format!(
+            "GS User Drum Set {} {:?}, key {}",
+            drum_set, parameter, midi_note
+        ));
+    }
+
     /// Gets voices for a channel+note+velocity.
     /// Equivalent to: getVoices(channel, midiNote, velocity)
     pub fn get_voices(&self, channel: u8, midi_note: u8, velocity: u8) -> CachedVoiceList {
@@ -1246,6 +1284,7 @@ impl SynthesizerCore {
     /// Equivalent to: clearCache()
     pub fn clear_cache(&mut self) {
         self.cached_voices.clear();
+        self.user_drum_cached_voices.clear();
     }
 
     /// Sets the global MIDI volume (squared, matching 4.3.14).
@@ -1349,7 +1388,13 @@ impl SynthesizerCore {
         let note = midi_note as u64;
         let vel = velocity as u64;
 
-        bank_msb + bank_lsb * 128 + program * 16_384 + 2_097_152 * note + 268_435_456 * vel
+        // 129x128x128x128x128 array! (4.4.0; was a 128-based key, where the drum MSB 128
+        // collided with LSB 1)
+        bank_msb // 129 * 128 ^ 0
+            + bank_lsb * 129 // 129 * 128 ^ 0
+            + program * 16_512 // 129 * 128 ^ 1
+            + 2_113_536 * note // 129 * 128 ^ 2
+            + 270_532_608 * vel // 129 * 128 ^ 3
     }
 
     /// Pushes a callback to the event queue to be called at the given time.

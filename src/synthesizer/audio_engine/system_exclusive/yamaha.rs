@@ -3,6 +3,7 @@
 /// Ported from: src/synthesizer/audio_engine/system_exclusive/yamaha.ts
 /// Reference: http://www.studio4all.de/htmle/main91.html
 use crate::midi::enums::midi_controllers;
+use crate::synthesizer::audio_engine::channel::midi_channel::DrumLocks;
 use crate::synthesizer::audio_engine::channel::parameters::midi::ChannelMidiParameterValue;
 use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::sys_ex_not_recognized;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
@@ -138,7 +139,7 @@ impl SynthesizerCore {
                         data,
                         &self.sound_bank_manager,
                         current_system,
-                        self.system_parameters.drum_lock,
+                        DrumLocks::of(&self.system_parameters),
                         enable_event_system,
                     );
                     for ev in evs {
@@ -187,7 +188,7 @@ impl SynthesizerCore {
                         drums,
                         &self.sound_bank_manager,
                         current_system,
-                        self.system_parameters.drum_lock,
+                        DrumLocks::of(&self.system_parameters),
                         enable_event_system,
                     );
                     for ev in evs {

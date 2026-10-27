@@ -16,6 +16,7 @@ use crate::soundbank::enums::modulator_sources;
 use crate::midi::drum_parameters::{DEFAULT_DRUM_REVERB, DrumParameter, DrumParameterUtils};
 use crate::synthesizer::audio_engine::channel::dynamic_modulator_system::DynamicModulatorSystem;
 use crate::synthesizer::audio_engine::channel::render_voice::VoiceSendBuffer;
+use crate::synthesizer::audio_engine::parameters::system::GlobalSystemParameter;
 use crate::synthesizer::audio_engine::channel::parameters::midi::{
     CONTROLLER_TABLE_SIZE, CUSTOM_CONTROLLER_TABLE_SIZE, CUSTOM_RESET_ARRAY,
     ChannelMidiParameter, ChannelMidiParameterValue, DEFAULT_CHANNEL_MIDI_PARAMETERS,
@@ -52,6 +53,26 @@ pub struct ChannelVibrato {
     pub depth: f64,
     /// Vibrato rate in Hz.
     pub rate: f64,
+}
+
+/// The drum-related system parameter locks a program change needs.
+/// TS reads them from `this.synthCore.systemParameters`; a Rust channel has no core
+/// reference, so the callers pass them in.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DrumLocks {
+    /// Equivalent to: systemParameters.drumLock
+    pub drum: bool,
+    /// Equivalent to: systemParameters.userDrumLock
+    pub user_drum: bool,
+}
+
+impl DrumLocks {
+    pub fn of(sys: &GlobalSystemParameter) -> Self {
+        Self {
+            drum: sys.drum_lock,
+            user_drum: sys.user_drum_lock,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -937,7 +958,7 @@ impl MidiChannel {
         is_drum: bool,
         sound_bank_manager: &crate::synthesizer::audio_engine::sound_bank_manager::SoundBankManager,
         current_system: MIDISystem,
-        drum_lock: bool,
+        locks: DrumLocks,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
         if self.lock_preset {
@@ -970,7 +991,7 @@ impl MidiChannel {
                 program,
                 sound_bank_manager,
                 current_system,
-                drum_lock,
+                locks,
                 enable_event_system,
             );
         }
@@ -981,7 +1002,7 @@ impl MidiChannel {
         self.set_is_gm_gs_drum(is_drum);
         let program = self.patch.program;
         let events =
-            self.program_change(program, sound_bank_manager, current_system, drum_lock, enable_event_system);
+            self.program_change(program, sound_bank_manager, current_system, locks, enable_event_system);
         // Fallback if no preset matched and the flag didn't sync
         self.set_drum_flag(is_drum);
         events

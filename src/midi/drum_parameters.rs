@@ -41,6 +41,68 @@ pub struct DrumParameter {
     pub rx_note_off: bool,
 }
 
+/// Parameters of a single key of a GS User Drum Set.
+/// Equivalent to: interface UserDrumSetParameter extends DrumParameter (midi/types.ts)
+#[derive(Clone, Debug, PartialEq)]
+pub struct UserDrumSetParameter {
+    /// The per-key drum parameters (pitch, level, sends, ...).
+    pub drum: DrumParameter,
+    /// The key of the source drum set that this key plays.
+    pub source_note_number: u8,
+    /// The source drum set (bank LSB of the GS drum patch, i.e. the SC map).
+    pub source_drum_set: u8,
+    /// The program of the source drum set.
+    pub program: u8,
+}
+
+/// A single `UserDrumSetParameter` field and its new value.
+/// Rust equivalent of the TS `setUserDrumSetParam<K>(.., parameter: K, value)` pair.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum UserDrumSetParameterChange {
+    PitchCoarse(f64),
+    Level(u8),
+    AssignGroup(u8),
+    Pan(u8),
+    ReverbSend(u8),
+    ChorusSend(u8),
+    RxNoteOff(bool),
+    RxNoteOn(bool),
+    VariationSend(u8),
+    SourceDrumSet(u8),
+    Program(u8),
+    SourceNoteNumber(u8),
+}
+
+impl UserDrumSetParameterChange {
+    /// Sets the field. Returns false if it already had this value.
+    pub fn apply(self, p: &mut UserDrumSetParameter) -> bool {
+        use UserDrumSetParameterChange as C;
+        macro_rules! set {
+            ($field:expr, $v:expr) => {{
+                if $field == $v {
+                    return false;
+                }
+                $field = $v;
+            }};
+        }
+        match self {
+            C::PitchCoarse(v) => set!(p.drum.pitch_coarse, v),
+            C::Level(v) => set!(p.drum.level, v),
+            C::AssignGroup(v) => set!(p.drum.assign_group, v),
+            C::Pan(v) => set!(p.drum.pan, v),
+            C::ReverbSend(v) => set!(p.drum.reverb_send, v),
+            C::ChorusSend(v) => set!(p.drum.chorus_send, v),
+            C::RxNoteOff(v) => set!(p.drum.rx_note_off, v),
+            C::RxNoteOn(v) => set!(p.drum.rx_note_on, v),
+            C::VariationSend(v) => set!(p.drum.variation_send, v),
+            C::SourceDrumSet(v) => set!(p.source_drum_set, v),
+            C::Program(v) => set!(p.program, v),
+            C::SourceNoteNumber(v) => set!(p.source_note_number, v),
+        }
+        true
+    }
+}
+
 /// Equivalent to: class DrumParameterUtils
 pub struct DrumParameterUtils;
 
@@ -60,6 +122,26 @@ impl DrumParameterUtils {
             rx_note_on: true,
             rx_note_off: false,
         }
+    }
+
+    /// The default parameters of a GS User Drum Set key.
+    /// Equivalent to: DrumParameterUtils.DEFAULT_USER_DATA[midiNote]
+    pub fn default_user_data(midi_note: usize) -> UserDrumSetParameter {
+        UserDrumSetParameter {
+            drum: Self::default_data(midi_note),
+            source_note_number: midi_note as u8,
+            // Default to 2 which is SC-88 drum set (confirmed with SCVA)
+            source_drum_set: 2,
+            program: 0,
+        }
+    }
+
+    /// Equivalent to: DrumParameterUtils.copyIntoUser(source, dest)
+    pub fn copy_into_user(source: &UserDrumSetParameter, dest: &mut UserDrumSetParameter) {
+        Self::copy_into(&source.drum, &mut dest.drum);
+        dest.source_drum_set = source.source_drum_set;
+        dest.source_note_number = source.source_note_number;
+        dest.program = source.program;
     }
 
     /// Equivalent to: DrumParameterUtils.copyInto(source, dest)

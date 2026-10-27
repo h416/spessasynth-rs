@@ -8,6 +8,7 @@
 /// `&SynthesizerCore` / `&mut SynthesizerCore` directly, eliminating the
 /// dependency on the (not-yet-ported) `processor.rs`.
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatchFull;
+use crate::synthesizer::audio_engine::channel::midi_channel::DrumLocks;
 use crate::midi::drum_parameters::{DrumParameter, DrumParameterUtils};
 use crate::synthesizer::audio_engine::channel::midi_channel::ChannelVibrato;
 use crate::synthesizer::audio_engine::channel::parameters::midi::{
@@ -211,7 +212,7 @@ impl ChannelSnapshot {
             patch.program,
             &core.sound_bank_manager,
             current_system,
-            core.system_parameters.drum_lock,
+            DrumLocks::of(&core.system_parameters),
             enable_event_system,
         );
 

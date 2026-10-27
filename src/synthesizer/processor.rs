@@ -32,6 +32,7 @@
 /// - `killVoices` (deprecated no-op) removed upstream; never existed in Rust.
 /// - The constructor creates 16 channels via a literal (MIDI_CHANNEL_COUNT was removed).
 use crate::midi::enums::midi_message_types;
+use crate::synthesizer::audio_engine::channel::midi_channel::DrumLocks;
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::soundbank::sound_bank_loader::load_sound_bank;
@@ -130,7 +131,7 @@ impl SynthesizerCore {
             program,
             &self.sound_bank_manager,
             current_system,
-            self.system_parameters.drum_lock,
+            DrumLocks::of(&self.system_parameters),
             events_enabled,
         );
         for ev in events {
