@@ -62,6 +62,8 @@
 ///   `systemParameters.presetLock` juggling in the preset-list refresh, and effect processor
 ///   constructors taking `maxBufferSize`.
 use crate::synthesizer::audio_engine::effects::xg::implementation::chorus::DefaultXGChorus;
+use crate::synthesizer::audio_engine::effects::xg::implementation::insertion::DefaultXGInsertion;
+use crate::synthesizer::audio_engine::effects::xg::implementation::variation::DefaultXGVariation;
 use crate::synthesizer::audio_engine::effects::xg::implementation::reverb::DefaultXGReverb;
 use std::collections::HashMap;
 use crate::synthesizer::audio_engine::channel::midi_channel::DrumLocks;
@@ -136,6 +138,16 @@ fn move_sends(sends: &mut [f64], input: &mut [f32], sample_count: usize) {
 // ---------------------------------------------------------------------------
 // SynthesizerCore
 // ---------------------------------------------------------------------------
+
+/// MU2000 has 4 insertion effects. We can do more but leave it at 4 for now
+const XG_INSERTION_COUNT: usize = 4;
+
+/// The block `processXGInsertion` runs (the TS passes the block object).
+#[derive(Clone, Copy)]
+enum XGInsertionTarget {
+    Insertion(usize),
+    Variation,
+}
 
 /// The core synthesis engine which interacts with channels and holds all synth parameters.
 /// Equivalent to: class SynthesizerCore
@@ -250,9 +262,17 @@ pub struct SynthesizerCore {
     /// Equivalent to: portSelectChannelOffset (protected)
     pub(crate) port_select_channel_offset: usize,
 
-    /// TODO(XG effects): `xgVariationBlock.insertionMode`. The XG blocks are not ported yet;
-    /// the variation block defaults to system mode.
-    pub(crate) xg_variation_insertion_mode: bool,
+    /// The synthesizer's XG variation block.
+    /// Variation is public so voice render can check if sends should be routed to it.
+    /// Equivalent to: xgVariationBlock
+    pub xg_variation_block: DefaultXGVariation,
+    /// XG insertion effect blocks.
+    /// Equivalent to: xgInsertionBlocks
+    pub xg_insertion_blocks: Vec<DefaultXGInsertion>,
+    /// Left/right float32 buffers for processing XG insertion effects in-place.
+    /// Equivalent to: xgInsertionBufferL/R
+    xg_insertion_buffer_l: Vec<f32>,
+    xg_insertion_buffer_r: Vec<f32>,
 
     /// The pan of the left channel (0.0–1.0), derived from
     /// `system_parameters.pan + midi_parameters.pan`.
@@ -386,7 +406,12 @@ impl SynthesizerCore {
             xg_chorus_send_r: vec![0.0; buf_size],
             xg_variation_send_l: vec![0.0; buf_size],
             xg_variation_send_r: vec![0.0; buf_size],
-            xg_variation_insertion_mode: false,
+            xg_variation_block: DefaultXGVariation::new(sample_rate, buf_size),
+            xg_insertion_blocks: (0..XG_INSERTION_COUNT)
+                .map(|_| DefaultXGInsertion::new(sample_rate, buf_size))
+                .collect(),
+            xg_insertion_buffer_l: vec![0.0; buf_size],
+            xg_insertion_buffer_r: vec![0.0; buf_size],
             custom_channel_numbers: false,
             port_select_channel_offset: 0,
             pan_left: 0.5,
@@ -574,6 +599,14 @@ impl SynthesizerCore {
         if !self.system_parameters.xg_chorus_lock {
             self.xg_chorus_block.reset();
         }
+        if !self.system_parameters.xg_variation_lock {
+            self.xg_variation_block.reset();
+        }
+        if !self.system_parameters.xg_insertion_lock {
+            for insertion in self.xg_insertion_blocks.iter_mut() {
+                insertion.reset();
+            }
+        }
 
         let events_enabled = self.system_parameters.events_enabled;
         let current_time = self.current_time;
@@ -645,11 +678,33 @@ impl SynthesizerCore {
         );
 
         let is_xg = self.midi_parameters.system == MIDISystem::Xg;
-        let variation_insertion = self.xg_variation_insertion_mode;
+        let variation_insertion = self.xg_variation_block.insertion_mode;
         let fx = self.system_parameters.effects_enabled;
 
-        // TODO(XG effects): for XG, renderVoice always checks if insertion is assigned to
-        // bypass effect sends (`channel.xgInsertionAssigned`, from the XG insertion blocks).
+        // For XG, renderVoice always checks if insertion is assigned to bypass effect sends
+        // Cache it here
+        if is_xg && fx {
+            for channel in self.midi_channels.iter_mut() {
+                channel.xg_insertion_assigned = false;
+            }
+
+            for insertion in self.xg_insertion_blocks.iter() {
+                if let Some(channel) = usize::try_from(insertion.part_number)
+                    .ok()
+                    .and_then(|n| self.midi_channels.get_mut(n))
+                {
+                    channel.xg_insertion_assigned = true;
+                }
+            }
+            if variation_insertion {
+                if let Some(channel) = usize::try_from(self.xg_variation_block.part_number)
+                    .ok()
+                    .and_then(|n| self.midi_channels.get_mut(n))
+                {
+                    channel.xg_insertion_assigned = true;
+                }
+            }
+        }
 
         // Clear the buffers
         // (The effect inputs are overwritten with the voice sends after rendering)
@@ -754,8 +809,53 @@ impl SynthesizerCore {
             }
         }
 
-        // TODO(XG effects): process the XG insertion blocks and route the sends of
-        // channels with insertion assigned (`processXGInsertion`).
+        // Process insertion effects
+        if is_xg && fx {
+            let channel_count = self.midi_channels.len();
+            let part = |n: i32| usize::try_from(n).ok().filter(|&n| n < channel_count);
+            for b in 0..self.xg_insertion_blocks.len() {
+                if let Some(channel) = part(self.xg_insertion_blocks[b].part_number) {
+                    self.process_xg_insertion(XGInsertionTarget::Insertion(b), channel, sample_count);
+                }
+            }
+
+            // Variation is processed last
+            // See MU128 manual, page 154
+            if variation_insertion {
+                if let Some(channel) = part(self.xg_variation_block.part_number) {
+                    self.process_xg_insertion(XGInsertionTarget::Variation, channel, sample_count);
+                }
+            }
+
+            // If a channel has insertion assigned (or variation in insertion mode) then its sends are routed globally (not in renderVoice)
+            // If effectsEnabled is false it does not matter, so the code here can also be skipped.
+            for ch in self.midi_channels.iter() {
+                if !ch.xg_insertion_assigned {
+                    continue;
+                }
+
+                let rev_send =
+                    (ch.midi_controllers[midi_controllers::REVERB_DEPTH as usize] >> 7) as f64 / 127.0;
+                let cho_send =
+                    (ch.midi_controllers[midi_controllers::CHORUS_DEPTH as usize] >> 7) as f64 / 127.0;
+                if rev_send <= 0.0 && cho_send <= 0.0 {
+                    continue;
+                }
+
+                for i in 0..sample_count {
+                    let wet_l = ch.output_left[i];
+                    let wet_r = ch.output_right[i];
+                    self.xg_reverb_input_l[i] =
+                        (self.xg_reverb_input_l[i] as f64 + wet_l * rev_send) as f32;
+                    self.xg_reverb_input_r[i] =
+                        (self.xg_reverb_input_r[i] as f64 + wet_r * rev_send) as f32;
+                    self.xg_chorus_input_l[i] =
+                        (self.xg_chorus_input_l[i] as f64 + wet_l * cho_send) as f32;
+                    self.xg_chorus_input_r[i] =
+                        (self.xg_chorus_input_r[i] as f64 + wet_r * cho_send) as f32;
+                }
+            }
+        }
 
         let (out_left, out_rest) = outputs.split_at_mut(1);
         let left = &mut out_left[0];
@@ -805,7 +905,21 @@ impl SynthesizerCore {
         // Process effects
         if fx {
             if is_xg {
-                // TODO(XG effects): variation (system) block.
+                // Variation system first, feeds the chorus and reverb
+                if !variation_insertion {
+                    self.xg_variation_block.process(
+                        &self.xg_variation_input_l,
+                        &self.xg_variation_input_r,
+                        left,
+                        right,
+                        &mut self.xg_chorus_input_l,
+                        &mut self.xg_chorus_input_r,
+                        &mut self.xg_reverb_input_l,
+                        &mut self.xg_reverb_input_r,
+                        start_index,
+                        sample_count,
+                    );
+                }
 
                 // Chorus feeds reverb, reverb goes straight to the output
                 self.xg_chorus_block.process(
@@ -878,6 +992,37 @@ impl SynthesizerCore {
 
         // Advance the time appropriately
         self.current_time += sample_count as f64 * self.sample_time;
+    }
+
+    /// Runs an XG insertion block (or the variation in insertion mode) on a channel's output.
+    /// Equivalent to: processXGInsertion(block, channel, sampleCount)
+    fn process_xg_insertion(
+        &mut self,
+        block: XGInsertionTarget,
+        channel: usize,
+        sample_count: usize,
+    ) {
+        let buffer_l = &mut self.xg_insertion_buffer_l;
+        let buffer_r = &mut self.xg_insertion_buffer_r;
+        let ch = &mut self.midi_channels[channel];
+        for i in 0..sample_count {
+            buffer_l[i] = ch.output_left[i] as f32;
+            buffer_r[i] = ch.output_right[i] as f32;
+        }
+        match block {
+            XGInsertionTarget::Insertion(b) => {
+                self.xg_insertion_blocks[b].process_insertion(buffer_l, buffer_r, sample_count)
+            }
+            XGInsertionTarget::Variation => {
+                self.xg_variation_block.process_insertion(buffer_l, buffer_r, sample_count)
+            }
+        }
+        for i in 0..sample_count {
+            ch.output_left[i] = buffer_l[i] as f64;
+            ch.output_right[i] = buffer_r[i] as f64;
+        }
+        // The insertion output (including its tail) is now in the channel
+        ch.output_dirty = true;
     }
 
     /// Sets the reverb macro (SC-8850 manual page 81).

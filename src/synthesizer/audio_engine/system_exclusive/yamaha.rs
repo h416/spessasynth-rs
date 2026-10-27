@@ -152,8 +152,129 @@ impl SynthesizerCore {
                     spessa_synth_info(&format!("XG Chorus Parameter {}: {}", a3 - 0x25, data));
                 }
 
+                0x40 => {
+                    let effect_type = ((data << 8) | syx[7] as i32) as u16;
+                    self.xg_variation_block.system.effect.set_type(effect_type);
+                    spessa_synth_info(&format!("XG Variation Type: {:x}", effect_type));
+                }
+
+                0x42 | 0x44 | 0x46 | 0x48 | 0x4a | 0x4c | 0x4e | 0x50 | 0x52 | 0x54 => {
+                    let value = (data << 7) | syx[7] as i32;
+                    // Bit shift by 1 because address increases by two
+                    self.xg_variation_block
+                        .system
+                        .effect
+                        .set_parameter((a3 as i32 - 0x42) >> 1, value);
+                    spessa_synth_info(&format!(
+                        "XG Variation Parameter {} (14-bit): {}",
+                        a3 - 0x41,
+                        value
+                    ));
+                }
+
+                0x56 => {
+                    self.xg_variation_block.system.r#return = data;
+                    spessa_synth_info(&format!("XG Variation Return: {}", data));
+                }
+
+                0x57 => {
+                    self.xg_variation_block.system.pan = data;
+                    spessa_synth_info(&format!("XG Variation Pan: {}", data));
+                }
+
+                0x58 => {
+                    self.xg_variation_block.send_to_reverb = data;
+                    spessa_synth_info(&format!("XG Variation Send To Reverb: {}", data));
+                }
+
+                0x59 => {
+                    self.xg_variation_block.send_to_chorus = data;
+                    spessa_synth_info(&format!("XG Variation Send To Chorus: {}", data));
+                }
+
+                0x5a => {
+                    self.xg_variation_block.insertion_mode = data == 0;
+                    spessa_synth_info(&format!(
+                        "XG Variation Connection: {}",
+                        if data == 0 { "INSERTION" } else { "SYSTEM" }
+                    ));
+                }
+
+                0x5b => {
+                    self.xg_variation_block.part_number = data;
+                    spessa_synth_info(&format!("XG Variation Part Number: {}", data));
+                }
+
+                0x70..=0x75 => {
+                    // These are 7-bit only
+                    self.xg_variation_block.system.effect.set_parameter(a3 as i32 - 0x66, data);
+                    spessa_synth_info(&format!("XG Variation Parameter {}: {}", a3 - 0x65, data));
+                }
+
                 _ => {
                     sys_ex_not_recognized(&[a3], "Yamaha XG EFFECT 1 Parameter");
+                }
+            }
+            return;
+        }
+
+        // XG EFFECT 2 (insertion)
+        if a1 == 0x03 {
+            if self.system_parameters.xg_insertion_lock {
+                return;
+            }
+            let Some(insertion) = self.xg_insertion_blocks.get_mut(a2 as usize) else {
+                sys_ex_not_recognized(&[a2], "Yamaha XG Insertion Effect Number");
+                return;
+            };
+            let data = data as i32;
+
+            match a3 {
+                0x00 => {
+                    let effect_type = ((data << 8) | syx[7] as i32) as u16;
+                    insertion.effect.set_type(effect_type);
+                    spessa_synth_info(&format!("XG Insertion {} Type: {:x}", a2, effect_type));
+                }
+
+                0x02..=0x0b => {
+                    insertion.effect.set_parameter(a3 as i32 - 0x02, data);
+                    spessa_synth_info(&format!(
+                        "XG Insertion {} Parameter {}: {}",
+                        a2,
+                        a3 - 0x01,
+                        data
+                    ));
+                }
+
+                0x0c => {
+                    insertion.part_number = data;
+                    spessa_synth_info(&format!("XG Insertion {} Part Number: {}", a2, data));
+                }
+
+                0x20..=0x25 => {
+                    insertion.effect.set_parameter(a3 as i32 - 0x16, data);
+                    spessa_synth_info(&format!(
+                        "XG Insertion {} Parameter {}: {}",
+                        a2,
+                        a3 - 0x15,
+                        data
+                    ));
+                }
+
+                0x30 | 0x32 | 0x34 | 0x36 | 0x38 | 0x3a | 0x3c | 0x3e | 0x40 | 0x42 => {
+                    let value = (data << 7) | syx[7] as i32;
+                    // Bit shift by 1 because address increases by two
+                    insertion.effect.set_parameter((a3 as i32 - 0x30) >> 1, value);
+                    spessa_synth_info(&format!(
+                        "XG Insertion {} Parameter {} (14-bit): {}",
+                        a2,
+                        a3 - 0x2f,
+                        value
+                    ));
+                }
+
+                _ => {
+                    sys_ex_not_recognized(&[a3], "Yamaha XG EFFECT 2 Parameter");
                 }
             }
             return;
