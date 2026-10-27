@@ -433,7 +433,7 @@ impl SynthesizerCore {
                                     let cents = (data as f64 / 127.0) * 600.0;
                                     self.midi_channels[channel].set_modulation_depth(cents);
                                 } else {
-                                    self.midi_channels[channel].sys_ex_modulators.setup_receiver(
+                                    self.midi_channels[channel].sys_ex_modulators.setup_receiver_gs(
                                         a3,
                                         data,
                                         midi_controllers::MODULATION_WHEEL as usize,
@@ -456,7 +456,7 @@ impl SynthesizerCore {
                                         ),
                                     );
                                 } else {
-                                    self.midi_channels[channel].sys_ex_modulators.setup_receiver(
+                                    self.midi_channels[channel].sys_ex_modulators.setup_receiver_gs(
                                         a3,
                                         data,
                                         modulator_sources::PITCH_WHEEL as usize,
@@ -468,7 +468,7 @@ impl SynthesizerCore {
                             }
                             0x20 => {
                                 // Channel pressure
-                                self.midi_channels[channel].sys_ex_modulators.setup_receiver(
+                                self.midi_channels[channel].sys_ex_modulators.setup_receiver_gs(
                                     a3,
                                     data,
                                     modulator_sources::CHANNEL_PRESSURE as usize,
@@ -479,7 +479,7 @@ impl SynthesizerCore {
                             }
                             0x30 => {
                                 // Poly pressure
-                                self.midi_channels[channel].sys_ex_modulators.setup_receiver(
+                                self.midi_channels[channel].sys_ex_modulators.setup_receiver_gs(
                                     a3,
                                     data,
                                     modulator_sources::POLY_PRESSURE as usize,
@@ -491,14 +491,14 @@ impl SynthesizerCore {
                             0x40 => {
                                 // CC1
                                 let cc1 = self.midi_channels[channel].midi_parameters.cc1 as usize;
-                                self.midi_channels[channel].sys_ex_modulators.setup_receiver(
+                                self.midi_channels[channel].sys_ex_modulators.setup_receiver_gs(
                                     a3, data, cc1, true, "CC1", false,
                                 );
                             }
                             0x50 => {
                                 // CC2
                                 let cc2 = self.midi_channels[channel].midi_parameters.cc2 as usize;
-                                self.midi_channels[channel].sys_ex_modulators.setup_receiver(
+                                self.midi_channels[channel].sys_ex_modulators.setup_receiver_gs(
                                     a3, data, cc2, true, "CC2", false,
                                 );
                             }
