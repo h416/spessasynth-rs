@@ -691,15 +691,9 @@ pub trait XGProgram {
         self.push_coefficients(list, list.len(), 0);
     }
 
-    /// Equivalent to: XGDSPProgram.setParameter
+    /// The public setParameter (overridden by the flanger).
     fn set_parameter_program(&mut self, param: i32, value: i32) {
-        if !(0..=15).contains(&param) {
-            return;
-        }
-        let param = param as usize;
-        let v = self.clamp_parameter(param, value);
-        self.program_mut().params[param] = v as i16;
-        self.convert(param);
+        set_parameter_base(self, param, value);
     }
 
     /// Clears the delay memory and the routine state, then loads the type preset and the defaults.
@@ -855,6 +849,17 @@ pub trait XGProgram {
         p.round_second_order(b0, b1, b2, a1, a2, list);
         self.push_coefficients(list, 5, 0);
     }
+}
+
+/// Equivalent to: XGDSPProgram.setParameter (the base implementation)
+pub fn set_parameter_base<P: XGProgram + ?Sized>(program: &mut P, param: i32, value: i32) {
+    if !(0..=15).contains(&param) {
+        return;
+    }
+    let param = param as usize;
+    let v = program.clamp_parameter(param, value);
+    program.program_mut().params[param] = v as i16;
+    program.convert(param);
 }
 
 impl<T: XGProgram> DefaultXGEffectProcessor for T {

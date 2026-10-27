@@ -1,4 +1,5 @@
 //! The default XG effect blocks.
+pub mod chorus;
 pub mod dsp;
 pub mod effect;
 pub mod reverb;

@@ -119,6 +119,37 @@ impl SynthesizerCore {
                     spessa_synth_info(&format!("XG Reverb Parameter {}: {}", a3 - 0x05, data));
                 }
 
+                0x20 => {
+                    let effect_type = ((data << 8) | syx[7] as i32) as u16;
+                    self.xg_chorus_block.system.effect.set_type(effect_type);
+                    spessa_synth_info(&format!("XG Chorus Type: {:x}", effect_type));
+                }
+
+                0x22..=0x2b => {
+                    self.xg_chorus_block.system.effect.set_parameter(a3 as i32 - 0x22, data);
+                    spessa_synth_info(&format!("XG Chorus Parameter {}: {}", a3 - 0x21, data));
+                }
+
+                0x2c => {
+                    self.xg_chorus_block.system.r#return = data;
+                    spessa_synth_info(&format!("XG Chorus Return: {}", data));
+                }
+
+                0x2d => {
+                    self.xg_chorus_block.system.pan = data;
+                    spessa_synth_info(&format!("XG Chorus Pan: {}", data));
+                }
+
+                0x2e => {
+                    self.xg_chorus_block.send_to_reverb = data;
+                    spessa_synth_info(&format!("XG Chorus Send To Reverb: {}", data));
+                }
+
+                0x30..=0x35 => {
+                    self.xg_chorus_block.system.effect.set_parameter(a3 as i32 - 0x26, data);
+                    spessa_synth_info(&format!("XG Chorus Parameter {}: {}", a3 - 0x25, data));
+                }
+
                 _ => {
                     sys_ex_not_recognized(&[a3], "Yamaha XG EFFECT 1 Parameter");
                 }

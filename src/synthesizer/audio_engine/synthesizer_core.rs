@@ -61,6 +61,7 @@
 ///   implemented), `ch.setMIDIParameter("pressure", ...)`, `ch.destroy()`, per-channel
 ///   `systemParameters.presetLock` juggling in the preset-list refresh, and effect processor
 ///   constructors taking `maxBufferSize`.
+use crate::synthesizer::audio_engine::effects::xg::implementation::chorus::DefaultXGChorus;
 use crate::synthesizer::audio_engine::effects::xg::implementation::reverb::DefaultXGReverb;
 use std::collections::HashMap;
 use crate::synthesizer::audio_engine::channel::midi_channel::DrumLocks;
@@ -186,6 +187,9 @@ pub struct SynthesizerCore {
     /// Used when `GlobalMIDIParameter.system` is `xg`.
     /// Equivalent to: xgReverbBlock
     pub xg_reverb_block: DefaultXGReverb,
+    /// The synthesizer's XG chorus block.
+    /// Equivalent to: xgChorusBlock
+    pub xg_chorus_block: DefaultXGChorus,
 
     /// Chorus effect processor.
     pub chorus_processor: SpessaSynthChorus,
@@ -357,6 +361,7 @@ impl SynthesizerCore {
             midi_volume: 1.0,
             reverb_processor: SpessaSynthReverb::new(sample_rate, buf_size),
             xg_reverb_block: DefaultXGReverb::new(sample_rate, buf_size),
+            xg_chorus_block: DefaultXGChorus::new(sample_rate, buf_size),
             chorus_processor: SpessaSynthChorus::new(sample_rate, buf_size),
             delay_processor: DefaultGSDelay::new(sample_rate, buf_size),
             gs_delay_active: false,
@@ -565,6 +570,9 @@ impl SynthesizerCore {
         // Reset XG params
         if !self.system_parameters.xg_reverb_lock {
             self.xg_reverb_block.reset();
+        }
+        if !self.system_parameters.xg_chorus_lock {
+            self.xg_chorus_block.reset();
         }
 
         let events_enabled = self.system_parameters.events_enabled;
@@ -797,7 +805,19 @@ impl SynthesizerCore {
         // Process effects
         if fx {
             if is_xg {
-                // TODO(XG effects): variation (system) and chorus blocks.
+                // TODO(XG effects): variation (system) block.
+
+                // Chorus feeds reverb, reverb goes straight to the output
+                self.xg_chorus_block.process(
+                    &self.xg_chorus_input_l,
+                    &self.xg_chorus_input_r,
+                    left,
+                    right,
+                    &mut self.xg_reverb_input_l,
+                    &mut self.xg_reverb_input_r,
+                    start_index,
+                    sample_count,
+                );
 
                 // Reverb last, doesn't feed to anything.
                 self.xg_reverb_block.process(
