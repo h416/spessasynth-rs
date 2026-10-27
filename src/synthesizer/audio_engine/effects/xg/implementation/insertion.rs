@@ -6,6 +6,8 @@ use super::dsp::chorus::{
     flanger2, flanger3,
 };
 use super::dsp::delay::{cross_delay, delay_lcr, delay_lr, echo};
+use super::dsp::distortion::{amp_simulator, distortion, overdrive};
+use super::dsp::equalizer::three_band_eq::XGThreeBandEQ;
 use super::dsp::equalizer::two_band_eq::XGTwoBandEQ;
 use super::dsp::effect_processor::DefaultXGEffectProcessor;
 use super::dsp::rotary::rotary_speaker::XGRotarySpeaker;
@@ -51,8 +53,10 @@ fn insertion_map(sr: f64, buf: usize) -> Vec<(u16, Box<dyn DefaultXGEffectProces
         // The XG spec's EFFECT 2 list only has PHASER 1.
         // PHASER 2 (48 08) is variation only and falls back to PHASER 1 here.
         (0x48_00, Box::new(phaser1::new(sr, buf))),
-        // TODO(XG effects): 0x4900 DISTORTION, 0x4a00 OVER DRIVE, 0x4b00 AMP SIMULATOR,
-        // 0x4c00 3BAND EQ
+        (0x49_00, Box::new(distortion::new(sr, buf))),
+        (0x4a_00, Box::new(overdrive::new(sr, buf))),
+        (0x4b_00, Box::new(amp_simulator::new(sr, buf))),
+        (0x4c_00, Box::new(XGThreeBandEQ::new(sr, buf))),
         (0x4d_00, Box::new(XGTwoBandEQ::new(sr, buf))),
         // TODO(XG effects): 0x4e00 AUTO WAH
     ]

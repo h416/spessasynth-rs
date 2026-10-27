@@ -6,7 +6,10 @@ use super::dsp::chorus::{
     flanger2, flanger3,
 };
 use super::dsp::delay::{cross_delay, delay_lcr, delay_lr, echo};
+use super::dsp::distortion::{amp_simulator, distortion, overdrive};
+use super::dsp::equalizer::three_band_eq::XGThreeBandEQ;
 use super::dsp::equalizer::two_band_eq::XGTwoBandEQ;
+use super::dsp::early_reflections::{early_reflection1, early_reflection2, gate_reverb, reverse_gate};
 use super::dsp::effect_processor::DefaultXGEffectProcessor;
 use super::dsp::no_effect::XGNoEffect;
 use super::dsp::rotary::rotary_speaker::XGRotarySpeaker;
@@ -34,8 +37,11 @@ fn variation_map(sr: f64, buf: usize) -> Vec<(u16, Box<dyn DefaultXGEffectProces
         (0x06_00, Box::new(delay_lr::new(sr, buf))),
         (0x07_00, Box::new(echo::new(sr, buf))),
         (0x08_00, Box::new(cross_delay::new(sr, buf))),
-        // TODO(XG effects): 0x0900 EARLY REF 1, 0x0901 EARLY REF 2, 0x0a00 GATE REVERB,
-        // 0x0b00 REVERSE GATE, 0x1400-0x1402 KARAOKE 1-3
+        (0x09_00, Box::new(early_reflection1::new(sr, buf))),
+        (0x09_01, Box::new(early_reflection2::new(sr, buf))),
+        (0x0a_00, Box::new(gate_reverb::new(sr, buf))),
+        (0x0b_00, Box::new(reverse_gate::new(sr, buf))),
+        // TODO(XG effects): 0x1400-0x1402 KARAOKE 1-3
         (0x40_00, Box::new(XGThru)),
         (0x41_00, Box::new(chorus1::new(sr, buf, true))),
         (0x41_01, Box::new(chorus2::new(sr, buf, true))),
@@ -54,8 +60,10 @@ fn variation_map(sr: f64, buf: usize) -> Vec<(u16, Box<dyn DefaultXGEffectProces
         (0x47_00, Box::new(auto_pan::new(sr, buf))),
         (0x48_00, Box::new(phaser1::new(sr, buf))),
         (0x48_08, Box::new(phaser2::new(sr, buf))),
-        // TODO(XG effects): 0x4900 DISTORTION, 0x4a00 OVER DRIVE, 0x4b00 AMP SIMULATOR,
-        // 0x4c00 3BAND EQ
+        (0x49_00, Box::new(distortion::new(sr, buf))),
+        (0x4a_00, Box::new(overdrive::new(sr, buf))),
+        (0x4b_00, Box::new(amp_simulator::new(sr, buf))),
+        (0x4c_00, Box::new(XGThreeBandEQ::new(sr, buf))),
         (0x4d_00, Box::new(XGTwoBandEQ::new(sr, buf))),
         // TODO(XG effects): 0x4e00 AUTO WAH
     ]
