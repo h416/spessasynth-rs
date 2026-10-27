@@ -3,7 +3,7 @@
 /// Ported from: src/synthesizer/audio_engine/engine_methods/controller_control/controller_change.ts
 use crate::midi::enums::midi_controllers;
 use crate::synthesizer::audio_engine::synth_constants::{
-    DEFAULT_PERCUSSION, MIN_NOTE_LENGTH,
+    MIDI_DRUM_CHANNEL, MIN_NOTE_LENGTH,
 };
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
@@ -99,7 +99,7 @@ impl MidiChannel {
                 self.set_bank_msb(value);
                 // For XG, drum channel (ch 9 mod 16) always uses bank 127
                 let ch_system = self.channel_system(current_system);
-                if self.channel % 16 == DEFAULT_PERCUSSION
+                if self.channel % 16 == MIDI_DRUM_CHANNEL
                     && BankSelectHacks::is_system_xg(ch_system)
                 {
                     self.set_bank_msb(127);

@@ -62,7 +62,7 @@ use crate::soundbank::types::MIDISystem;
 use crate::synthesizer::audio_engine::effects::gs::implementation::chorus::ChorusSnapshot;
 use crate::synthesizer::audio_engine::effects::gs::implementation::delay::DelaySnapshot;
 use crate::synthesizer::audio_engine::effects::gs::implementation::reverb::ReverbSnapshot;
-use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
+use crate::synthesizer::audio_engine::synth_constants::MIDI_DRUM_CHANNEL;
 use crate::utils::loggin::SpessaLog;
 use crate::utils::midi_hacks::BankSelectHacks;
 
@@ -652,7 +652,7 @@ pub fn modify_midi_internal(midi: &mut BasicMidi, opts: &ModifyMidiOptions) {
 
                         if patch.is_gm_gs_drum
                             && !BankSelectHacks::is_system_xg(system)
-                            && midi_channel != DEFAULT_PERCUSSION
+                            && midi_channel != MIDI_DRUM_CHANNEL
                         {
                             SpessaLog::info(&format!("Adding GS Drum change on track {}", track_num));
                             add_event_before(

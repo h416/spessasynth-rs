@@ -106,16 +106,15 @@ impl MidiChannel {
 
             use registered_parameter_types as rpt;
             match rpn_value {
-                // Pitch wheel range: may be fractional, so store the full 14-bit value
-                // (the consumer divides by 128 to obtain the semitone amount).
+                // Pitch wheel range
                 rpt::PITCH_WHEEL_RANGE => {
-                    self.midi_controllers
-                        [NON_CC_INDEX_OFFSET + modulator_sources::PITCH_WHEEL_RANGE as usize] =
-                        data_value as i16;
+                    // MSB is semitones, LSB is cents (MIDI 1.0 and GM2)
+                    // Pitch wheel range may be a floating point number!
+                    let range = (data_value >> 7) as f64 + (data_value & 0x7f) as f64 / 100.0;
+                    self.set_midi_parameter(ChannelMidiParameterValue::PitchWheelRange(range));
                     spessa_synth_info(&format!(
                         "Pitch Wheel Range for {}: {} semitones",
-                        self.channel,
-                        data_value as f64 / 128.0
+                        self.channel, range
                     ));
                 }
 
@@ -183,6 +182,10 @@ impl MidiChannel {
         let param_fine = (self.midi_controllers
             [midi_controllers::NON_REGISTERED_PARAMETER_LSB as usize]
             >> 7) as u8;
+        if param_coarse == 0x7f && param_fine == 0x7f {
+            // Hardcoded NRPN NULL to avoid AWE32 errors
+            return events;
+        }
         let data_coarse = (data_value >> 7) as u8;
 
         match param_coarse {
@@ -314,10 +317,13 @@ impl MidiChannel {
         let mut events = Vec::new();
 
         match nrpn_fine {
-            // TS 4.3.0 removed the pre-4.3.0 custom channel vibrato: GS NRPN vibrato
-            // rate/depth/delay now route through the vibrato-rate/depth/delay CCs
-            // (76/77/78), which drive the vibLfoRate / vibLfoToPitch / delayVibLFO
+            // GS NRPN vibrato rate/depth/delay route through the vibrato-rate/depth/delay
+            // CCs (76/77/78), which drive the vibLfoRate / vibLfoToPitch / delayVibLFO
             // generators via the default modulators.
+            // TODO(4.4.0): the custom vibrato branch (`systemParameters.customVibrato &&
+            // !dynamicModulators.active`) is not ported. `customVibrato` defaults to false
+            // and is only settable through the API, so MIDI input always takes this path.
+            // Same for the `drumLock` early return of the drum NRPNs.
             nrl::VIBRATO_RATE => {
                 let mut sub = self.controller_change(
                     midi_controllers::VIBRATO_RATE,

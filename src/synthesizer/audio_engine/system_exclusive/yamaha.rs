@@ -149,11 +149,12 @@ impl SynthesizerCore {
                 // Rev. channel
                 0x04 => {
                     // The rxChannel selects which channel this part receives on.
-                    // NOTE: customChannelNumbers dispatch is not implemented yet
-                    // (Task 21), so the value is stored but does not affect rendering.
-                    let rx_channel = data as usize + channel_offset;
+                    let rx_channel =
+                        if data == 0x7f { -1 } else { data as i32 + channel_offset as i32 };
                     self.midi_channels[channel]
-                        .set_midi_parameter(ChannelMidiParameterValue::RxChannel(rx_channel as u8));
+                        .set_midi_parameter(ChannelMidiParameterValue::RxChannel(rx_channel));
+                    self.custom_channel_numbers |=
+                        rx_channel != self.midi_channels[channel].channel as i32;
                     spessa_synth_info(&format!("XG Rev. Channel on {}: {}", channel, rx_channel));
                 }
 

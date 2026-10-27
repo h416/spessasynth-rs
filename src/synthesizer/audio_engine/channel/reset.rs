@@ -2,11 +2,13 @@
 /// purpose: Controller reset handlers for MidiChannel.
 /// Ported from: src/synthesizer/audio_engine/engine_methods/controller_control/reset_controllers.ts
 use crate::midi::enums::midi_controllers;
+use crate::midi::midi_tools::sysex_data::{DEFAULT_GS_DRUM_MAP, DEFAULT_XG_DRUM_MAP, MELODIC_MAP};
+use crate::soundbank::enums::modulator_sources;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
 use crate::synthesizer::audio_engine::channel::parameters::midi::{
     ChannelMidiParameterValue, CUSTOM_RESET_ARRAY, DEFAULT_MIDI_CONTROLLER_VALUES,
 };
-use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
+use crate::synthesizer::audio_engine::synth_constants::{DEFAULT_NRPN, MIDI_DRUM_CHANNEL};
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::SynthProcessorEvent;
@@ -115,6 +117,9 @@ impl MidiChannel {
             }
         }
 
+        // Reset Poly pressure
+        self.poly_pressures.fill(0);
+
         // Reset portamento
         self.reset_portamento(current_system);
 
@@ -138,6 +143,20 @@ impl MidiChannel {
         // Reset velocity sense (new in 4.3.14): identity depth/offset of 64/64.
         self.set_midi_parameter(ChannelMidiParameterValue::VelocitySenseOffset(64));
         self.set_midi_parameter(ChannelMidiParameterValue::VelocitySenseDepth(64));
+        // TS: resetMIDIParameter("pitchWheelRange"). The controller loop above only covers
+        // the 128 real CCs, not the non-CC slot the modulator source reads.
+        self.set_midi_parameter(ChannelMidiParameterValue::PitchWheelRange(2.0));
+        // TS: resetMIDIParameter("drumMap") sets the correct default map
+        let default_map = if self.channel_system(current_system) == MIDISystem::Xg {
+            DEFAULT_XG_DRUM_MAP
+        } else {
+            DEFAULT_GS_DRUM_MAP
+        };
+        self.set_midi_parameter(ChannelMidiParameterValue::DrumMap(
+            if self.channel % 16 == MIDI_DRUM_CHANNEL { default_map } else { MELODIC_MAP },
+        ));
+        self.set_midi_parameter(ChannelMidiParameterValue::DryLevel(127));
+        self.xg_insertion_assigned = false;
 
         // Reset pitch wheel
         self.per_note_pitch = false;
@@ -179,19 +198,21 @@ impl MidiChannel {
         drum_lock: bool,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
+        // Reset program: default bank, program 0,
+        // Drums only on every 16th channel 10.
         let ch_system = self.channel_system(current_system);
         self.set_bank_msb(BankSelectHacks::get_default_bank(ch_system));
         self.set_bank_lsb(0);
-        self.set_gs_drums(false);
-
-        let is_drum = self.channel % 16 == DEFAULT_PERCUSSION;
-        let mut events = self.set_drums(
+        let mut events =
+            self.program_change(0, sound_bank_manager, current_system, drum_lock, enable_event_system);
+        let is_drum = self.channel % 16 == MIDI_DRUM_CHANNEL;
+        events.append(&mut self.set_drums(
             is_drum,
             sound_bank_manager,
             current_system,
             drum_lock,
             enable_event_system,
-        );
+        ));
 
         events
     }
@@ -221,7 +242,7 @@ impl MidiChannel {
         // TS 4.3.0 RP-15 resets ONLY these controllers (RP_15_RESET_CC_NUMS), each back to
         // its DEFAULT_MIDI_CONTROLLERS value (and only if it currently differs). The 4.2.0
         // "reset everything except a non-resettable exclusion list" behavior was removed.
-        const RP_15_RESET_CC_NUMS: [u8; 8] = [
+        const RP_15_RESET_CC_NUMS: [u8; 10] = [
             midi_controllers::MODULATION_WHEEL,
             midi_controllers::EXPRESSION_CONTROLLER,
             midi_controllers::SUSTAIN_PEDAL,
@@ -230,6 +251,8 @@ impl MidiChannel {
             midi_controllers::SOFT_PEDAL,
             midi_controllers::REGISTERED_PARAMETER_MSB,
             midi_controllers::REGISTERED_PARAMETER_LSB,
+            midi_controllers::NON_REGISTERED_PARAMETER_MSB,
+            midi_controllers::NON_REGISTERED_PARAMETER_LSB,
         ];
         for &cc in RP_15_RESET_CC_NUMS.iter() {
             let reset_value = DEFAULT_MIDI_CONTROLLER_VALUES[cc as usize];
@@ -245,6 +268,9 @@ impl MidiChannel {
                 events.append(&mut sub);
             }
         }
+        // Reset polyphonic pressure for all notes to 0
+        self.poly_pressures.fill(0);
+        self.compute_modulators_all_impl(voices, 0, modulator_sources::POLY_PRESSURE as usize);
 
         events
     }
@@ -257,9 +283,11 @@ impl MidiChannel {
     /// Equivalent to: resetParameters()
     pub fn reset_parameters(&mut self) {
         self.last_parameter_is_registered = true;
-        // TS 4.3.0 defaults: RPN = 0x7F (null), NRPN = DEFAULT_NRPN = 0.
-        self.midi_controllers[midi_controllers::NON_REGISTERED_PARAMETER_LSB as usize] = 0;
-        self.midi_controllers[midi_controllers::NON_REGISTERED_PARAMETER_MSB as usize] = 0;
+        // TS 4.4.0 defaults: RPN = DEFAULT_RPN = 0x7F (null), NRPN = DEFAULT_NRPN = 0x7F (null).
+        self.midi_controllers[midi_controllers::NON_REGISTERED_PARAMETER_LSB as usize] =
+            (DEFAULT_NRPN as i16) << 7;
+        self.midi_controllers[midi_controllers::NON_REGISTERED_PARAMETER_MSB as usize] =
+            (DEFAULT_NRPN as i16) << 7;
         self.midi_controllers[midi_controllers::REGISTERED_PARAMETER_LSB as usize] = 127 << 7;
         self.midi_controllers[midi_controllers::REGISTERED_PARAMETER_MSB as usize] = 127 << 7;
         self.reset_generator_overrides();

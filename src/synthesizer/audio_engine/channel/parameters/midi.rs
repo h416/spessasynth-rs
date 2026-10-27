@@ -50,10 +50,12 @@ const fn build_default_midi_controller_values() -> [i16; CONTROLLER_TABLE_SIZE] 
     // Note: TS 4.3.0 removed the default reverb depth (CC91). It now defaults to 0,
     // matching DEFAULT_MIDI_CONTROLLERS in reset.ts (previously 4.2.0 set it to 40).
 
-    // RPN defaults to 127 (DEFAULT_RPN = 0x7f, the "null RPN"); NRPN defaults to 0
-    // (TS 4.3.0 DEFAULT_NRPN = 0, changed from 4.2.0's 127).
+    // RPN and NRPN default to 127 (DEFAULT_RPN = DEFAULT_NRPN = 0x7f, the "null" parameter;
+    // DEFAULT_NRPN was 0 in 4.3.x, 127 again since 4.4.0).
     arr[midi_controllers::REGISTERED_PARAMETER_LSB as usize] = 127 << 7;
     arr[midi_controllers::REGISTERED_PARAMETER_MSB as usize] = 127 << 7;
+    arr[midi_controllers::NON_REGISTERED_PARAMETER_LSB as usize] = 127 << 7;
+    arr[midi_controllers::NON_REGISTERED_PARAMETER_MSB as usize] = 127 << 7;
 
     // Pitch wheel
     arr[NON_CC_INDEX_OFFSET + modulator_sources::PITCH_WHEEL as usize] = 64 << 7;
@@ -111,10 +113,10 @@ pub struct ChannelMidiParameter {
     /// Equivalent to: modulationDepth
     pub modulation_depth: f64,
 
-    /// The channel's receiving number (0-based index).
+    /// The channel's receiving number (0-based index), -1 means OFF.
     /// Only used when customChannelNumbers is enabled.
     /// Equivalent to: rxChannel
-    pub rx_channel: u8,
+    pub rx_channel: i32,
 
     /// If the channel is in the poly mode.
     /// - `true` - POLY ON - regular playback.
@@ -183,6 +185,11 @@ pub struct ChannelMidiParameter {
     ///
     /// Equivalent to: velocitySenseOffset
     pub velocity_sense_offset: u8,
+
+    /// The dry (direct) level of the channel, 0-127.
+    /// Only active in XG with the variation connection set to SYSTEM.
+    /// Equivalent to: dryLevel (new in 4.4.0)
+    pub dry_level: u8,
 }
 
 /// A typed (parameter, value) pair for `MidiChannel::set_midi_parameter`.
@@ -193,7 +200,7 @@ pub enum ChannelMidiParameterValue {
     PitchWheel(i32),
     PitchWheelRange(f64),
     ModulationDepth(f64),
-    RxChannel(u8),
+    RxChannel(i32),
     PolyMode(bool),
     KeyShift(f64),
     FineTune(f64),
@@ -205,6 +212,7 @@ pub enum ChannelMidiParameterValue {
     DrumMap(u8),
     VelocitySenseDepth(u8),
     VelocitySenseOffset(u8),
+    DryLevel(u8),
 }
 
 /// The default MIDI parameters of a channel.
@@ -226,6 +234,7 @@ pub const DEFAULT_CHANNEL_MIDI_PARAMETERS: ChannelMidiParameter = ChannelMidiPar
     drum_map: 0,
     velocity_sense_depth: 64,
     velocity_sense_offset: 64,
+    dry_level: 127,
 };
 
 #[cfg(test)]
@@ -343,14 +352,14 @@ mod tests {
 
     #[test]
     fn test_non_registered_parameter_lsb() {
-        // TS 4.3.0 DEFAULT_NRPN = 0 (was 127 in 4.2.0).
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[98], 0);
+        // TS 4.4.0 DEFAULT_NRPN = 127 (was 0 in 4.3.x).
+        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[98], 127 << 7);
     }
 
     #[test]
     fn test_non_registered_parameter_msb() {
-        // TS 4.3.0 DEFAULT_NRPN = 0 (was 127 in 4.2.0).
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[99], 0);
+        // TS 4.4.0 DEFAULT_NRPN = 127 (was 0 in 4.3.x).
+        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[99], 127 << 7);
     }
 
     #[test]

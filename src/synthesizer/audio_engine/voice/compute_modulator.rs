@@ -80,6 +80,12 @@ pub trait ChannelContext {
     /// Converted to a multiplier by dividing by 50 at the point of use.
     /// Equivalent to: `this._midiParameters.modulationDepth`
     fn modulation_depth(&self) -> f64;
+
+    /// Poly pressure of a key (persists across notes, like per-note pitch wheels).
+    /// Equivalent to: `this.polyPressures[midiNote]` (new in 4.4.0)
+    fn poly_pressure(&self, _midi_note: usize) -> u8 {
+        0
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +123,11 @@ pub trait VoiceContext {
     /// Stored as i16 to match TypeScript's `Int16Array`.
     /// Equivalent to: `voice.modulatorValues`
     fn modulator_values(&self) -> &[i16];
+
+    /// Sets the poly pressure the polyPressure modulator source reads.
+    /// TS 4.4.0 reads `channel.polyPressures[voice.midiNote]` directly; Rust copies it
+    /// into the voice at the start of every `compute_modulators` call instead.
+    fn set_pressure(&mut self, _pressure: u8) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +202,8 @@ pub fn compute_modulators<C: ChannelContext, V: VoiceContext>(
 
     let midi_controllers = channel.midi_controllers();
     let modulation_depth = channel.modulation_depth();
+    // Use MIDI Note here as key shift is internal
+    voice.set_pressure(channel.poly_pressure(voice.midi_note()));
 
     match filter {
         // ---------------------------------------------------------------

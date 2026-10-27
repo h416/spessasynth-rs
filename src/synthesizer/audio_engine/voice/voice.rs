@@ -129,8 +129,8 @@ pub struct Voice {
 
     /// Polyphonic key pressure (0–127).
     /// TS 4.4.0 removed this field: modulators read `channel.polyPressures[voice.midiNote]`.
-    /// Rust keeps a per-voice copy that is kept in sync with the channel array
-    /// (set in note_on, updated by poly_pressure), which reads the same value.
+    /// Rust keeps a per-voice copy that `compute_modulators` refreshes from the channel
+    /// array before every computation, which reads the same value.
     pub pressure: u8,
 
     /// Linear gain of the voice.
@@ -365,6 +365,10 @@ impl VoiceContext for Voice {
     /// Equivalent to: voice.midiNote
     fn midi_note(&self) -> usize {
         self.midi_note as usize
+    }
+
+    fn set_pressure(&mut self, pressure: u8) {
+        self.pressure = pressure;
     }
 
     /// Computes the modulator at `index`, caches it in `modulator_values[index]`,

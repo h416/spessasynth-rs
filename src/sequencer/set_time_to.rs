@@ -136,10 +136,10 @@ const fn build_default_midi_controllers() -> [i16; CONTROLLER_TABLE_SIZE] {
 
 const DEFAULT_MIDI_CONTROLLERS: [i16; CONTROLLER_TABLE_SIZE] = build_default_midi_controllers();
 
-/// The 8 CCs reset by the RP-15 Recommended Practice.
-/// Equivalent to (locally reproduced, see the TODO above): `RP_15_RESET_CC_NUMS` in TS 4.3.0's
+/// The CCs reset by the RP-15 Recommended Practice (4.4.0 added the NRPN pair).
+/// Equivalent to (locally reproduced, see the TODO above): `RP_15_RESET_CC_NUMS` in TS 4.4.1's
 /// `synthesizer/audio_engine/channel/reset.ts`.
-const RP_15_RESET_CC_NUMS: [MidiController; 8] = [
+const RP_15_RESET_CC_NUMS: [MidiController; 10] = [
     midi_controllers::MODULATION_WHEEL,
     midi_controllers::EXPRESSION,
     midi_controllers::SUSTAIN_PEDAL,
@@ -148,6 +148,8 @@ const RP_15_RESET_CC_NUMS: [MidiController; 8] = [
     midi_controllers::SOFT_PEDAL,
     midi_controllers::REGISTERED_PARAMETER_MSB,
     midi_controllers::REGISTERED_PARAMETER_LSB,
+    midi_controllers::NON_REGISTERED_PARAMETER_MSB,
+    midi_controllers::NON_REGISTERED_PARAMETER_LSB,
 ];
 
 /// Per-channel controller/pitch-wheel/portamento bookkeeping accumulated while skipping events
@@ -598,16 +600,16 @@ mod tests {
     }
 
     #[test]
-    fn test_default_midi_controllers_nrpn_is_zero() {
-        // Unlike the old 4.2.0 `defaultMIDIControllerValues` (127), TS 4.3.0's
-        // `DEFAULT_MIDI_CONTROLLERS` resets NRPN MSB/LSB to `DEFAULT_NRPN` (0).
+    fn test_default_midi_controllers_nrpn_is_null() {
+        // TS 4.4.0 `DEFAULT_MIDI_CONTROLLERS` resets NRPN MSB/LSB to `DEFAULT_NRPN` (127,
+        // the null parameter; it was 0 in 4.3.x).
         assert_eq!(
             DEFAULT_MIDI_CONTROLLERS[midi_controllers::NON_REGISTERED_PARAMETER_MSB as usize],
-            0
+            127 << 7
         );
         assert_eq!(
             DEFAULT_MIDI_CONTROLLERS[midi_controllers::NON_REGISTERED_PARAMETER_LSB as usize],
-            0
+            127 << 7
         );
     }
 
@@ -622,7 +624,7 @@ mod tests {
     #[test]
     fn test_rp15_reset_cc_nums_contains_sustain_pedal() {
         assert!(RP_15_RESET_CC_NUMS.contains(&midi_controllers::SUSTAIN_PEDAL));
-        assert_eq!(RP_15_RESET_CC_NUMS.len(), 8);
+        assert_eq!(RP_15_RESET_CC_NUMS.len(), 10);
     }
 
     // -- set_time_to --

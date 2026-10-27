@@ -86,7 +86,7 @@ use crate::synthesizer::audio_engine::parameters::system::{
 };
 use crate::synthesizer::audio_engine::sound_bank_manager::SoundBankManager;
 use crate::synthesizer::audio_engine::synth_constants::{
-    DEFAULT_PERCUSSION, EFX_SENDS_GAIN_CORRECTION,
+    MIDI_DRUM_CHANNEL, EFX_SENDS_GAIN_CORRECTION,
 };
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::enums::custom_controllers;
@@ -230,6 +230,15 @@ pub struct SynthesizerCore {
     xg_variation_send_l: Vec<f64>,
     xg_variation_send_r: Vec<f64>,
 
+    /// If any channel's rxChannel differs from its number, channel messages are routed
+    /// by rxChannel instead of by index.
+    /// Equivalent to: customChannelNumbers (protected)
+    pub(crate) custom_channel_numbers: bool,
+
+    /// Channel offset of the selected port (0xF5 port select SysEx).
+    /// Equivalent to: portSelectChannelOffset (protected)
+    pub(crate) port_select_channel_offset: usize,
+
     /// TODO(XG effects): `xgVariationBlock.insertionMode`. The XG blocks are not ported yet;
     /// the variation block defaults to system mode.
     pub(crate) xg_variation_insertion_mode: bool,
@@ -360,6 +369,8 @@ impl SynthesizerCore {
             xg_variation_send_l: vec![0.0; buf_size],
             xg_variation_send_r: vec![0.0; buf_size],
             xg_variation_insertion_mode: false,
+            custom_channel_numbers: false,
+            port_select_channel_offset: 0,
             pan_left: 0.5,
             pan_right: 0.5,
             gain_smoothing_factor,
@@ -478,7 +489,7 @@ impl SynthesizerCore {
 
         // Channel 9 (0-based) is the default percussion channel.
         // (Pre-existing phase-1 divergence from TS's `channel.setDrums(true)` — see module doc.)
-        if channel_number % 16 == DEFAULT_PERCUSSION {
+        if channel_number % 16 == MIDI_DRUM_CHANNEL {
             channel.drum_channel = true;
         }
 
@@ -525,8 +536,8 @@ impl SynthesizerCore {
         self.reset_midi_parameters(system);
         // Reset private props
         self.tunings.fill(-1.0);
-        // TODO(Task 21): portSelectChannelOffset = 0; customChannelNumbers = false;
-        // (neither is implemented in the Rust core yet — see module doc)
+        self.port_select_channel_offset = 0;
+        self.custom_channel_numbers = false;
         // Hall2 default
         self.set_reverb_macro(4);
         // Chorus3 default

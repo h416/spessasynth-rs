@@ -45,11 +45,10 @@ impl MidiChannel {
 
         let mut events = Vec::new();
 
-        // Update drum flag if it changed
-        if is_drum != self.drum_channel
-            && let Some(ev) = self.set_drum_flag(is_drum)
-        {
-            events.push(ev);
+        // Drums first
+        // SC resets drum params on program change
+        if is_drum != self.drum_channel {
+            self.set_drum_flag(is_drum);
         }
 
         self.reset_drum_params(drum_lock, current_system);

@@ -28,7 +28,7 @@ use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::soundbank::basic_soundbank::preset_resolver::PresetResolver;
 use crate::soundbank::types::{MIDISystem, PresetsWithKeyCombinations};
-use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
+use crate::synthesizer::audio_engine::synth_constants::MIDI_DRUM_CHANNEL;
 use crate::utils::loggin::SpessaLog;
 use crate::utils::midi_hacks::BankSelectHacks;
 
@@ -54,7 +54,7 @@ struct InternalChannelType {
 /// Equivalent to: the `reset` closure inside `getUsedProgramsAndKeys`
 fn reset_channels(sys: MIDISystem, channels: &mut [InternalChannelType]) {
     for (i, ch) in channels.iter_mut().enumerate() {
-        ch.is_drum = i % 16 == DEFAULT_PERCUSSION as usize;
+        ch.is_drum = i % 16 == MIDI_DRUM_CHANNEL as usize;
         ch.bank_msb = BankSelectHacks::get_default_bank(sys);
         ch.bank_lsb = 0;
         ch.key_shift = 0;
@@ -94,7 +94,7 @@ pub fn get_used_programs_and_keys(
 
     let mut channels: Vec<InternalChannelType> = (0..channels_amount)
         .map(|i| {
-            let is_drum = i % 16 == DEFAULT_PERCUSSION as usize;
+            let is_drum = i % 16 == MIDI_DRUM_CHANNEL as usize;
             let preset = sound_bank.get_preset(
                 MidiPatch {
                     bank_lsb: 0,

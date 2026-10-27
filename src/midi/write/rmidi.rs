@@ -38,7 +38,7 @@ use crate::midi::write::midi::write_midi_internal;
 use crate::midi::types::{RMIDInfoDataPartial, RMIDIWriteOptions};
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::soundbank::basic_soundbank::preset_resolver::PresetResolver;
-use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
+use crate::synthesizer::audio_engine::synth_constants::MIDI_DRUM_CHANNEL;
 use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::SpessaLog;
 use crate::utils::midi_hacks::BankSelectHacks;
@@ -132,7 +132,7 @@ fn correct_bank_offset_internal(
     let mut channels_info: Vec<ChannelInfo> = (0..channels_amount)
         .map(|i| ChannelInfo {
             program: 0,
-            drums: i % 16 == DEFAULT_PERCUSSION as usize,
+            drums: i % 16 == MIDI_DRUM_CHANNEL as usize,
             last_bank_idx: None,
             last_bank_lsb_idx: None,
             has_bank_select: false,

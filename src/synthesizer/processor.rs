@@ -56,6 +56,21 @@ use crate::utils::loggin::SpessaLog;
 // ---------------------------------------------------------------------------
 
 impl SynthesizerCore {
+    /// The channels a channel message addressed to `channel` goes to.
+    /// With custom channel numbers, every channel whose rxChannel matches receives it;
+    /// otherwise the selected port's channel does.
+    /// Equivalent to the routing at the top of the public SpessaSynthProcessor
+    /// noteOn / noteOff / controllerChange / ... methods (new in 4.4.0).
+    pub(crate) fn routed_channels(&self, channel: usize) -> Vec<usize> {
+        if self.custom_channel_numbers {
+            return (0..self.midi_channels.len())
+                .filter(|&i| self.midi_channels[i].midi_parameters.rx_channel == channel as i32)
+                .collect();
+        }
+        let ch = channel + self.port_select_channel_offset;
+        if ch < self.midi_channels.len() { vec![ch] } else { Vec::new() }
+    }
+
     /// Sends note-off to a channel, dispatching events.
     ///
     /// In mono mode, releasing a note may uncover a still-held lower note; the channel
@@ -163,27 +178,53 @@ impl SynthesizerCore {
     pub fn system_exclusive(&mut self, syx: &[u8], channel_offset: usize) {
         use crate::utils::other::array_to_hex_string;
 
-        // Ensure that the device ID matches (-1 accepts all)
-        if self.system_parameters.device_id != -1
-            && syx[1] != 0x7f // 0x7f means broadcast
-            && self.system_parameters.device_id != syx[1] as i32
+        if syx.is_empty() {
+            return;
+        }
+        let channel_offset = channel_offset + self.port_select_channel_offset;
+        let manufacturer = syx[0];
+        // Ensure that the device ID matches (F5 has the port number there instead)
+        if manufacturer != 0xf5
+            // The device ID can be set to "all" which it is by default
+            && self.system_parameters.device_id != -1
+            && syx.get(1) != Some(&0x7f) // 0x7f means broadcast, i.e. all MIDI devices
+            && Some(self.system_parameters.device_id) != syx.get(1).map(|&b| b as i32)
         {
+            // Not our device ID
             return;
         }
 
-        let manufacturer = syx[0];
         match manufacturer {
-            // Non-realtime GM / Realtime GM
+            // Non realtime GM / Realtime GM
             0x7e | 0x7f => {
                 self.handle_gm(syx, channel_offset);
             }
-            // Roland GS
+            // Roland
             0x41 => {
                 self.handle_gs(syx, channel_offset);
             }
-            // Yamaha XG
+            // Yamaha
             0x43 => {
                 self.handle_xg(syx, channel_offset);
+            }
+            // Port select (Falcosoft MIDI Player)
+            // https://www.vogons.org/viewtopic.php?p=1404746#p1404746
+            0xf5 => {
+                if syx.len() < 2 {
+                    return;
+                }
+                // Ports are 1-based, treat 0 as the first port
+                self.port_select_channel_offset = (syx[1] as usize).max(1).saturating_sub(1) * 16;
+                // Create new port if needed
+                while self.midi_channels.len() <= self.port_select_channel_offset {
+                    SpessaLog::info(&format!(
+                        "Port select, channel offset {}. Creating a new port!",
+                        self.port_select_channel_offset
+                    ));
+                    for _ in 0..16 {
+                        self.create_midi_channel(true);
+                    }
+                }
             }
             _ => {
                 SpessaLog::info(&format!(
@@ -230,62 +271,61 @@ impl SynthesizerCore {
         if (0x80..=0xE0).contains(&status) {
             // Channel message
             let channel = (status_byte & 0x0F) as usize + channel_offset;
-            if channel >= self.midi_channels.len() {
-                return;
-            }
-            match status {
-                midi_message_types::NOTE_ON => {
-                    if message.len() < 3 {
-                        return;
+            // TS calls the public (routed) channel methods here.
+            for channel in self.routed_channels(channel) {
+                match status {
+                    midi_message_types::NOTE_ON => {
+                        if message.len() < 3 {
+                            return;
+                        }
+                        let velocity = message[2];
+                        if velocity > 0 {
+                            self.note_on(channel, message[1], velocity);
+                        } else {
+                            self.note_off_channel(channel, message[1]);
+                        }
                     }
-                    let velocity = message[2];
-                    if velocity > 0 {
-                        self.note_on(channel, message[1], velocity);
-                    } else {
+                    midi_message_types::NOTE_OFF => {
+                        if message.len() < 2 {
+                            return;
+                        }
                         self.note_off_channel(channel, message[1]);
                     }
-                }
-                midi_message_types::NOTE_OFF => {
-                    if message.len() < 2 {
-                        return;
+                    midi_message_types::PITCH_WHEEL => {
+                        if message.len() < 3 {
+                            return;
+                        }
+                        // LSB | (MSB << 7)
+                        let pitch = ((message[2] as i16) << 7) | message[1] as i16;
+                        self.pitch_wheel_channel(channel, pitch, -1);
                     }
-                    self.note_off_channel(channel, message[1]);
-                }
-                midi_message_types::PITCH_WHEEL => {
-                    if message.len() < 3 {
-                        return;
+                    midi_message_types::CONTROLLER_CHANGE => {
+                        if message.len() < 3 {
+                            return;
+                        }
+                        self.controller_change_channel(channel, message[1], message[2]);
                     }
-                    // pitch = LSB | (MSB << 7)
-                    let pitch = ((message[2] as i16) << 7) | message[1] as i16;
-                    self.pitch_wheel_channel(channel, pitch, -1);
-                }
-                midi_message_types::CONTROLLER_CHANGE => {
-                    if message.len() < 3 {
-                        return;
+                    midi_message_types::PROGRAM_CHANGE => {
+                        if message.len() < 2 {
+                            return;
+                        }
+                        self.program_change_channel(channel, message[1]);
                     }
-                    self.controller_change_channel(channel, message[1], message[2]);
-                }
-                midi_message_types::PROGRAM_CHANGE => {
-                    if message.len() < 2 {
-                        return;
+                    midi_message_types::POLY_PRESSURE => {
+                        if message.len() < 3 {
+                            return;
+                        }
+                        // 4.4.0 fixed the arguments (4.3.x passed message[0] as the note).
+                        self.poly_pressure_channel(channel, message[1], message[2]);
                     }
-                    self.program_change_channel(channel, message[1]);
-                }
-                midi_message_types::POLY_PRESSURE => {
-                    if message.len() < 2 {
-                        return;
+                    midi_message_types::CHANNEL_PRESSURE => {
+                        if message.len() < 2 {
+                            return;
+                        }
+                        self.channel_pressure_channel(channel, message[1]);
                     }
-                    // Note: original TypeScript uses message[0] (status byte) as midiNote,
-                    // and message[1] as pressure — faithfully porting as-is.
-                    self.poly_pressure_channel(channel, message[0], message[1]);
+                    _ => {}
                 }
-                midi_message_types::CHANNEL_PRESSURE => {
-                    if message.len() < 2 {
-                        return;
-                    }
-                    self.channel_pressure_channel(channel, message[1]);
-                }
-                _ => {}
             }
         } else {
             // System message
@@ -497,47 +537,58 @@ impl SpessaSynthProcessor {
     /// Sends a MIDI controller change.
     /// Equivalent to: controllerChange(channel, controller, value)
     pub fn controller_change(&mut self, channel: usize, controller: u8, value: u8) {
-        self.synth_core
-            .controller_change_channel(channel, controller, value);
+        for channel in self.synth_core.routed_channels(channel) {
+            self.synth_core.controller_change_channel(channel, controller, value);
+        }
     }
 
     /// Sends a MIDI Note On message.
     /// Equivalent to: noteOn(channel, midiNote, velocity)
     pub fn note_on(&mut self, channel: usize, midi_note: u8, velocity: u8) {
-        self.synth_core.note_on(channel, midi_note, velocity);
+        for channel in self.synth_core.routed_channels(channel) {
+            self.synth_core.note_on(channel, midi_note, velocity);
+        }
     }
 
     /// Sends a MIDI Note Off message.
     /// Equivalent to: noteOff(channel, midiNote)
     pub fn note_off(&mut self, channel: usize, midi_note: u8) {
-        self.synth_core.note_off_channel(channel, midi_note);
+        for channel in self.synth_core.routed_channels(channel) {
+            self.synth_core.note_off_channel(channel, midi_note);
+        }
     }
 
     /// Sends a MIDI Poly Pressure (aftertouch) message.
     /// Equivalent to: polyPressure(channel, midiNote, pressure)
     pub fn poly_pressure(&mut self, channel: usize, midi_note: u8, pressure: u8) {
-        self.synth_core
-            .poly_pressure_channel(channel, midi_note, pressure);
+        for channel in self.synth_core.routed_channels(channel) {
+            self.synth_core.poly_pressure_channel(channel, midi_note, pressure);
+        }
     }
 
     /// Sends a MIDI Channel Pressure (aftertouch) message.
     /// Equivalent to: channelPressure(channel, pressure)
     pub fn channel_pressure(&mut self, channel: usize, pressure: u8) {
-        self.synth_core.channel_pressure_channel(channel, pressure);
+        for channel in self.synth_core.routed_channels(channel) {
+            self.synth_core.channel_pressure_channel(channel, pressure);
+        }
     }
 
     /// Sends a MIDI Pitch Wheel message.
     /// pitch: 0–16383 (8192 = center); midi_note: -1 for the regular pitch wheel.
     /// Equivalent to: pitchWheel(channel, pitch, midiNote = -1)
     pub fn pitch_wheel(&mut self, channel: usize, pitch: i16, midi_note: i32) {
-        self.synth_core
-            .pitch_wheel_channel(channel, pitch, midi_note);
+        for channel in self.synth_core.routed_channels(channel) {
+            self.synth_core.pitch_wheel_channel(channel, pitch, midi_note);
+        }
     }
 
     /// Sends a MIDI program change.
     /// Equivalent to: programChange(channel, programNumber)
     pub fn program_change(&mut self, channel: usize, program: u8) {
-        self.synth_core.program_change_channel(channel, program);
+        for channel in self.synth_core.routed_channels(channel) {
+            self.synth_core.program_change_channel(channel, program);
+        }
     }
 
     /// Processes a raw MIDI message.

@@ -28,15 +28,14 @@ use crate::synthesizer::audio_engine::voice::compute_modulator::{
     ChannelContext, SourceFilter, compute_modulators,
 };
 use crate::synthesizer::audio_engine::synth_constants::{
-    GENERATOR_OVERRIDE_NO_CHANGE_VALUE, MIN_NOTE_LENGTH, SPESSASYNTH_GAIN_FACTOR,
+    GENERATOR_OVERRIDE_NO_CHANGE_VALUE, MIDI_DRUM_CHANNEL, MIN_NOTE_LENGTH,
+    SPESSASYNTH_GAIN_FACTOR,
 };
-#[cfg(test)]
-use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::{ChannelProperty, ChannelPropertyChangeCallback, SynthProcessorEvent};
 use crate::soundbank::types::MIDISystem;
-use crate::utils::loggin::spessa_synth_info;
+use crate::utils::loggin::{SpessaLog, spessa_synth_info};
 use crate::utils::midi_hacks::BankSelectHacks;
 
 // ---------------------------------------------------------------------------
@@ -94,6 +93,11 @@ pub struct MidiChannel {
     /// True if this is a percussion/drum channel.
     /// Equivalent to: drumChannel
     pub drum_channel: bool,
+
+    /// An array of poly pressure values for the channel.
+    /// Poly pressure persists across notes, much like per-note pitch wheels.
+    /// Equivalent to: polyPressures (new in 4.4.0)
+    pub poly_pressures: [u8; 128],
 
     /// Per-drum-note parameters (128 entries, one per MIDI note).
     pub drum_params: Vec<DrumParameter>,
@@ -305,7 +309,7 @@ impl MidiChannel {
             drum_channel: false,
             midi_parameters: ChannelMidiParameter {
                 // Rx Channel is initialized to the channel number.
-                rx_channel: channel,
+                rx_channel: channel as i32,
                 ..DEFAULT_CHANNEL_MIDI_PARAMETERS
             },
             system_parameters: DEFAULT_CHANNEL_SYSTEM_PARAMETERS,
@@ -343,6 +347,7 @@ impl MidiChannel {
             generator_offsets_enabled: false,
             generator_overrides,
             generator_overrides_enabled: false,
+            poly_pressures: [0; 128],
             drum_params: (0..128).map(DrumParameterUtils::default_data).collect(),
             is_muted: false,
             previous_voice_count: 0,
@@ -588,22 +593,9 @@ impl MidiChannel {
         midi_note: u8,
         pressure: u8,
     ) -> Vec<SynthProcessorEvent> {
-        let mut vc = 0u32;
-        if self.voice_count > 0 {
-            for v in voices.iter_mut() {
-                if v.is_active && v.channel == self.channel && v.midi_note == midi_note {
-                    v.pressure = pressure;
-                    let mut modulated = v.modulated_generators;
-                    compute_modulators(self, v, &mut modulated, SourceFilter::NonCC, modulator_sources::POLY_PRESSURE as usize);
-                    v.modulated_generators = modulated;
-                    vc += 1;
-                    if vc >= self.voice_count {
-                        break;
-                    }
-                }
-            }
-        }
-
+        // Note to self: Store the pressure first, the modulators read it
+        self.poly_pressures[midi_note as usize] = pressure;
+        self.compute_modulators_all_impl(voices, 0, modulator_sources::POLY_PRESSURE as usize);
         use crate::synthesizer::types::PolyPressureCallback;
         vec![SynthProcessorEvent::PolyPressure(PolyPressureCallback {
             channel: self.channel,
@@ -914,31 +906,31 @@ impl MidiChannel {
         }
     }
 
-    /// Sets the drum flag on the channel.
-    /// Returns a drum-change event if the drum state changed.
-    /// Equivalent to: setDrumFlag(isDrum) (protected)
-    pub fn set_drum_flag(&mut self, is_drum: bool) -> Option<SynthProcessorEvent> {
-        if self.lock_preset || self.preset.is_none() {
-            return None;
+    /// Sets the GM/GS drum flag of the patch, unless the preset is locked.
+    /// Equivalent to: setIsGMGSDrum(isGMGSDrum) (protected, new in 4.4.0)
+    pub fn set_is_gm_gs_drum(&mut self, is_gm_gs_drum: bool) {
+        if self.lock_preset {
+            return;
         }
-        if self.drum_channel == is_drum {
-            return None;
-        }
-        if is_drum {
-            self.channel_transpose_key_shift = 0;
-            self.drum_channel = true;
-        } else {
-            self.drum_channel = false;
-        }
-        use crate::synthesizer::types::DrumChangeCallback;
-        Some(SynthProcessorEvent::DrumChange(DrumChangeCallback {
-            channel: self.channel,
-            is_drum_channel: self.drum_channel,
-        }))
+        self.patch.is_gm_gs_drum = is_gm_gs_drum;
     }
 
-    /// Changes the preset to, or from drums.
-    /// Sets up the proper bank selection for drum channels and executes a program change.
+    /// Sets drums on channel.
+    /// 4.4.0: no longer requires a preset, emits no event, and refreshes the cached
+    /// internal parameters (drum channels ignore the key shift and tuning).
+    /// Equivalent to: setDrumFlag(isDrum) (protected)
+    pub fn set_drum_flag(&mut self, is_drum: bool) {
+        if self.lock_preset || self.drum_channel == is_drum {
+            return;
+        }
+
+        self.drum_channel = is_drum;
+        self.update_internal_params();
+    }
+
+    /// Toggles drums on the channel and keeps the current program number.
+    /// Executes a program change so the change is immediately audible.
+    /// This does _not_ bypass `presetLock`.
     /// Equivalent to: setDrums(isDrum)
     pub fn set_drums(
         &mut self,
@@ -948,23 +940,51 @@ impl MidiChannel {
         drum_lock: bool,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
+        if self.lock_preset {
+            return Vec::new();
+        }
+
         let ch_system = self.channel_system(current_system);
         if BankSelectHacks::is_system_xg(ch_system) {
             if is_drum {
+                if BankSelectHacks::is_xg_drum(self.patch.bank_msb) {
+                    return Vec::new();
+                }
                 if let Some(drum_bank) = BankSelectHacks::get_drum_bank(ch_system) {
                     self.set_bank_msb(drum_bank);
-                    self.set_bank_lsb(0);
                 }
             } else {
-                self.set_bank_msb(0);
-                self.set_bank_lsb(0);
+                if self.channel % 16 == MIDI_DRUM_CHANNEL {
+                    SpessaLog::warn(&format!(
+                        "Cannot disable drums on channel {} for XG.",
+                        self.channel
+                    ));
+                    return Vec::new();
+                }
+                self.set_bank_msb(BankSelectHacks::get_default_bank(ch_system));
             }
-        } else {
-            self.set_gs_drums(is_drum);
+
+            // Commit the changes and return
+            let program = self.patch.program;
+            return self.program_change(
+                program,
+                sound_bank_manager,
+                current_system,
+                drum_lock,
+                enable_event_system,
+            );
         }
-        self.set_drum_flag(is_drum);
+        if is_drum == self.drum_channel {
+            return Vec::new();
+        }
+        // Flip the drums for GS
+        self.set_is_gm_gs_drum(is_drum);
         let program = self.patch.program;
-        self.program_change(program, sound_bank_manager, current_system, drum_lock, enable_event_system)
+        let events =
+            self.program_change(program, sound_bank_manager, current_system, drum_lock, enable_event_system);
+        // Fallback if no preset matched and the flag didn't sync
+        self.set_drum_flag(is_drum);
+        events
     }
 
     // -----------------------------------------------------------------------
@@ -985,7 +1005,16 @@ impl MidiChannel {
         match value {
             Pressure(v) => self.midi_parameters.pressure = v,
             PitchWheel(v) => self.midi_parameters.pitch_wheel = v,
-            PitchWheelRange(v) => self.midi_parameters.pitch_wheel_range = v,
+            PitchWheelRange(v) => {
+                self.midi_parameters.pitch_wheel_range = v;
+                // The pitchWheelRange modulator source reads
+                // `Math.floor(channel.midiParameters.pitchWheelRange * 128)`; Rust keeps that
+                // value in the non-CC slot of the controller table, which is what the
+                // modulator source reads. No recompute here, like the TS.
+                self.midi_controllers
+                    [NON_CC_INDEX_OFFSET + modulator_sources::PITCH_WHEEL_RANGE as usize] =
+                    (v * 128.0).floor() as i16;
+            }
             ModulationDepth(v) => self.midi_parameters.modulation_depth = v,
             RxChannel(v) => self.midi_parameters.rx_channel = v,
             PolyMode(v) => self.midi_parameters.poly_mode = v,
@@ -1002,6 +1031,7 @@ impl MidiChannel {
             Cc1(v) => self.midi_parameters.cc1 = v,
             Cc2(v) => self.midi_parameters.cc2 = v,
             DrumMap(v) => self.midi_parameters.drum_map = v,
+            DryLevel(v) => self.midi_parameters.dry_level = v,
             VelocitySenseDepth(v) => self.midi_parameters.velocity_sense_depth = v,
             VelocitySenseOffset(v) => self.midi_parameters.velocity_sense_offset = v,
         }
@@ -1152,6 +1182,10 @@ impl ChannelContext for MidiChannel {
     fn modulation_depth(&self) -> f64 {
         self.midi_parameters.modulation_depth
     }
+
+    fn poly_pressure(&self, midi_note: usize) -> u8 {
+        self.poly_pressures[midi_note]
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1186,7 +1220,7 @@ mod tests {
     /// `current_key_shift()` stays 0.
     #[test]
     fn test_current_key_shift_ignores_global_and_channel_midi_for_drum_channel() {
-        let mut channel = MidiChannel::new(None, None, DEFAULT_PERCUSSION);
+        let mut channel = MidiChannel::new(None, None, MIDI_DRUM_CHANNEL);
         channel.drum_channel = true;
 
         channel.set_global_key_shift(6.0);
