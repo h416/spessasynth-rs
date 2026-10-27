@@ -9,6 +9,7 @@ use super::dsp::delay::{cross_delay, delay_lcr, delay_lr, echo};
 use super::dsp::equalizer::two_band_eq::XGTwoBandEQ;
 use super::dsp::effect_processor::DefaultXGEffectProcessor;
 use super::dsp::rotary::rotary_speaker::XGRotarySpeaker;
+use super::dsp::phaser::phaser1;
 use super::dsp::reverb::{hall1, hall2, plate, room1, room2, room3, stage1, stage2};
 use super::dsp::symphonic::symphonic::XGSymphonic;
 use super::dsp::thru::XGThru;
@@ -49,8 +50,9 @@ fn insertion_map(sr: f64, buf: usize) -> Vec<(u16, Box<dyn DefaultXGEffectProces
         (0x47_00, Box::new(auto_pan::new(sr, buf))),
         // The XG spec's EFFECT 2 list only has PHASER 1.
         // PHASER 2 (48 08) is variation only and falls back to PHASER 1 here.
-        // TODO(XG effects): 0x4800 PHASER 1, 0x4900 DISTORTION, 0x4a00 OVER DRIVE,
-        // 0x4b00 AMP SIMULATOR, 0x4c00 3BAND EQ
+        (0x48_00, Box::new(phaser1::new(sr, buf))),
+        // TODO(XG effects): 0x4900 DISTORTION, 0x4a00 OVER DRIVE, 0x4b00 AMP SIMULATOR,
+        // 0x4c00 3BAND EQ
         (0x4d_00, Box::new(XGTwoBandEQ::new(sr, buf))),
         // TODO(XG effects): 0x4e00 AUTO WAH
     ]

@@ -4,6 +4,7 @@ pub mod delay;
 pub mod effect_processor;
 pub mod equalizer;
 pub mod no_effect;
+pub mod phaser;
 pub mod reverb;
 pub mod rotary;
 pub mod symphonic;

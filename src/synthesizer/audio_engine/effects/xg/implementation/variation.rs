@@ -10,6 +10,7 @@ use super::dsp::equalizer::two_band_eq::XGTwoBandEQ;
 use super::dsp::effect_processor::DefaultXGEffectProcessor;
 use super::dsp::no_effect::XGNoEffect;
 use super::dsp::rotary::rotary_speaker::XGRotarySpeaker;
+use super::dsp::phaser::{phaser1, phaser2};
 use super::dsp::reverb::{hall1, hall2, plate, room1, room2, room3, stage1, stage2};
 use super::dsp::symphonic::symphonic::XGSymphonic;
 use super::dsp::thru::XGThru;
@@ -51,8 +52,10 @@ fn variation_map(sr: f64, buf: usize) -> Vec<(u16, Box<dyn DefaultXGEffectProces
         (0x45_00, Box::new(XGRotarySpeaker::new(sr, buf))),
         (0x46_00, Box::new(tremolo::new(sr, buf))),
         (0x47_00, Box::new(auto_pan::new(sr, buf))),
-        // TODO(XG effects): 0x4800 PHASER 1, 0x4808 PHASER 2, 0x4900 DISTORTION,
-        // 0x4a00 OVER DRIVE, 0x4b00 AMP SIMULATOR, 0x4c00 3BAND EQ
+        (0x48_00, Box::new(phaser1::new(sr, buf))),
+        (0x48_08, Box::new(phaser2::new(sr, buf))),
+        // TODO(XG effects): 0x4900 DISTORTION, 0x4a00 OVER DRIVE, 0x4b00 AMP SIMULATOR,
+        // 0x4c00 3BAND EQ
         (0x4d_00, Box::new(XGTwoBandEQ::new(sr, buf))),
         // TODO(XG effects): 0x4e00 AUTO WAH
     ]
