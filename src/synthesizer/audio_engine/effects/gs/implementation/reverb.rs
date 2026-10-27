@@ -279,8 +279,8 @@ impl SpessaSynthReverb {
         let g = self.delay_gain;
         for i in 0..sample_count {
             let o = i + start_index;
-            output_left[o] += (self.delay_left_output[i] as f64 * g) as f32;
-            output_right[o] += (self.delay_right_output[i] as f64 * g) as f32;
+            output_left[o] = (output_left[o] as f64 + self.delay_left_output[i] as f64 * g) as f32;
+            output_right[o] = (output_right[o] as f64 + self.delay_right_output[i] as f64 * g) as f32;
         }
     }
 

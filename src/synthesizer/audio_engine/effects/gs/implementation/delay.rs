@@ -1,10 +1,14 @@
+//! The default GS Delay implementation.
+//! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/delay.ts
+//!
+//! 4.4.0 replaced the three `DelayLine`s with a single shared buffer: center, left and
+//! right are read positions in it, and only the center delay feeds back.
 use std::f64::consts::PI;
-
-use crate::synthesizer::audio_engine::effects::implementation::delay_line::DelayLine;
 
 const DELAY_GAIN: f64 = 1.66;
 
 /// SC-8850 delay time segments (manual p.236).
+/// How nice of Roland to provide the conversion values to ms!
 struct DelayTimeSegment {
     start: u8,
     end: u8,
@@ -24,6 +28,7 @@ const DELAY_TIME_SEGMENTS: &[DelayTimeSegment] = &[
     DelayTimeSegment { start: 0x69, end: 0x74, time_start: 500.0, resolution: 50.0 },
 ];
 
+/// Equivalent to: GSDelayParameter
 #[derive(Clone, Debug)]
 pub struct DelaySnapshot {
     pub level: u8,
@@ -38,22 +43,30 @@ pub struct DelaySnapshot {
     pub send_level_to_reverb: u8,
 }
 
-pub struct SpessaSynthDelay {
-    delay_left: DelayLine,
-    delay_right: DelayLine,
-    delay_center: DelayLine,
+/// Equivalent to: class DefaultGSDelay
+pub struct DefaultGSDelay {
+    /// Alpha
+    pre_lpf_a: f64,
+    /// Previous value
+    pre_lpf_z: f64,
+    buffer: Vec<f32>,
     sample_rate: f64,
-    delay_center_output: Vec<f32>,
-    delay_pre_lpf_buf: Vec<f32>,
-    delay_center_time: f64,
+    delay_pre_lpf: Vec<f32>,
     delay_left_multiplier: f64,
     delay_right_multiplier: f64,
     gain: f64,
     reverb_gain: f64,
-
-    // Pre-LPF state
-    pre_lpf_a: f64,
-    pre_lpf_z: f64,
+    feedback_gain: f64,
+    /// Samples
+    delay_center: i64,
+    /// Samples
+    delay_left: i64,
+    /// Samples
+    delay_right: i64,
+    gain_center: f64,
+    gain_left: f64,
+    gain_right: f64,
+    write_index: i64,
 
     // Stored parameter values
     send_level_to_reverb: u8,
@@ -68,27 +81,33 @@ pub struct SpessaSynthDelay {
     time_center: u8,
 }
 
-impl SpessaSynthDelay {
+impl DefaultGSDelay {
+    /// Constructs a new default GS delay processor.
     pub fn new(sample_rate: f64, max_buffer_size: usize) -> Self {
-        let sr = sample_rate as usize;
+        let delay_center = (0.34 * sample_rate).floor() as i64;
+        let level = 64u8;
         Self {
-            delay_left: DelayLine::new(sr),
-            delay_right: DelayLine::new(sr),
-            delay_center: DelayLine::new(sr),
-            sample_rate,
-            delay_center_output: vec![0.0; max_buffer_size],
-            delay_pre_lpf_buf: vec![0.0; max_buffer_size],
-            delay_center_time: 0.34 * sample_rate,
-            delay_left_multiplier: 0.04,
-            delay_right_multiplier: 0.04,
-            gain: 0.0,
-            reverb_gain: 0.0,
             pre_lpf_a: 0.0,
             pre_lpf_z: 0.0,
+            buffer: vec![0.0; sample_rate as usize],
+            sample_rate,
+            delay_pre_lpf: vec![0.0; max_buffer_size],
+            delay_left_multiplier: 0.04,
+            delay_right_multiplier: 0.04,
+            gain: (level as f64 / 127.0) * DELAY_GAIN,
+            reverb_gain: 0.0,
+            feedback_gain: 0.0,
+            delay_center,
+            delay_left: (delay_center as f64 * 0.04).floor() as i64,
+            delay_right: (delay_center as f64 * 0.04).floor() as i64,
+            gain_center: 1.0,
+            gain_left: 0.0,
+            gain_right: 0.0,
+            write_index: 0,
             send_level_to_reverb: 0,
             pre_lowpass: 0,
             level_right: 0,
-            level: 64,
+            level,
             level_center: 127,
             level_left: 0,
             feedback: 16,
@@ -105,9 +124,11 @@ impl SpessaSynthDelay {
 
     pub fn set_pre_lowpass(&mut self, value: u8) {
         self.pre_lowpass = value;
-        let fc = 8000.0 * 0.63_f64.powi(value as i32);
-        let decay_val = (-2.0 * PI * fc / self.sample_rate).exp();
-        self.pre_lpf_a = 1.0 - decay_val;
+        // GS sure loves weird mappings, huh?
+        // Maps to around 8000-300 Hz
+        let pre_lpf_fc = 8000.0 * 0.63_f64.powf(value as f64);
+        let decay = ((-2.0 * PI * pre_lpf_fc) / self.sample_rate).exp();
+        self.pre_lpf_a = 1.0 - decay;
     }
 
     pub fn set_level_right(&mut self, value: u8) {
@@ -131,24 +152,26 @@ impl SpessaSynthDelay {
     }
 
     pub fn set_feedback(&mut self, value: u8) {
+        // -64 means max at inverted phase
+        // Use 66 for it to not be infinite (-1)
+        self.feedback_gain = (value as f64 - 64.0) / 66.0;
         self.feedback = value;
-        self.delay_left.feedback = 0.0;
-        self.delay_right.feedback = 0.0;
-        self.delay_center.feedback = (value as f64 - 64.0) / 66.0;
     }
 
     pub fn set_time_ratio_right(&mut self, value: u8) {
         self.time_ratio_right = value;
+        // The resolution is 100/24(%).
+        // Turn that into multiplier
         self.delay_right_multiplier = value as f64 * (100.0 / 2400.0);
-        self.delay_right
-            .set_time((self.delay_center_time * self.delay_right_multiplier) as usize);
+        self.update_delay_times();
     }
 
     pub fn set_time_ratio_left(&mut self, value: u8) {
         self.time_ratio_left = value;
+        // The resolution is 100/24(%).
+        // Turn that into multiplier
         self.delay_left_multiplier = value as f64 * (100.0 / 2400.0);
-        self.delay_left
-            .set_time((self.delay_center_time * self.delay_left_multiplier) as usize);
+        self.update_delay_times();
     }
 
     pub fn set_time_center(&mut self, value: u8) {
@@ -157,23 +180,21 @@ impl SpessaSynthDelay {
         let mut delay_ms: f64 = 0.1;
         for seg in DELAY_TIME_SEGMENTS {
             if value >= seg.start && value < seg.end {
-                delay_ms =
-                    seg.time_start + (value - seg.start) as f64 * seg.resolution;
+                delay_ms = seg.time_start + (value - seg.start) as f64 * seg.resolution;
                 break;
             }
         }
-        self.delay_center_time = (self.sample_rate * (delay_ms / 1000.0)).max(2.0);
-        self.delay_center.set_time(self.delay_center_time as usize);
-        self.delay_left
-            .set_time((self.delay_center_time * self.delay_left_multiplier) as usize);
-        self.delay_right
-            .set_time((self.delay_center_time * self.delay_right_multiplier) as usize);
+        self.delay_center = ((self.buffer.len() - 1) as f64)
+            .min((self.sample_rate * (delay_ms / 1000.0)).max(2.0))
+            .floor() as i64;
+        self.update_delay_times();
+        self.buffer.fill(0.0);
     }
 
-    /// Process delay effect.
+    /// Process the effect and ADDS it to the output.
     /// - input: 0-based mono input
-    /// - output_left/right: start_index-based stereo output (ADDS)
-    /// - output_reverb: 0-based mono reverb send (ADDS)
+    /// - output_left/right: start_index-based stereo output
+    /// - output_reverb: 0-based mono reverb input
     pub fn process(
         &mut self,
         input: &[f32],
@@ -184,76 +205,97 @@ impl SpessaSynthDelay {
         sample_count: usize,
     ) {
         // Process pre-lowpass
-        let use_lpf = self.pre_lowpass > 0;
-        if use_lpf {
-            let a = self.pre_lpf_a;
+        let delay_in: &[f32] = if self.pre_lowpass > 0 {
             let mut z = self.pre_lpf_z;
+            let a = self.pre_lpf_a;
             for i in 0..sample_count {
-                z += a * (input[i] as f64 - z);
-                self.delay_pre_lpf_buf[i] = z as f32;
+                let x = input[i] as f64;
+                z += a * (x - z);
+                self.delay_pre_lpf[i] = z as f32;
             }
             self.pre_lpf_z = z;
-        }
+            &self.delay_pre_lpf
+        } else {
+            input
+        };
 
+        // Connections are:
+        // center delay -> stereo output (and reverb)
+        // center delay -> center feedback
+        // stereo delays only connect to the output.
+        // Also level is separate from reverb send level,
+        // i.e. level = 0 and reverb send level = 127 will still send sound to reverb.
+        //
+        // Center always sends to stereo, regardless of level center in hardware and latest
+        // SCVA, older revisions incorrectly don't send it,
+        // So level center = 0, level left = 127 will still have feedback.
+        // Also feedback time is always time center, even if only left delay is playing.
         let gain = self.gain;
         let reverb_gain = self.reverb_gain;
+        let delay_center = self.delay_center;
+        let delay_left = self.delay_left;
+        let delay_right = self.delay_right;
+        let feedback_gain = self.feedback_gain;
+        let buffer = &mut self.buffer;
+        let mut write_index = self.write_index;
+        let buffer_length = buffer.len() as i64;
+        let center_gain = self.gain_center * gain;
+        let left_gain = self.gain_left * gain;
+        let right_gain = self.gain_right * gain;
 
-        // Process center delay first
-        {
-            let delay_in = if use_lpf {
-                &self.delay_pre_lpf_buf[..sample_count]
-            } else {
-                &input[..sample_count]
-            };
-            let mut temp_in = vec![0.0f32; sample_count];
-            temp_in.copy_from_slice(delay_in);
-            self.delay_center.process(&temp_in, &mut self.delay_center_output, sample_count);
+        // Float32Array `+=`: the sum is done in f64, then stored as f32.
+        fn add(dst: &mut f32, v: f64) {
+            *dst = (*dst as f64 + v) as f32;
         }
 
-        // Mix center into output
         for i in 0..sample_count {
-            let sample = self.delay_center_output[i] as f64;
-            output_reverb[i] += (sample * reverb_gain) as f32;
-            let out_sample = sample * gain;
-            let o = i + start_index;
-            output_left[o] += out_sample as f32;
-            output_right[o] += out_sample as f32;
-        }
+            // Read center
+            let mut center_read_index = write_index - delay_center;
+            if center_read_index < 0 {
+                center_read_index += buffer_length;
+            }
 
-        // Add dry input into center output (stereo delays take from both)
-        for i in 0..sample_count {
-            self.delay_center_output[i] += input[i];
-        }
+            // Read left
+            let mut left_read_index = (write_index - delay_left) % buffer_length;
+            if left_read_index < 0 {
+                left_read_index += buffer_length;
+            }
 
-        // Process stereo delays (reuse delay_pre_lpf_buf as temp since DelayLine overwrites)
-        // Left
-        {
-            let mut temp_in = vec![0.0f32; sample_count];
-            temp_in.copy_from_slice(&self.delay_center_output[..sample_count]);
-            self.delay_left.process(&temp_in, &mut self.delay_pre_lpf_buf, sample_count);
-        }
-        for i in 0..sample_count {
-            let sample = self.delay_pre_lpf_buf[i] as f64;
-            let o = i + start_index;
-            output_left[o] += (sample * gain) as f32;
-            output_reverb[i] += (sample * reverb_gain) as f32;
-        }
+            // Read right
+            let mut right_read_index = (write_index - delay_right) % buffer_length;
+            if right_read_index < 0 {
+                right_read_index += buffer_length;
+            }
 
-        // Right
-        {
-            let mut temp_in = vec![0.0f32; sample_count];
-            temp_in.copy_from_slice(&self.delay_center_output[..sample_count]);
-            let mut temp_out = vec![0.0f32; sample_count];
-            self.delay_right.process(&temp_in, &mut temp_out, sample_count);
-            // Copy back for mixing
-            self.delay_pre_lpf_buf[..sample_count].copy_from_slice(&temp_out[..sample_count]);
+            // Write center
+            let o = start_index + i;
+            let delayed = buffer[center_read_index as usize] as f64;
+            let c = delayed * center_gain;
+            add(&mut output_left[o], c);
+            add(&mut output_right[o], c);
+            add(&mut output_reverb[i], c * reverb_gain);
+
+            // Center feedback, do it first so left and right delay of 0 work fine
+            // Testcase: gs_effect_send_level_test
+            buffer[write_index as usize] = (delay_in[i] as f64 + delayed * feedback_gain) as f32;
+
+            // Write left
+            let l = buffer[left_read_index as usize] as f64 * left_gain;
+            add(&mut output_left[o], l);
+            add(&mut output_reverb[i], l * reverb_gain);
+
+            // Write right
+            let r = buffer[right_read_index as usize] as f64 * right_gain;
+            add(&mut output_right[o], r);
+            add(&mut output_reverb[i], r * reverb_gain);
+
+            // Advance and wrap
+            write_index += 1;
+            if write_index >= buffer_length {
+                write_index = 0;
+            }
         }
-        for i in 0..sample_count {
-            let sample = self.delay_pre_lpf_buf[i] as f64;
-            let o = i + start_index;
-            output_right[o] += (sample * gain) as f32;
-            output_reverb[i] += (sample * reverb_gain) as f32;
-        }
+        self.write_index = write_index;
     }
 
     pub fn get_snapshot(&self) -> DelaySnapshot {
@@ -271,10 +313,20 @@ impl SpessaSynthDelay {
         }
     }
 
+    fn update_delay_times(&mut self) {
+        // Recompute times
+        let max_delay = self.buffer.len() as i64 - 1;
+        self.delay_left =
+            max_delay.min((self.delay_center as f64 * self.delay_left_multiplier).floor() as i64);
+        self.delay_right =
+            max_delay.min((self.delay_center as f64 * self.delay_right_multiplier).floor() as i64);
+    }
+
     fn update_gain(&mut self) {
-        self.delay_center.gain = self.level_center as f64 / 127.0;
-        self.delay_left.gain = self.level_left as f64 / 127.0;
-        self.delay_right.gain = self.level_right as f64 / 127.0;
+        // Center gain is applied in post
+        self.gain_center = self.level_center as f64 / 127.0;
+        self.gain_left = self.level_left as f64 / 127.0;
+        self.gain_right = self.level_right as f64 / 127.0;
     }
 }
 
@@ -282,150 +334,67 @@ impl SpessaSynthDelay {
 mod tests {
     use super::*;
 
-    const SR: f64 = 44100.0;
-    const EPS: f64 = 1e-6;
-
-    // ---- DELAY_TIME_SEGMENTS tests ----
+    const EPS: f64 = 1e-9;
 
     #[test]
-    fn delay_time_segment_first_entry() {
-        // value=0x01: 0.1 + (1-1)*0.1 = 0.1 ms
-        let mut d = SpessaSynthDelay::new(SR, 128);
+    fn time_center_segments() {
+        let mut d = DefaultGSDelay::new(48_000.0, 128);
+        // 0x01 -> 0.1 ms -> clamped to 2 samples
         d.set_time_center(0x01);
-        let expected_samples = (SR * 0.1 / 1000.0).max(2.0);
-        assert!(
-            (d.delay_center_time - expected_samples).abs() < 1.0,
-            "value=0x01: expected {} samples, got {}",
-            expected_samples,
-            d.delay_center_time
-        );
-    }
-
-    #[test]
-    fn delay_time_segment_boundary_0x14() {
-        // value=0x14: boundary of seg0/seg1.
-        // seg0: start=0x01, end=0x14 → 0x14 is NOT in seg0 (value < end).
-        // seg1: start=0x14, end=0x23 → 0x14 is in seg1.
-        // delay_ms = 2.0 + (0x14-0x14)*0.2 = 2.0 ms
-        let mut d = SpessaSynthDelay::new(SR, 128);
+        assert_eq!(d.delay_center, 4);
+        // 0x14 -> 2 ms
         d.set_time_center(0x14);
-        let expected = (SR * 2.0 / 1000.0).max(2.0);
-        assert!(
-            (d.delay_center_time - expected).abs() < 1.0,
-            "value=0x14: expected {} samples, got {}",
-            expected,
-            d.delay_center_time
-        );
-    }
-
-    #[test]
-    fn delay_time_segment_mid_range() {
-        // value=0x37: seg4 (start=0x37, end=0x46), time_start=20.0, res=2.0
-        // delay_ms = 20.0 + (0x37-0x37)*2.0 = 20.0 ms
-        let mut d = SpessaSynthDelay::new(SR, 128);
-        d.set_time_center(0x37);
-        let expected = (SR * 20.0 / 1000.0).max(2.0);
-        assert!(
-            (d.delay_center_time - expected).abs() < 1.0,
-            "value=0x37: expected {} samples, got {}",
-            expected,
-            d.delay_center_time
-        );
-    }
-
-    #[test]
-    fn delay_time_segment_last() {
-        // value=0x73 (last valid in seg8): seg8 start=0x69, time_start=500.0, res=50.0
-        // delay_ms = 500.0 + (0x73-0x69)*50.0 = 500 + 10*50 = 1000 ms
-        let mut d = SpessaSynthDelay::new(SR, 128);
+        assert_eq!(d.delay_center, 96);
+        // 0x73 -> 500 + 10 * 50 = 1000 ms -> capped to buffer length - 1
         d.set_time_center(0x73);
-        let expected = SR * 1000.0 / 1000.0; // 44100 samples
-        assert!(
-            (d.delay_center_time - expected).abs() < 1.0,
-            "value=0x73: expected {} samples, got {}",
-            expected,
-            d.delay_center_time
-        );
+        assert_eq!(d.delay_center, 47_999);
     }
 
     #[test]
-    fn delay_time_minimum_is_2_samples() {
-        let mut d = SpessaSynthDelay::new(SR, 128);
-        d.set_time_center(0x01);
-        assert!(d.delay_center_time >= 2.0);
-    }
-
-    // ---- Parameter setter tests ----
-
-    #[test]
-    fn set_level_calculates_gain() {
-        let mut d = SpessaSynthDelay::new(SR, 128);
-        d.set_level(127);
-        assert!((d.gain - DELAY_GAIN).abs() < EPS);
-        d.set_level(0);
-        assert!(d.gain.abs() < EPS);
+    fn initial_gain_follows_default_level() {
+        let d = DefaultGSDelay::new(44_100.0, 128);
+        assert!((d.gain - (64.0 / 127.0) * DELAY_GAIN).abs() < EPS);
+        assert_eq!(d.delay_center, (0.34f64 * 44_100.0).floor() as i64);
     }
 
     #[test]
-    fn set_feedback_calculates_center_feedback() {
-        let mut d = SpessaSynthDelay::new(SR, 128);
+    fn feedback_gain() {
+        let mut d = DefaultGSDelay::new(44_100.0, 128);
         d.set_feedback(64);
-        // (64 - 64) / 66 = 0
-        assert!(d.delay_center.feedback.abs() < EPS);
+        assert!(d.feedback_gain.abs() < EPS);
         d.set_feedback(127);
-        // (127 - 64) / 66 ≈ 0.9545
-        assert!((d.delay_center.feedback - 63.0 / 66.0).abs() < EPS);
+        assert!((d.feedback_gain - 63.0 / 66.0).abs() < EPS);
         d.set_feedback(0);
-        // (0 - 64) / 66 ≈ -0.9697 (negative feedback)
-        assert!((d.delay_center.feedback - (-64.0 / 66.0)).abs() < EPS);
+        assert!((d.feedback_gain + 64.0 / 66.0).abs() < EPS);
     }
 
     #[test]
-    fn set_feedback_zeroes_stereo_delays() {
-        let mut d = SpessaSynthDelay::new(SR, 128);
-        d.delay_left.feedback = 1.0;
-        d.delay_right.feedback = 1.0;
-        d.set_feedback(64);
-        assert!(d.delay_left.feedback.abs() < EPS);
-        assert!(d.delay_right.feedback.abs() < EPS);
-    }
-
-    #[test]
-    fn set_time_ratio_left_calculates_multiplier() {
-        let mut d = SpessaSynthDelay::new(SR, 128);
+    fn time_ratios_scale_from_center() {
+        let mut d = DefaultGSDelay::new(44_100.0, 128);
         d.set_time_ratio_left(24);
-        // 24 * (100/2400) = 1.0
-        assert!((d.delay_left_multiplier - 1.0).abs() < EPS);
-    }
-
-    #[test]
-    fn set_time_ratio_right_calculates_multiplier() {
-        let mut d = SpessaSynthDelay::new(SR, 128);
         d.set_time_ratio_right(12);
-        // 12 * (100/2400) = 0.5
-        assert!((d.delay_right_multiplier - 0.5).abs() < EPS);
+        assert_eq!(d.delay_left, d.delay_center);
+        assert_eq!(d.delay_right, (d.delay_center as f64 * 0.5).floor() as i64);
     }
 
     #[test]
-    fn set_send_level_to_reverb_gain() {
-        let mut d = SpessaSynthDelay::new(SR, 128);
-        d.set_send_level_to_reverb(127);
-        assert!((d.reverb_gain - 1.0).abs() < EPS);
-    }
-
-    #[test]
-    fn set_pre_lowpass_coefficient() {
-        let mut d = SpessaSynthDelay::new(SR, 128);
-        d.set_pre_lowpass(1);
-        let fc = 8000.0 * 0.63_f64.powi(1);
-        let decay = (-2.0 * PI * fc / SR).exp();
-        let expected = 1.0 - decay;
-        assert!((d.pre_lpf_a - expected).abs() < EPS);
+    fn impulse_comes_back_after_center_time() {
+        let mut d = DefaultGSDelay::new(1000.0, 1000);
+        d.set_time_center(0x2d); // 10 ms -> 10 samples at 1 kHz
+        let mut input = vec![0.0f32; 64];
+        input[0] = 1.0;
+        let mut l = vec![0.0f32; 64];
+        let mut r = vec![0.0f32; 64];
+        let mut rev = vec![0.0f32; 64];
+        d.process(&input, &mut l, &mut r, &mut rev, 0, 64);
+        let first = l.iter().position(|&x| x != 0.0).unwrap();
+        assert_eq!(first, 10);
+        assert_eq!(l, r);
     }
 
     #[test]
     fn snapshot_captures_parameters() {
-        let mut d = SpessaSynthDelay::new(SR, 128);
+        let mut d = DefaultGSDelay::new(44_100.0, 128);
         d.set_level(100);
         d.set_feedback(80);
         d.set_time_center(0x20);

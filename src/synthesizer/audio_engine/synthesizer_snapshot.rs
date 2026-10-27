@@ -162,7 +162,7 @@ pub fn apply_snapshot(core: &mut SynthesizerCore, snapshot: &SynthesizerSnapshot
     // is a complete no-op. Ported bug-for-bug (as a no-op).
 
     // Then update active effects (new in 4.3.16)
-    core.update_active_effects();
+    core.update_active_gs_effects();
 }
 
 /// Creates a snapshot of the current synthesizer state.

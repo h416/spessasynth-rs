@@ -71,7 +71,7 @@ use crate::synthesizer::audio_engine::channel::render_voice::{
     EffectSends, RenderVoiceContext, VoiceSendBuffer,
 };
 use crate::synthesizer::audio_engine::effects::gs::implementation::chorus::SpessaSynthChorus;
-use crate::synthesizer::audio_engine::effects::gs::implementation::delay::SpessaSynthDelay;
+use crate::synthesizer::audio_engine::effects::gs::implementation::delay::DefaultGSDelay;
 use crate::synthesizer::audio_engine::effects::gs::implementation::insertion::{
     self, InsertionProcessor,
     thru::ThruFx,
@@ -184,7 +184,7 @@ pub struct SynthesizerCore {
     pub chorus_processor: SpessaSynthChorus,
 
     /// Delay effect processor.
-    pub delay_processor: SpessaSynthDelay,
+    pub delay_processor: DefaultGSDelay,
 
     /// Whether delay effect is active (enabled via SysEx).
     pub gs_delay_active: bool,
@@ -336,7 +336,7 @@ impl SynthesizerCore {
             midi_volume: 1.0,
             reverb_processor: SpessaSynthReverb::new(sample_rate, buf_size),
             chorus_processor: SpessaSynthChorus::new(sample_rate, buf_size),
-            delay_processor: SpessaSynthDelay::new(sample_rate, buf_size),
+            delay_processor: DefaultGSDelay::new(sample_rate, buf_size),
             gs_delay_active: false,
             random_generator: SplitMix32::default(),
             voice_buffer: vec![0.0; buf_size],
@@ -564,7 +564,7 @@ impl SynthesizerCore {
         }
 
         // Update if the effects should still be active.
-        self.update_active_effects();
+        self.update_active_gs_effects();
 
         for event in events {
             self.call_event(event);
@@ -935,14 +935,14 @@ impl SynthesizerCore {
             6 => {
                 // SDelay
                 chr.set_feedback(0);
-                chr.set_depth(127);
+                chr.set_delay(127);
                 chr.set_rate(0);
                 chr.set_depth(127);
             }
             7 => {
                 // SDelayFb
                 chr.set_feedback(80);
-                chr.set_depth(127);
+                chr.set_delay(127);
                 chr.set_rate(0);
                 chr.set_depth(127);
             }
@@ -1083,8 +1083,8 @@ impl SynthesizerCore {
     /// delay SysEx or variation-depth CC, so they could never be turned back off outside a
     /// full reset. They are now recomputed from the current state at every relevant edit.
     ///
-    /// Equivalent to: updateActiveEffects()
-    pub fn update_active_effects(&mut self) {
+    /// Equivalent to: updateActiveGSEffects() (renamed from updateActiveEffects in 4.4.0)
+    pub fn update_active_gs_effects(&mut self) {
         if !self.system_parameters.gs_insertion_lock {
             // TS reads `c.midiParameters.efxAssign`; the Rust channel keeps the same flag
             // under the legacy name `insertion_enabled`.
@@ -1120,7 +1120,7 @@ impl SynthesizerCore {
             return;
         }
         // 4.3.16 dropped the `insertionActive = false` here: the flag is now derived from
-        // the per-channel efxAssign state by `update_active_effects()`, which `reset()`
+        // the per-channel efxAssign state by `update_active_gs_effects()`, which `reset()`
         // calls after every channel has been reset.
         self.insertion_processor = Box::new(ThruFx::new(self.sample_rate));
         self.insertion_processor.reset();

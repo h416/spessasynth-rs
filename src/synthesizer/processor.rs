@@ -99,7 +99,7 @@ impl SynthesizerCore {
         // Rust channel has no core reference, so mirror it here: any variationDepth (CC#94)
         // change re-derives the delay flag. Without this the delay send never renders.
         if controller == crate::midi::enums::midi_controllers::VARIATION_DEPTH {
-            self.update_active_effects();
+            self.update_active_gs_effects();
         }
         for ev in events {
             self.call_event(ev);

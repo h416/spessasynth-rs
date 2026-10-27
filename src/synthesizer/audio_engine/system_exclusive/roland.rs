@@ -481,7 +481,7 @@ impl SynthesizerCore {
                                 self.insertion_processor.set_send_level_to_delay(
                                     (data as f64 / 127.0) * EFX_SENDS_GAIN_CORRECTION,
                                 );
-                                self.update_active_effects();
+                                self.update_active_gs_effects();
                                 spessa_synth_info(&format!("GS EFX Send Level to Delay: {}", data));
                             }
 
@@ -583,7 +583,7 @@ impl SynthesizerCore {
                                 // Chorus send level to delay — may activate delay
                                 spessa_synth_info(&format!("GS Chorus Send To Delay: {}", message_value));
                                 self.chorus_processor.set_send_level_to_delay(message_value);
-                                self.update_active_effects();
+                                self.update_active_gs_effects();
                             }
 
                             // --- Delay parameters (0x50-0x5A) ---
@@ -680,7 +680,7 @@ impl SynthesizerCore {
                                     channel,
                                     if efx { "ON" } else { "OFF" }
                                 ));
-                                self.update_active_effects();
+                                self.update_active_gs_effects();
                             }
                             _ => {
                                 sys_ex_not_recognized(syx, "Roland GS Patch Part Parameter");

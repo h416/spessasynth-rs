@@ -996,7 +996,7 @@ impl MidiChannel {
             EfxAssign(v) => {
                 self.midi_parameters.efx_assign = v;
                 // `insertion_enabled` is the legacy mirror read by the voice renderer and
-                // by `SynthesizerCore::update_active_effects`; keep the two in sync.
+                // by `SynthesizerCore::update_active_gs_effects`; keep the two in sync.
                 self.insertion_enabled = v;
             }
             Cc1(v) => self.midi_parameters.cc1 = v,

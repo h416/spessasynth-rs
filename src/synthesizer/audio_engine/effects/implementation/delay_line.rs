@@ -30,8 +30,12 @@ impl DelayLine {
         self.time
     }
 
+    /// TS: `Math.max(1, Math.min(this.bufferLength - 1, value)) | 0`; callers pass the
+    /// truncated value, which clamps to the same result.
     pub fn set_time(&mut self, samples: usize) {
-        self.time = samples.min(self.buffer_length);
+        // Changing the time only moves the read position, so the delayed signal is kept.
+        // A delay of 0 would read the slot before it is written, so 1 is the minimum.
+        self.time = samples.min(self.buffer_length - 1).max(1);
     }
 
     /// OVERWRITES the output buffer.
@@ -85,7 +89,9 @@ mod tests {
     fn set_time_clamps_to_buffer_length() {
         let mut dl = DelayLine::new(100);
         dl.set_time(200);
-        assert_eq!(dl.time, 100);
+        assert_eq!(dl.time, 99);
+        dl.set_time(0);
+        assert_eq!(dl.time, 1);
     }
 
     #[test]

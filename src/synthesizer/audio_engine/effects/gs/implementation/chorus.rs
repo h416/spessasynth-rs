@@ -86,7 +86,7 @@ impl SpessaSynthChorus {
         self.delay_gain_value = value as f64 / 127.0;
     }
 
-    /// Read back the raw GS send level (0-127). Used by `update_active_effects`.
+    /// Read back the raw GS send level (0-127). Used by `update_active_gs_effects`.
     pub fn send_level_to_delay(&self) -> u8 {
         self.send_level_to_delay
     }
@@ -207,11 +207,11 @@ impl SpessaSynthChorus {
 
             // Mix to output
             let o = i + start_index;
-            output_left[o] += (out_l * gain) as f32;
-            output_right[o] += (out_r * gain) as f32;
+            output_left[o] = (output_left[o] as f64 + out_l * gain) as f32;
+            output_right[o] = (output_right[o] as f64 + out_r * gain) as f32;
             let mono = (out_l + out_r) / 2.0;
-            output_reverb[i] += (mono * reverb_gain) as f32;
-            output_delay[i] += (mono * delay_gain) as f32;
+            output_reverb[i] = (output_reverb[i] as f64 + mono * reverb_gain) as f32;
+            output_delay[i] = (output_delay[i] as f64 + mono * delay_gain) as f32;
 
             // Write right and advance
             self.right_delay_buffer[write] = (input_sample + out_r * feedback) as f32;

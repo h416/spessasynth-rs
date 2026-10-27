@@ -225,7 +225,7 @@ impl ChannelSnapshot {
 
         // Restore insertion effect assignment.
         // 4.3.16: no longer latches `insertionActive` here — `applySnapshot` calls
-        // `update_active_effects()` once every channel has been restored.
+        // `update_active_gs_effects()` once every channel has been restored.
         core.midi_channels[channel_idx].set_midi_parameter(
             crate::synthesizer::audio_engine::channel::parameters::midi::
                 ChannelMidiParameterValue::EfxAssign(self.insertion_enabled),

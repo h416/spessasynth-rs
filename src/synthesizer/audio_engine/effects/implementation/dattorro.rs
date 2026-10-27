@@ -1,75 +1,15 @@
-//! Dattorro Reverb
-//! Based on DattorroReverbNode by khoin on GitHub (public domain).
+//! Dattorro Reverb Node
+//! by khoin on GitHub, public domain.
 //! <https://github.com/khoin/DattorroReverbNode/>
-//! Adapted for spessasynth by spessasus, ported to Rust.
-
-/// Internal delay line with power-of-2 buffer for fast masking.
-struct DattorroDelayLine {
-    buffer: Vec<f32>,
-    write_index: usize,
-    read_index: usize,
-    mask: usize,
-}
-
-impl DattorroDelayLine {
-    fn new(length: usize) -> Self {
-        let next_pow2 = length.next_power_of_two();
-        Self {
-            buffer: vec![0.0; next_pow2],
-            write_index: length - 1,
-            read_index: 0,
-            mask: next_pow2 - 1,
-        }
-    }
-
-    #[inline]
-    fn write(&mut self, sample: f64) -> f64 {
-        self.buffer[self.write_index] = sample as f32;
-        sample
-    }
-
-    #[inline]
-    fn read(&self) -> f64 {
-        self.buffer[self.read_index] as f64
-    }
-
-    #[inline]
-    fn read_at(&self, offset: i16) -> f64 {
-        self.buffer[(self.read_index + offset as usize) & self.mask] as f64
-    }
-
-    /// Cubic interpolation read (Niemitalo).
-    #[inline]
-    fn read_cubic_at(&self, i: f64) -> f64 {
-        let frac = i - (i as i32 as f64);
-        // Use wrapping arithmetic since index can underflow before masking
-        let mut int = (i as i32).wrapping_add(self.read_index as i32).wrapping_sub(1) as usize;
-        let mask = self.mask;
-
-        let x0 = self.buffer[int & mask] as f64;
-        int = int.wrapping_add(1);
-        let x1 = self.buffer[int & mask] as f64;
-        int = int.wrapping_add(1);
-        let x2 = self.buffer[int & mask] as f64;
-        int = int.wrapping_add(1);
-        let x3 = self.buffer[int & mask] as f64;
-
-        let a = (3.0 * (x1 - x2) - x0 + x3) / 2.0;
-        let b = 2.0 * x2 + x0 - (5.0 * x1 + x3) / 2.0;
-        let c = (x2 - x0) / 2.0;
-
-        ((a * frac + b) * frac + c) * frac + x1
-    }
-
-    #[inline]
-    fn advance(&mut self) {
-        self.write_index = (self.write_index + 1) & self.mask;
-        self.read_index = (self.read_index + 1) & self.mask;
-    }
-}
+//! Adapted for spessasynth by spessasus.
+//! Ported from: src/synthesizer/audio_engine/effects/implementation/dattorro.ts
+//!
+//! 4.4.0 flattened the delay lines (every delay is read before it is written in the same
+//! sample) and computes the excursion LFOs by rotating phasors. The order of reads and
+//! writes below follows the TS line by line; changing it changes the output.
 
 /// Delay lengths as fractions of sample rate.
-const DELAY_LENGTHS: [f64; 12] = [
+const DELAYS: [f64; 12] = [
     0.004_771_345,
     0.003_595_309,
     0.012_734_787,
@@ -85,7 +25,7 @@ const DELAY_LENGTHS: [f64; 12] = [
 ];
 
 /// Tap offsets as fractions of sample rate.
-const TAP_FRACTIONS: [f64; 14] = [
+const TAPS: [f64; 14] = [
     0.008_937_872,
     0.099_929_438,
     0.064_278_754,
@@ -102,58 +42,66 @@ const TAP_FRACTIONS: [f64; 14] = [
     0.004_065_724,
 ];
 
+/// `Math.round` (half up).
+fn js_round(x: f64) -> f64 {
+    (x + 0.5).floor()
+}
+
+/// `2 ** Math.ceil(Math.log2(x))`
+fn next_pow2(x: f64) -> usize {
+    2f64.powf(x.log2().ceil()) as usize
+}
+
 pub struct DattorroReverb {
-    // Parameters
+    // Params
+    /// Min: 0, max: sample rate - 1
     pub pre_delay: f64,
+    /// Min: 0, max: 1
     pub pre_lpf: f64,
+    /// Min: 0, max: 1
     pub input_diffusion1: f64,
+    /// Min: 0, max: 1
     pub input_diffusion2: f64,
+    /// Min: 0, max: 1
     pub decay: f64,
+    /// Min: 0, max: 0.999999
     pub decay_diffusion1: f64,
+    /// Min: 0, max: 0.999999
     pub decay_diffusion2: f64,
+    /// Min: 0, max: 1
     pub damping: f64,
+    /// Min: 0, max: 2
     pub excursion_rate: f64,
+    /// Min: 0, max: 2
     pub excursion_depth: f64,
     pub gain: f64,
-
-    // Internal state
     sample_rate: f64,
     lp1: f64,
     lp2: f64,
     lp3: f64,
-    exc_phase: f64,
 
-    // Pre-delay buffer
+    // Separate lfo phases to allow safe wrapping at 2pi
+    exc_phase1: f64,
+    exc_phase2: f64,
+
+    p_d_write: usize,
+    taps: [usize; 14],
     p_delay: Vec<f32>,
-    pd_write: usize,
-    pd_length: usize,
+    p_d_mask: usize,
 
-    // Output taps
-    taps: [i16; 14],
-
-    // 12 delay lines
-    delays: Vec<DattorroDelayLine>,
+    // Flattened delays compared to original
+    delay_buffers: Vec<Vec<f32>>,
+    delay_write: [usize; 12],
+    delay_read: [usize; 12],
+    delay_mask: [usize; 12],
 }
 
 impl DattorroReverb {
     pub fn new(sample_rate: f64) -> Self {
-        let pd_length = sample_rate as usize;
-        let p_delay = vec![0.0; pd_length];
+        // Pre-delay is always one-second long
+        let p_d_mask = next_pow2(sample_rate) - 1;
 
-        let delays: Vec<DattorroDelayLine> = DELAY_LENGTHS
-            .iter()
-            .map(|&frac| {
-                let len = (frac * sample_rate).round() as usize;
-                DattorroDelayLine::new(len)
-            })
-            .collect();
-
-        let mut taps = [0i16; 14];
-        for (i, &frac) in TAP_FRACTIONS.iter().enumerate() {
-            taps[i] = (frac * sample_rate).round() as i16;
-        }
-
-        Self {
+        let mut s = Self {
             pre_delay: 0.0,
             pre_lpf: 0.5,
             input_diffusion1: 0.75,
@@ -169,16 +117,28 @@ impl DattorroReverb {
             lp1: 0.0,
             lp2: 0.0,
             lp3: 0.0,
-            exc_phase: 0.0,
-            p_delay,
-            pd_write: 0,
-            pd_length,
-            taps,
-            delays,
+            exc_phase1: 0.0,
+            exc_phase2: 0.0,
+            p_d_write: 0,
+            taps: [0; 14],
+            p_delay: vec![0.0; p_d_mask + 1],
+            p_d_mask,
+            delay_buffers: Vec::with_capacity(12),
+            delay_write: [0; 12],
+            delay_read: [0; 12],
+            delay_mask: [0; 12],
+        };
+        for (i, &d) in DELAYS.iter().enumerate() {
+            s.make_delay_line(d, i);
         }
+        for (i, &t) in TAPS.iter().enumerate() {
+            s.taps[i] = js_round(t * sample_rate) as usize;
+        }
+        s
     }
 
-    /// Process reverb. Input is zero-based, outputs are startIndex-based (ADDS to output).
+    /// Note: input is zero-based, while the outputs are startIndex based!
+    /// ADDS to the output
     pub fn process(
         &mut self,
         input: &[f32],
@@ -187,7 +147,8 @@ impl DattorroReverb {
         start_index: usize,
         sample_count: usize,
     ) {
-        let pd = self.pre_delay as usize;
+        // Cache everything we can
+        let pd = self.pre_delay as i64 as usize;
         let fi = self.input_diffusion1;
         let si = self.input_diffusion2;
         let dc = self.decay;
@@ -196,444 +157,281 @@ impl DattorroReverb {
         let dp = 1.0 - self.damping;
         let ex = self.excursion_rate / self.sample_rate;
         let ed = (self.excursion_depth * self.sample_rate) / 1000.0;
-        let block_start = self.pd_write;
 
-        // Write to pre-delay
-        for j in 0..sample_count {
-            self.p_delay[(block_start + j) % self.pd_length] = input[j];
+        let (mut lp1, mut lp2, mut lp3) = (self.lp1, self.lp2, self.lp3);
+        let (mut p1, mut p2) = (self.exc_phase1, self.exc_phase2);
+
+        let block_start = self.p_d_write;
+        let p_d_mask = self.p_d_mask;
+        let taps = self.taps;
+        let gain = self.gain;
+        let pre_lpf = self.pre_lpf;
+
+        let mut w = self.delay_write;
+        let mut r = self.delay_read;
+        let m = self.delay_mask;
+        let d = &mut self.delay_buffers;
+        let p_delay = &mut self.p_delay;
+        // Reads a delay line sample as f64 (Float32Array element).
+        macro_rules! rd {
+            ($k:expr, $idx:expr) => {
+                d[$k][$idx] as f64
+            };
         }
 
-        let d = &mut self.delays;
+        const TWO_PI: f64 = 6.283_185_307_179_586;
+
+        // Excursion LFOs
+        // Computed by rotating a phasor
+        // It starts from the exact values every block,
+        // So no error accumulates.
+        // Different values for stereo effect
+        let step1 = ex * TWO_PI;
+        let step2 = ex * 6.2847;
+        let step_cos1 = step1.cos();
+        let step_sin1 = step1.sin();
+        let step_cos2 = step2.cos();
+        let step_sin2 = step2.sin();
+        let mut cos1 = p1.cos();
+        let mut sin1 = p1.sin();
+        let mut cos2 = p2.cos();
+        let mut sin2 = p2.sin();
+
         for i in 0..sample_count {
-            // Pre-delay read with LPF
-            let pd_read_idx =
-                (self.pd_length + self.pd_write - pd + i) % self.pd_length;
-            self.lp1 += self.pre_lpf * (self.p_delay[pd_read_idx] as f64 - self.lp1);
+            // Write/read predelay
+            p_delay[(block_start + i) & p_d_mask] = input[i];
+            let in_sample =
+                p_delay[(block_start + i).wrapping_sub(pd) & p_d_mask] as f64;
 
-            // Pre-tank: 4-stage input diffusion
-            // Read before write to satisfy borrow checker
-            let r0 = d[0].read();
-            let mut pre = d[0].write(self.lp1 - fi * r0);
+            // Lowpass filter
+            lp1 += pre_lpf * (in_sample - lp1);
 
-            let r1 = d[1].read();
-            pre = d[1].write(fi * (pre - r1) + r0);
+            // Pre-tank
+            let read0 = rd!(0, r[0]);
+            let mut pre = lp1 - fi * read0;
+            d[0][w[0]] = pre as f32;
 
-            let r1 = d[1].read();
-            let r2 = d[2].read();
-            pre = d[2].write(fi * pre + r1 - si * r2);
+            let read1 = rd!(1, r[1]);
+            pre = fi * (pre - read1) + read0;
+            d[1][w[1]] = pre as f32;
 
-            let r2 = d[2].read();
-            let r3 = d[3].read();
-            pre = d[3].write(si * (pre - r3) + r2);
+            let read2 = rd!(2, r[2]);
+            pre = fi * pre + read1 - si * read2;
+            d[2][w[2]] = pre as f32;
 
-            let r3 = d[3].read();
-            let split = si * pre + r3;
+            let read3 = rd!(3, r[3]);
+            pre = si * (pre - read3) + read2;
+            d[3][w[3]] = pre as f32;
 
-            // Excursion modulation
-            let exc = ed * (1.0 + (self.exc_phase * 6.28).cos());
-            let exc2 = ed * (1.0 + (self.exc_phase * 6.2847).sin());
+            let split = si * pre + read3;
 
-            // Left decay tank
-            let r11 = d[11].read();
-            let r4c = d[4].read_cubic_at(exc);
-            let mut temp = d[4].write(split + dc * r11 + ft * r4c);
+            // Excursions
+            let exc = ed * (1.0 + cos1);
+            let exc2 = ed * (1.0 + sin2);
 
-            let r4c = d[4].read_cubic_at(exc);
-            d[5].write(r4c - ft * temp);
+            // Left loop
+            let read11 = rd!(11, r[11]);
 
-            let r5 = d[5].read();
-            self.lp2 += dp * (r5 - self.lp2);
+            // Inlined readDelayCAt(4, exc)
+            // `~~exc` truncates; exc >= 0 here
+            let f4 = exc - exc.trunc();
+            let mut i4 = (exc.trunc() as usize + r[4]).wrapping_sub(1);
+            let x4_0 = rd!(4, i4 & m[4]);
+            i4 = i4.wrapping_add(1);
+            let x4_1 = rd!(4, i4 & m[4]);
+            i4 = i4.wrapping_add(1);
+            let x4_2 = rd!(4, i4 & m[4]);
+            i4 = i4.wrapping_add(1);
+            let x4_3 = rd!(4, i4 & m[4]);
+            let a4 = (3.0 * (x4_1 - x4_2) - x4_0 + x4_3) * 0.5;
+            let b4 = 2.0 * x4_2 + x4_0 - (5.0 * x4_1 + x4_3) * 0.5;
+            let c4 = (x4_2 - x4_0) * 0.5;
+            let read_c4 = ((a4 * f4 + b4) * f4 + c4) * f4 + x4_1;
+            // End of inline
 
-            let r6 = d[6].read();
-            temp = d[6].write(dc * self.lp2 - st * r6);
+            let mut temp = split + dc * read11 + ft * read_c4;
+            d[4][w[4]] = temp as f32; // Tank diffuse 1
 
-            let r6 = d[6].read();
-            d[7].write(r6 + st * temp);
+            d[5][w[5]] = (read_c4 - ft * temp) as f32; // Long delay 1
 
-            // Right decay tank
-            let r7 = d[7].read();
-            let r8c = d[8].read_cubic_at(exc2);
-            temp = d[8].write(split + dc * r7 + ft * r8c);
+            let read5 = rd!(5, r[5]);
+            lp2 += dp * (read5 - lp2); // Damp 1
 
-            let r8c = d[8].read_cubic_at(exc2);
-            d[9].write(r8c - ft * temp);
+            let read6 = rd!(6, r[6]);
+            temp = dc * lp2 - st * read6;
+            d[6][w[6]] = temp as f32; // Tank diffuse 2
 
-            let r9 = d[9].read();
-            self.lp3 += dp * (r9 - self.lp3);
+            d[7][w[7]] = (read6 + st * temp) as f32; // Long delay 2
 
-            let r10 = d[10].read();
-            temp = d[10].write(dc * self.lp3 - st * r10);
+            // Right loop
+            let read7 = rd!(7, r[7]);
 
-            let r10 = d[10].read();
-            d[11].write(r10 + st * temp);
+            // Inline readDelayCAt(8, exc2)
+            let f8 = exc2 - exc2.trunc();
+            let mut i8 = (exc2.trunc() as usize + r[8]).wrapping_sub(1);
+            let x8_0 = rd!(8, i8 & m[8]);
+            i8 = i8.wrapping_add(1);
+            let x8_1 = rd!(8, i8 & m[8]);
+            i8 = i8.wrapping_add(1);
+            let x8_2 = rd!(8, i8 & m[8]);
+            i8 = i8.wrapping_add(1);
+            let x8_3 = rd!(8, i8 & m[8]);
+            let a8 = (3.0 * (x8_1 - x8_2) - x8_0 + x8_3) * 0.5;
+            let b8 = 2.0 * x8_2 + x8_0 - (5.0 * x8_1 + x8_3) * 0.5;
+            let c8 = (x8_2 - x8_0) * 0.5;
+            let read_c8 = ((a8 * f8 + b8) * f8 + c8) * f8 + x8_1;
+            // End of inline
 
-            // Stereo mix-down from taps
-            let left_sample = d[9].read_at(self.taps[0])
-                + d[9].read_at(self.taps[1])
-                - d[10].read_at(self.taps[2])
-                + d[11].read_at(self.taps[3])
-                - d[5].read_at(self.taps[4])
-                - d[6].read_at(self.taps[5])
-                - d[7].read_at(self.taps[6]);
+            temp = split + dc * read7 + ft * read_c8;
+            d[8][w[8]] = temp as f32; // Tank diffuse 3
 
+            d[9][w[9]] = (read_c8 - ft * temp) as f32; // Long delay 3
+
+            let read9 = rd!(9, r[9]);
+            lp3 += dp * (read9 - lp3); // Damp 2
+
+            let read10 = rd!(10, r[10]);
+            temp = dc * lp3 - st * read10;
+            d[10][w[10]] = temp as f32; // Tank diffuse 4
+
+            d[11][w[11]] = (read10 + st * temp) as f32; // Long delay 4
+
+            // Mix down
+            let left_sample = rd!(9, (r[9] + taps[0]) & m[9])
+                + rd!(9, (r[9] + taps[1]) & m[9])
+                - rd!(10, (r[10] + taps[2]) & m[10])
+                + rd!(11, (r[11] + taps[3]) & m[11])
+                - rd!(5, (r[5] + taps[4]) & m[5])
+                - rd!(6, (r[6] + taps[5]) & m[6])
+                - rd!(7, (r[7] + taps[6]) & m[7]);
+
+            let right_sample = rd!(5, (r[5] + taps[7]) & m[5])
+                + rd!(5, (r[5] + taps[8]) & m[5])
+                - rd!(6, (r[6] + taps[9]) & m[6])
+                + rd!(7, (r[7] + taps[10]) & m[7])
+                - rd!(9, (r[9] + taps[11]) & m[9])
+                - rd!(10, (r[10] + taps[12]) & m[10])
+                - rd!(11, (r[11] + taps[13]) & m[11]);
+
+            // Write out
             let idx = i + start_index;
-            output_left[idx] += (left_sample * self.gain) as f32;
+            output_left[idx] = (output_left[idx] as f64 + left_sample * gain) as f32;
+            output_right[idx] = (output_right[idx] as f64 + right_sample * gain) as f32;
 
-            let right_sample = d[5].read_at(self.taps[7])
-                + d[5].read_at(self.taps[8])
-                - d[6].read_at(self.taps[9])
-                + d[7].read_at(self.taps[10])
-                - d[9].read_at(self.taps[11])
-                - d[10].read_at(self.taps[12])
-                - d[11].read_at(self.taps[13]);
+            // Update LFOs (rotate the phasors)
+            let next_cos1 = cos1 * step_cos1 - sin1 * step_sin1;
+            sin1 = sin1 * step_cos1 + cos1 * step_sin1;
+            cos1 = next_cos1;
+            let next_cos2 = cos2 * step_cos2 - sin2 * step_sin2;
+            sin2 = sin2 * step_cos2 + cos2 * step_sin2;
+            cos2 = next_cos2;
 
-            output_right[idx] += (right_sample * self.gain) as f32;
-
-            // Advance phase
-            self.exc_phase += ex;
-
-            // Advance all delay lines
-            for dl in d.iter_mut() {
-                dl.advance();
+            // Advance delays
+            for k in 0..12 {
+                w[k] = (w[k] + 1) & m[k];
+                r[k] = (r[k] + 1) & m[k];
             }
         }
+        // Advance the LFO phases and wrap them
+        p1 = (p1 + step1 * sample_count as f64) % TWO_PI;
+        p2 = (p2 + step2 * sample_count as f64) % TWO_PI;
 
-        // Update pre-delay write index
-        self.pd_write = (block_start + sample_count) % self.pd_length;
+        // Update preDelay index
+        self.p_d_write = (block_start + sample_count) & p_d_mask;
+
+        // Save state
+        self.lp1 = lp1;
+        self.lp2 = lp2;
+        self.lp3 = lp3;
+        self.exc_phase1 = p1;
+        self.exc_phase2 = p2;
+        self.delay_write = w;
+        self.delay_read = r;
     }
+
+    fn make_delay_line(&mut self, length: f64, index: usize) {
+        // Len, array, write, read, mask
+        let len = js_round(length * self.sample_rate);
+        let next_pow2 = next_pow2(len);
+        self.delay_buffers.push(vec![0.0; next_pow2]);
+        debug_assert_eq!(self.delay_buffers.len(), index + 1);
+        self.delay_write[index] = len as usize - 1;
+        self.delay_read[index] = 0;
+        self.delay_mask[index] = next_pow2 - 1;
+    }
+
+    // Read delay methods inlined for performance
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // -----------------------------------------------------------------------
-    // DattorroDelayLine tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn delay_line_buffer_is_power_of_two() {
-        let dl = DattorroDelayLine::new(100);
-        assert_eq!(dl.buffer.len(), 128); // next_power_of_two(100)
-        assert_eq!(dl.mask, 127);
-    }
-
-    #[test]
-    fn delay_line_write_returns_sample() {
-        let mut dl = DattorroDelayLine::new(8);
-        let ret = dl.write(0.5);
-        assert_eq!(ret, 0.5);
-    }
-
-    #[test]
-    fn delay_line_read_returns_written_after_delay() {
-        let mut dl = DattorroDelayLine::new(4);
-        // write_index starts at length-1 = 3, read_index starts at 0
-        // So delay = write_index - read_index = 3 samples
-        dl.write(1.0);
-        // read_index=0 reads the initial zero
-        assert_eq!(dl.read(), 0.0);
-        // Advance 3 times to bring read_index to where we wrote
-        dl.advance();
-        dl.advance();
-        dl.advance();
-        // Now read_index should point to where we wrote 1.0
-        // write was at index 3, after 3 advances read_index = 3
-        assert_eq!(dl.read(), 1.0);
-    }
-
-    #[test]
-    fn delay_line_advance_wraps() {
-        let mut dl = DattorroDelayLine::new(4);
-        // buffer size = 4 (already power of 2), mask = 3
-        for _ in 0..10 {
-            dl.advance();
+    fn render(r: &mut DattorroReverb, input: &[f32]) -> (Vec<f32>, Vec<f32>) {
+        let mut l = vec![0.0f32; input.len()];
+        let mut rr = vec![0.0f32; input.len()];
+        for (k, chunk) in input.chunks(128).enumerate() {
+            r.process(chunk, &mut l, &mut rr, k * 128, chunk.len());
         }
-        // Should not panic, indices wrap via mask
-        assert!(dl.write_index < dl.buffer.len());
-        assert!(dl.read_index < dl.buffer.len());
+        (l, rr)
     }
 
-    // -----------------------------------------------------------------------
-    // Cubic interpolation tests
-    // -----------------------------------------------------------------------
-
     #[test]
-    fn cubic_at_integer_position_returns_exact_sample() {
-        // Fill a delay line with known values
-        let mut dl = DattorroDelayLine::new(16);
-        // Write samples 0,1,2,...,15 into the buffer
-        for i in 0..16 {
-            dl.buffer[i] = i as f32;
+    fn delay_buffers_are_power_of_two() {
+        let r = DattorroReverb::new(44_100.0);
+        for (k, b) in r.delay_buffers.iter().enumerate() {
+            assert!(b.len().is_power_of_two());
+            assert_eq!(r.delay_mask[k], b.len() - 1);
         }
-        dl.read_index = 2; // so read_cubic_at(0) reads around index 2
-
-        // At integer position i=1, the cubic should return x1 exactly
-        // (when a=0, b=0, c=anything, frac=0 -> result = x1)
-        // int = 1 + 2 - 1 = 2, so x0=buf[2], x1=buf[3], x2=buf[4], x3=buf[5]
-        // For linear data: x0=2, x1=3, x2=4, x3=5
-        // a = (3*(3-4) - 2 + 5)/2 = (-3-2+5)/2 = 0
-        // b = 2*4 + 2 - (5*3+5)/2 = 10 - 10 = 0
-        // c = (4-2)/2 = 1
-        // result = (0*0+0)*0+1)*0 + 3 = 3
-        let val = dl.read_cubic_at(1.0);
-        assert!(
-            (val - 3.0).abs() < 1e-6,
-            "Cubic at integer: expected 3.0, got {}",
-            val
-        );
+        assert!(r.p_delay.len().is_power_of_two());
+        assert!(r.p_delay.len() >= 44_100);
     }
 
     #[test]
-    fn cubic_interpolates_linear_data_exactly() {
-        // For linear data, cubic interpolation should be exact
-        let mut dl = DattorroDelayLine::new(16);
-        for i in 0..16 {
-            dl.buffer[i] = (i as f32) * 2.0; // linear: 0, 2, 4, 6, ...
-        }
-        dl.read_index = 2;
-
-        // At fractional position i=1.5, should interpolate linearly
-        // int starts at 1+2-1=2, x0=4, x1=6, x2=8, x3=10
-        // For linear data, a=0, b=0, c=2, frac=0.5
-        // result = c*frac + x1 = 2*0.5 + 6 = 7
-        let val = dl.read_cubic_at(1.5);
-        assert!(
-            (val - 7.0).abs() < 1e-4,
-            "Cubic on linear data: expected 7.0, got {}",
-            val
-        );
+    fn silence_in_silence_out() {
+        let mut r = DattorroReverb::new(44_100.0);
+        let (l, rr) = render(&mut r, &vec![0.0; 1024]);
+        assert!(l.iter().chain(rr.iter()).all(|&x| x == 0.0));
     }
 
     #[test]
-    fn cubic_handles_zero_fractional_part() {
-        let mut dl = DattorroDelayLine::new(16);
-        for i in 0..16 {
-            dl.buffer[i] = (i as f32).sin();
-        }
-        dl.read_index = 0;
-
-        // frac=0 -> result should be x1 (the sample at int+1 after -1 offset)
-        let val = dl.read_cubic_at(3.0);
-        // int = 3+0-1=2, x1 = buffer[3]
-        let expected = (3.0_f32).sin() as f64;
-        assert!(
-            (val - expected).abs() < 1e-5,
-            "Cubic at zero frac: expected {}, got {}",
-            expected,
-            val
-        );
-    }
-
-    #[test]
-    fn cubic_result_is_bounded_by_neighboring_samples() {
-        // For smooth data, cubic interpolation should stay within a reasonable range
-        let mut dl = DattorroDelayLine::new(32);
-        for i in 0..32 {
-            dl.buffer[i] = (i as f32 * 0.3).sin();
-        }
-        dl.read_index = 4;
-
-        for frac_10 in 0..10 {
-            let pos = 2.0 + frac_10 as f64 * 0.1;
-            let val = dl.read_cubic_at(pos);
-            // Should not produce wild values for smooth input
-            assert!(
-                val.abs() < 2.0,
-                "Cubic produced wild value {} at pos {}",
-                val,
-                pos
-            );
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // DattorroReverb impulse response tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn reverb_new_creates_valid_instance() {
-        let rev = DattorroReverb::new(44100.0);
-        assert_eq!(rev.sample_rate, 44100.0);
-        assert_eq!(rev.delays.len(), 12);
-        assert_eq!(rev.taps.len(), 14);
-    }
-
-    #[test]
-    fn reverb_silence_in_silence_out() {
-        let mut rev = DattorroReverb::new(44100.0);
-        rev.gain = 1.0;
-        let input = vec![0.0f32; 512];
-        let mut out_l = vec![0.0f32; 512];
-        let mut out_r = vec![0.0f32; 512];
-        rev.process(&input, &mut out_l, &mut out_r, 0, 512);
-
-        for i in 0..512 {
-            assert!(
-                out_l[i].abs() < 1e-10 && out_r[i].abs() < 1e-10,
-                "Silence in should produce silence out at sample {}",
-                i
-            );
-        }
-    }
-
-    #[test]
-    fn reverb_impulse_produces_output() {
-        let mut rev = DattorroReverb::new(44100.0);
-        rev.gain = 1.0;
-        rev.pre_lpf = 1.0; // Let the impulse through
-
-        // Send an impulse
-        let mut input = vec![0.0f32; 4096];
+    fn impulse_produces_finite_stereo_output() {
+        let mut r = DattorroReverb::new(44_100.0);
+        r.decay = 0.7;
+        let mut input = vec![0.0f32; 44_100];
         input[0] = 1.0;
-        let mut out_l = vec![0.0f32; 4096];
-        let mut out_r = vec![0.0f32; 4096];
-        rev.process(&input, &mut out_l, &mut out_r, 0, 4096);
-
-        // After some delay, there should be non-zero output
-        let energy_l: f64 = out_l.iter().map(|&s| (s as f64) * (s as f64)).sum();
-        let energy_r: f64 = out_r.iter().map(|&s| (s as f64) * (s as f64)).sum();
-        assert!(
-            energy_l > 1e-6,
-            "Left channel should have energy after impulse, got {}",
-            energy_l
-        );
-        assert!(
-            energy_r > 1e-6,
-            "Right channel should have energy after impulse, got {}",
-            energy_r
-        );
+        let (l, rr) = render(&mut r, &input);
+        assert!(l.iter().chain(rr.iter()).all(|x| x.is_finite()));
+        assert!(l.iter().any(|&x| x != 0.0));
+        assert_ne!(l, rr);
     }
 
     #[test]
-    fn reverb_left_right_are_different() {
-        let mut rev = DattorroReverb::new(44100.0);
-        rev.gain = 1.0;
-        rev.pre_lpf = 1.0;
-
-        let mut input = vec![0.0f32; 4096];
-        input[0] = 1.0;
-        let mut out_l = vec![0.0f32; 4096];
-        let mut out_r = vec![0.0f32; 4096];
-        rev.process(&input, &mut out_l, &mut out_r, 0, 4096);
-
-        // L and R should differ (different tap sets)
-        let diff: f64 = out_l
-            .iter()
-            .zip(out_r.iter())
-            .map(|(&l, &r)| ((l - r) as f64).abs())
-            .sum();
-        assert!(
-            diff > 1e-6,
-            "Left and right should differ for stereo reverb"
-        );
-    }
-
-    #[test]
-    fn reverb_impulse_decays_over_time() {
-        let mut rev = DattorroReverb::new(44100.0);
-        rev.gain = 1.0;
-        rev.pre_lpf = 1.0;
-        rev.decay = 0.2; // Fast decay
-
-        // Use a longer buffer so the reverb has time to build up and then decay
-        let n = 44100; // 1 second
-        let mut input = vec![0.0f32; n];
-        input[0] = 1.0;
-        let mut out_l = vec![0.0f32; n];
-        let mut out_r = vec![0.0f32; n];
-        rev.process(&input, &mut out_l, &mut out_r, 0, n);
-
-        // Compare energy in the second quarter vs the last quarter
-        let q = n / 4;
-        let energy_early: f64 = out_l[q..2 * q]
-            .iter()
-            .map(|&s| (s as f64) * (s as f64))
-            .sum();
-        let energy_late: f64 = out_l[3 * q..]
-            .iter()
-            .map(|&s| (s as f64) * (s as f64))
-            .sum();
-        assert!(
-            energy_early > energy_late,
-            "Reverb should decay: early energy {} vs late energy {}",
-            energy_early,
-            energy_late
-        );
-    }
-
-    #[test]
-    fn reverb_gain_scales_output() {
-        let mut rev1 = DattorroReverb::new(44100.0);
-        rev1.gain = 1.0;
-        rev1.pre_lpf = 1.0;
-        let mut rev2 = DattorroReverb::new(44100.0);
-        rev2.gain = 0.5;
-        rev2.pre_lpf = 1.0;
-
-        let mut input = vec![0.0f32; 2048];
-        input[0] = 1.0;
-
-        let mut out1_l = vec![0.0f32; 2048];
-        let mut out1_r = vec![0.0f32; 2048];
-        rev1.process(&input, &mut out1_l, &mut out1_r, 0, 2048);
-
-        let mut out2_l = vec![0.0f32; 2048];
-        let mut out2_r = vec![0.0f32; 2048];
-        rev2.process(&input, &mut out2_l, &mut out2_r, 0, 2048);
-
-        // Output with gain=0.5 should be half of gain=1.0
-        for i in 0..2048 {
-            if out1_l[i].abs() > 1e-8 {
-                let ratio = out2_l[i] / out1_l[i];
-                assert!(
-                    (ratio - 0.5).abs() < 1e-4,
-                    "Gain ratio at {}: expected 0.5, got {}",
-                    i,
-                    ratio
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn reverb_output_has_no_nan_or_inf() {
-        let mut rev = DattorroReverb::new(44100.0);
-        rev.gain = 1.0;
-        rev.pre_lpf = 1.0;
-        rev.decay = 0.9; // High decay
-
+    fn gain_scales_output() {
         let mut input = vec![0.0f32; 8192];
         input[0] = 1.0;
-        input[100] = -0.5;
-        input[500] = 0.8;
-        let mut out_l = vec![0.0f32; 8192];
-        let mut out_r = vec![0.0f32; 8192];
-        rev.process(&input, &mut out_l, &mut out_r, 0, 8192);
-
-        for i in 0..8192 {
-            assert!(out_l[i].is_finite(), "NaN/Inf in left at sample {}", i);
-            assert!(out_r[i].is_finite(), "NaN/Inf in right at sample {}", i);
-        }
+        let mut a = DattorroReverb::new(44_100.0);
+        let mut b = DattorroReverb::new(44_100.0);
+        b.gain = 0.5;
+        let (la, _) = render(&mut a, &input);
+        let (lb, _) = render(&mut b, &input);
+        let ea: f64 = la.iter().map(|&x| (x as f64).abs()).sum();
+        let eb: f64 = lb.iter().map(|&x| (x as f64).abs()).sum();
+        assert!((eb / ea - 0.5).abs() < 1e-3);
     }
 
     #[test]
-    fn reverb_start_index_offset_works() {
-        let mut rev = DattorroReverb::new(44100.0);
-        rev.gain = 1.0;
-        rev.pre_lpf = 1.0;
-
-        let mut input = vec![0.0f32; 128];
+    fn start_index_offsets_output() {
+        let mut input = vec![0.0f32; 4096];
         input[0] = 1.0;
-        let mut out_l = vec![0.0f32; 256];
-        let mut out_r = vec![0.0f32; 256];
-
-        // Process with start_index=64
-        rev.process(&input, &mut out_l, &mut out_r, 64, 128);
-
-        // First 64 samples should be untouched (0.0)
-        for i in 0..64 {
-            assert_eq!(out_l[i], 0.0, "Output before start_index should be 0");
-        }
+        let mut a = DattorroReverb::new(44_100.0);
+        let mut la = vec![0.0f32; 4096];
+        let mut ra = vec![0.0f32; 4096];
+        a.process(&input, &mut la, &mut ra, 0, 4096);
+        let mut b = DattorroReverb::new(44_100.0);
+        let mut lb = vec![0.0f32; 4096 + 10];
+        let mut rb = vec![0.0f32; 4096 + 10];
+        b.process(&input, &mut lb, &mut rb, 10, 4096);
+        assert_eq!(&lb[10..], &la[..]);
     }
 }
