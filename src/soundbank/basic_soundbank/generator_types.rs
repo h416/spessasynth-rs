@@ -105,6 +105,29 @@ pub const MAX_GENERATOR: i16 = 67;
 /// Equivalent to: GENERATORS_AMOUNT = MAX_GENERATOR + 1 = 68
 pub const GENERATORS_AMOUNT: usize = MAX_GENERATOR as usize + 1;
 
+/// Generators that are only valid at the instrument level.
+/// Equivalent to: INSTRUMENT_ONLY_GENERATORS (new in 4.4.0)
+pub const INSTRUMENT_ONLY_GENERATORS: [GeneratorType; 13] = [
+    generator_types::START_ADDRS_OFFSET,
+    generator_types::END_ADDR_OFFSET,
+    generator_types::STARTLOOP_ADDRS_OFFSET,
+    generator_types::ENDLOOP_ADDRS_OFFSET,
+    generator_types::START_ADDRS_COARSE_OFFSET,
+    generator_types::END_ADDRS_COARSE_OFFSET,
+    generator_types::STARTLOOP_ADDRS_COARSE_OFFSET,
+    generator_types::ENDLOOP_ADDRS_COARSE_OFFSET,
+    generator_types::KEY_NUM,
+    generator_types::VELOCITY,
+    generator_types::SAMPLE_MODES,
+    generator_types::EXCLUSIVE_CLASS,
+    generator_types::OVERRIDING_ROOT_KEY,
+];
+
+/// Equivalent to: INSTRUMENT_ONLY_GENERATORS.has(type)
+pub fn is_instrument_only_generator(generator_type: GeneratorType) -> bool {
+    INSTRUMENT_ONLY_GENERATORS.contains(&generator_type)
+}
+
 /// Min/max/default/nrpn-scale for a single generator.
 /// Equivalent to: interface GeneratorLimit { min, max, def, nrpn }
 #[derive(Clone, Copy, Debug, PartialEq)]

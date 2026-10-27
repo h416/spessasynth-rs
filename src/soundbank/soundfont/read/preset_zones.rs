@@ -146,7 +146,7 @@ pub fn apply_preset_zones<P: SoundFontPresetZoneSink>(
     let mut gen_index: usize = 0;
 
     for (preset_idx, preset) in presets.iter_mut().enumerate() {
-        for _ in 0..preset.zones_count() {
+        for i in 0..preset.zones_count() {
             // Extract the generators slice
             // Equivalent to: presetGens.slice(gensStart, gensEnd)
             let gens_start = indexes.gen_ndx[gen_index] as usize;
@@ -169,7 +169,8 @@ pub fn apply_preset_zones<P: SoundFontPresetZoneSink>(
                     Ok(zone) => preset.push_zone(zone.0),
                     Err(e) => SpessaLog::warn(&e),
                 }
-            } else {
+            } else if i == 0 {
+                // Global zone, only the first zone may be global (4.4.0)
                 // Equivalent to: preset.globalZone.addGenerators(...gens)
                 //                preset.globalZone.addModulators(...mods)
                 let global = preset.global_zone_mut();

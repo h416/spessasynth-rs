@@ -23,8 +23,7 @@ use crate::soundbank::basic_soundbank::basic_zone::BasicZone;
 use crate::soundbank::basic_soundbank::generator::Generator;
 use crate::soundbank::basic_soundbank::generator_types::{
     DEFAULT_GENERATOR_VALUES, GENERATOR_LIMITS, GENERATORS_AMOUNT,
-    generator_types as gt,
-};
+    generator_types as gt, is_instrument_only_generator};
 use crate::soundbank::basic_soundbank::midi_patch::{
     MidiPatch, MidiPatchFull, to_full_midi_string, to_midi_string,
 };
@@ -297,12 +296,19 @@ impl BasicPreset {
             // ── Preset generators (offsets) ───────────────────────────────
             // First global, then local (local overrides).
             let mut preset_generators = [0i16; GENERATORS_AMOUNT];
+            // Instrument-only generators are ignored at the preset level (4.4.0)
             for gn in &self.global_zone.generators {
+                if is_instrument_only_generator(gn.generator_type) {
+                    continue;
+                }
                 if gn.generator_type >= 0 && (gn.generator_type as usize) < GENERATORS_AMOUNT {
                     preset_generators[gn.generator_type as usize] = gn.generator_value;
                 }
             }
             for gn in &preset_zone.zone.generators {
+                if is_instrument_only_generator(gn.generator_type) {
+                    continue;
+                }
                 if gn.generator_type >= 0 && (gn.generator_type as usize) < GENERATORS_AMOUNT {
                     preset_generators[gn.generator_type as usize] = gn.generator_value;
                 }
