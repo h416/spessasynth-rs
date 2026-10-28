@@ -27,6 +27,7 @@
 /// - `gain` is read directly by the render loop (as 4.2.0's masterGain was)
 /// - `keyShift`/`fineTune` (API side) currently have NO audible effect (4.2.0 had no such
 ///   parameters; they only feed channel updateInternalParams in TS 4.3.0) — wired in Task 21
+use crate::synthesizer::audio_engine::channel::midi_channel::SynthSystemView;
 use crate::synthesizer::audio_engine::synth_constants::VOICE_CAP;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::audio_engine::voice::voice::Voice;
@@ -271,6 +272,12 @@ impl SynthesizerCore {
         }
 
         // TODO(Task 21): for (const ch of this.midiChannels) ch.updateInternalParams();
+
+        // The channels read these from the core in TS
+        let view = SynthSystemView::of(&self.system_parameters);
+        for ch in self.midi_channels.iter_mut() {
+            ch.synth_system = view;
+        }
     }
 
     /// Allocates new voices.

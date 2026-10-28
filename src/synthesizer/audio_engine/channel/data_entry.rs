@@ -169,13 +169,6 @@ impl MidiChannel {
         }
 
         // --- NRPN handling ---
-        // Keep the existing Rust GS-NRPN lock gate (equivalent to the drumLock/nrpnParamLock
-        // gating used by TS; consolidating to the exact TS system parameters is deferred to
-        // the channel-parameter migration).
-        if self.lock_gs_nrpn_params {
-            return events;
-        }
-
         let param_coarse = (self.midi_controllers
             [midi_controllers::NON_REGISTERED_PARAMETER_MSB as usize]
             >> 7) as u8;
@@ -187,6 +180,13 @@ impl MidiChannel {
             return events;
         }
         let data_coarse = (data_value >> 7) as u8;
+        // Skip drums early
+        if self.synth_system.drum_lock
+            && param_coarse >= non_registered_msb::DRUM_PITCH
+            && param_coarse <= non_registered_msb::DRUM_DELAY
+        {
+            return events;
+        }
 
         match param_coarse {
             // Part parameters (vibrato and EG)
@@ -299,10 +299,11 @@ impl MidiChannel {
         events
     }
 
-    /// Processes NRPN part parameter messages (NRPN MSB = 0x01): custom vibrato and EG.
+    /// Processes NRPN part parameter messages (NRPN MSB = 0x01): vibrato, filter and EG.
     ///
-    /// The custom channel vibrato is a pre-4.3.0 mechanism retained until the LFO rework;
-    /// the filter/EG cases route through the corresponding CCs as in TS.
+    /// The vibrato cases set the custom channel vibrato when `customVibrato` is enabled,
+    /// otherwise they (and the filter/EG cases) route through the corresponding CCs as in TS.
+    /// A `return` in TS leaves `dataEntry` entirely; nothing follows this call there.
     #[allow(clippy::too_many_arguments)]
     fn handle_nrpn_part_parameter(
         &mut self,
@@ -316,54 +317,92 @@ impl MidiChannel {
         use non_registered_lsb as nrl;
         let mut events = Vec::new();
 
+        let parameter_lock = self
+            .system_parameters
+            .nrpn_param_lock
+            .unwrap_or(self.synth_system.nrpn_param_lock);
+        // The custom vibrato: its own oscillator and parameters (render_voice).
+        // Disabled by default via a system parameter; when enabled, it only activates when
+        // one of these NRPNs is received and stays on until the next system reset.
+        let custom_vibrato = self.synth_system.custom_vibrato && !self.sys_ex_modulators.active;
+
         match nrpn_fine {
-            // GS NRPN vibrato rate/depth/delay route through the vibrato-rate/depth/delay
-            // CCs (76/77/78), which drive the vibLfoRate / vibLfoToPitch / delayVibLFO
-            // generators via the default modulators.
-            // TODO(4.4.0): the custom vibrato branch (`systemParameters.customVibrato &&
-            // !dynamicModulators.active`) is not ported. `customVibrato` defaults to false
-            // and is only settable through the API, so MIDI input always takes this path.
-            // Same for the `drumLock` early return of the drum NRPNs.
             nrl::VIBRATO_RATE => {
-                let mut sub = self.controller_change(
-                    midi_controllers::VIBRATO_RATE,
-                    data_coarse,
-                    voices,
-                    current_time,
-                    current_system,
-                    enable_event_system,
-                );
-                events.append(&mut sub);
-                spessa_synth_info(&format!("Vibrato rate for {}: {}", self.channel, data_coarse));
+                if custom_vibrato {
+                    if parameter_lock || data_coarse == 64 {
+                        return events;
+                    }
+                    add_default_vibrato(self);
+                    self.channel_vibrato.rate = (data_coarse as f64 / 64.0) * 8.0;
+                    spessa_synth_info(&format!(
+                        "Vibrato rate for {}: {} = {} Hz",
+                        self.channel, data_coarse, self.channel_vibrato.rate
+                    ));
+                } else {
+                    let mut sub = self.controller_change(
+                        midi_controllers::VIBRATO_RATE,
+                        data_coarse,
+                        voices,
+                        current_time,
+                        current_system,
+                        enable_event_system,
+                    );
+                    events.append(&mut sub);
+                }
             }
 
             nrl::VIBRATO_DEPTH => {
-                let mut sub = self.controller_change(
-                    midi_controllers::VIBRATO_DEPTH,
-                    data_coarse,
-                    voices,
-                    current_time,
-                    current_system,
-                    enable_event_system,
-                );
-                events.append(&mut sub);
-                spessa_synth_info(&format!("Vibrato depth for {}: {}", self.channel, data_coarse));
+                if custom_vibrato {
+                    if parameter_lock || data_coarse == 64 {
+                        return events;
+                    }
+                    add_default_vibrato(self);
+                    self.channel_vibrato.depth = data_coarse as f64 / 2.0;
+                    spessa_synth_info(&format!(
+                        "Vibrato depth for {}: {} = {} cents",
+                        self.channel, data_coarse, self.channel_vibrato.depth
+                    ));
+                } else {
+                    let mut sub = self.controller_change(
+                        midi_controllers::VIBRATO_DEPTH,
+                        data_coarse,
+                        voices,
+                        current_time,
+                        current_system,
+                        enable_event_system,
+                    );
+                    events.append(&mut sub);
+                }
             }
 
             nrl::VIBRATO_DELAY => {
-                let mut sub = self.controller_change(
-                    midi_controllers::VIBRATO_DELAY,
-                    data_coarse,
-                    voices,
-                    current_time,
-                    current_system,
-                    enable_event_system,
-                );
-                events.append(&mut sub);
-                spessa_synth_info(&format!("Vibrato delay for {}: {}", self.channel, data_coarse));
+                if custom_vibrato {
+                    if parameter_lock || data_coarse == 64 {
+                        return events;
+                    }
+                    add_default_vibrato(self);
+                    self.channel_vibrato.delay = data_coarse as f64 / 64.0 / 3.0;
+                    spessa_synth_info(&format!(
+                        "Vibrato delay for {}: {} = {} seconds",
+                        self.channel, data_coarse, self.channel_vibrato.delay
+                    ));
+                } else {
+                    let mut sub = self.controller_change(
+                        midi_controllers::VIBRATO_DELAY,
+                        data_coarse,
+                        voices,
+                        current_time,
+                        current_system,
+                        enable_event_system,
+                    );
+                    events.append(&mut sub);
+                }
             }
 
             nrl::TVF_FILTER_CUTOFF => {
+                if parameter_lock {
+                    return events;
+                }
                 let mut sub = self.controller_change(
                     midi_controllers::BRIGHTNESS,
                     data_coarse,
@@ -380,6 +419,9 @@ impl MidiChannel {
             }
 
             nrl::TVF_FILTER_RESONANCE => {
+                if parameter_lock {
+                    return events;
+                }
                 let mut sub = self.controller_change(
                     midi_controllers::FILTER_RESONANCE,
                     data_coarse,
@@ -396,6 +438,9 @@ impl MidiChannel {
             }
 
             nrl::EG_ATTACK_TIME => {
+                if parameter_lock {
+                    return events;
+                }
                 let mut sub = self.controller_change(
                     midi_controllers::ATTACK_TIME,
                     data_coarse,
@@ -412,6 +457,9 @@ impl MidiChannel {
             }
 
             nrl::EG_DECAY_TIME => {
+                if parameter_lock {
+                    return events;
+                }
                 let mut sub = self.controller_change(
                     midi_controllers::DECAY_TIME,
                     data_coarse,
@@ -428,6 +476,9 @@ impl MidiChannel {
             }
 
             nrl::EG_RELEASE_TIME => {
+                if parameter_lock {
+                    return events;
+                }
                 let mut sub = self.controller_change(
                     midi_controllers::RELEASE_TIME,
                     data_coarse,

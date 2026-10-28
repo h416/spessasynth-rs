@@ -72,6 +72,7 @@ use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
+use crate::synthesizer::audio_engine::channel::midi_channel::SynthSystemView;
 use crate::midi::drum_parameters::UserDrumSetParameterChange;
 use crate::synthesizer::audio_engine::channel::render_voice::{
     EffectSends, RenderVoiceContext, VoiceSendBuffer,
@@ -527,6 +528,7 @@ impl SynthesizerCore {
         let channel_number = self.midi_channels.len() as u8;
         let (preset, bank_idx) = self.get_default_preset_and_idx();
         let mut channel = MidiChannel::new(preset, bank_idx, channel_number);
+        channel.synth_system = SynthSystemView::of(&self.system_parameters);
         // TS allocates these in the MIDIChannel constructor from `synthCore.maxBufferSize`.
         channel.output_left = vec![0.0; self.max_buffer_size];
         channel.output_right = vec![0.0; self.max_buffer_size];

@@ -75,6 +75,29 @@ impl DrumLocks {
     }
 }
 
+/// The synthesizer system parameters the channel reads during MIDI handling.
+/// TS reads them from `this.synthCore.systemParameters`; the core keeps this copy
+/// up to date (on channel creation and on every system parameter change).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SynthSystemView {
+    /// Equivalent to: systemParameters.drumLock
+    pub drum_lock: bool,
+    /// Equivalent to: systemParameters.nrpnParamLock
+    pub nrpn_param_lock: bool,
+    /// Equivalent to: systemParameters.customVibrato
+    pub custom_vibrato: bool,
+}
+
+impl SynthSystemView {
+    pub fn of(sys: &GlobalSystemParameter) -> Self {
+        Self {
+            drum_lock: sys.drum_lock,
+            nrpn_param_lock: sys.nrpn_param_lock,
+            custom_vibrato: sys.custom_vibrato,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // MidiChannel
 // ---------------------------------------------------------------------------
@@ -172,13 +195,17 @@ pub struct MidiChannel {
     /// Equivalent to: lockedSystem: MIDISystem
     pub locked_system: MIDISystem,
 
-    /// True if GS NRPN parameters are locked.
-    /// Equivalent to: lockGSNRPNParams
+    /// Legacy pre-4.3 `lockGSNRPNParams`, kept only for the 4.2-shaped snapshot and
+    /// `set_vibrato`. TS 4.4.1 has no such lock: NRPN data entry uses `nrpnParamLock`
+    /// and `drumLock` instead (see data_entry.rs).
     pub lock_gs_nrpn_params: bool,
 
     /// Custom vibrato settings for this channel (GS NRPN).
     /// Equivalent to: channelVibrato
     pub channel_vibrato: ChannelVibrato,
+
+    /// The synthesizer system parameters (see [`SynthSystemView`]).
+    pub synth_system: SynthSystemView,
 
     /// Current pan in range [-500;500], cached from `update_internal_params`.
     /// Equivalent to: currentPan (protected)
@@ -354,6 +381,7 @@ impl MidiChannel {
             locked_system: MIDISystem::Gs,
             lock_gs_nrpn_params: false,
             channel_vibrato: ChannelVibrato::default(),
+            synth_system: SynthSystemView::default(),
             voice_count: 0,
             xg_insertion_assigned: false,
             output_left: Vec::new(),
@@ -676,6 +704,16 @@ impl MidiChannel {
         self.channel_vibrato.rate = rate;
         self.channel_vibrato.delay = delay;
         self.channel_vibrato.depth = depth;
+    }
+
+    /// Equivalent to: resetVibratoParams()
+    pub(crate) fn reset_vibrato_params(&mut self) {
+        if !self.synth_system.custom_vibrato {
+            return;
+        }
+        self.channel_vibrato.rate = 0.0;
+        self.channel_vibrato.depth = 0.0;
+        self.channel_vibrato.delay = 0.0;
     }
 
     /// Disables and locks all GS NRPN parameters including custom vibrato.

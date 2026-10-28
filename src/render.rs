@@ -20,6 +20,9 @@ pub struct RenderOptions {
     /// option (no MIDI or SysEx message toggles it), so it exists to let the
     /// insertion-EFX gating be verified against the TS reference.
     pub effects_enabled: bool,
+    /// System parameters applied before playback (`setSystemParameter`). Like
+    /// `effects_enabled`, these are API-only (e.g. `customVibrato`, `drumLock`).
+    pub system_parameters: Vec<GlobalSystemParameterChange>,
 }
 
 impl Default for RenderOptions {
@@ -30,6 +33,7 @@ impl Default for RenderOptions {
             normalize: true,
             buffer_size: 128,
             effects_enabled: true,
+            system_parameters: Vec::new(),
         }
     }
 }
@@ -81,6 +85,9 @@ pub fn render_midi_to_wav(
     seq.synth
         .synth_core
         .set_system_parameter(GlobalSystemParameterChange::AutoAllocateVoices(true));
+    for change in opts.system_parameters.iter().cloned() {
+        seq.synth.synth_core.set_system_parameter(change);
+    }
 
     // Load MIDI and play
     seq.load_new_song_list(vec![midi]);

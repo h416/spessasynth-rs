@@ -123,10 +123,7 @@ impl MidiChannel {
         // Reset portamento
         self.reset_portamento(current_system);
 
-        // Reset custom vibrato
-        self.channel_vibrato.rate = 0.0;
-        self.channel_vibrato.depth = 0.0;
-        self.channel_vibrato.delay = 0.0;
+        self.reset_vibrato_params();
         self.set_midi_parameter(ChannelMidiParameterValue::RandomPan(false));
 
         // Clear the insertion effect assignment (TS: setMIDIParameter("efxAssign", false)).
