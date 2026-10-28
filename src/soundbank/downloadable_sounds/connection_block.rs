@@ -486,6 +486,10 @@ impl ConnectionBlock {
     pub fn to_sf_generator(&self, zone: &mut BasicZone) {
         let value = self.short_scale();
         match self.destination {
+            dls_destinations::KEY_NUM => {
+                zone.set_generator(gt::KEY_NUM, Some(value as f64), true);
+            }
+
             dls_destinations::PAN => {
                 zone.set_generator(gt::PAN, Some(value as f64), true);
             }
@@ -711,7 +715,7 @@ impl ConnectionBlock {
                 new_amount: -amount,
             }),
             dls_destinations::PITCH => Some(ToSFDestResult::Simple(gt::FINE_TUNE)),
-            dls_destinations::KEY_NUM => Some(ToSFDestResult::Simple(gt::OVERRIDING_ROOT_KEY)),
+            dls_destinations::KEY_NUM => Some(ToSFDestResult::Simple(gt::KEY_NUM)),
             dls_destinations::VOL_ENV_DELAY => Some(ToSFDestResult::Simple(gt::DELAY_VOL_ENV)),
             dls_destinations::VOL_ENV_ATTACK => Some(ToSFDestResult::Simple(gt::ATTACK_VOL_ENV)),
             dls_destinations::VOL_ENV_HOLD => Some(ToSFDestResult::Simple(gt::HOLD_VOL_ENV)),

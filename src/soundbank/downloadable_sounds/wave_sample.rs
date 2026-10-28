@@ -265,9 +265,10 @@ impl WaveSample {
 
         // Correct loop offsets if needed
         if let Some(loop_data) = loop_opt {
-            let diff_start = loop_data.loop_start as i32 - sample.loop_start as i32;
-            let loop_end_abs = loop_data.loop_start as i32 + loop_data.loop_length as i32;
-            let diff_end = loop_end_abs - sample.loop_end as i32;
+            // i64: TS computes in f64, so the u32 sum may not wrap (e.g. a loop length of 0xFFFFFFFF)
+            let diff_start = loop_data.loop_start as i64 - sample.loop_start as i64;
+            let loop_end_abs = loop_data.loop_start as i64 + loop_data.loop_length as i64;
+            let diff_end = loop_end_abs - sample.loop_end as i64;
 
             if diff_start != 0 {
                 let fine = diff_start % 32_768;

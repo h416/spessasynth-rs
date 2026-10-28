@@ -665,6 +665,54 @@ mod tests {
     use crate::soundbank::enums::{modulator_curve_types, modulator_sources};
     use crate::utils::indexed_array::IndexedByteArray;
 
+    // ── SPESSASYNTH_DEFAULT_MODULATORS ───────────────────────────────────────
+
+    /// The default modulator table, as printed by TS 4.4.1. Re-capture it from TS when upstream
+    /// changes the table (do not edit by hand):
+    /// `for (const m of SPESSASYNTH_DEFAULT_MODULATORS)` print
+    /// `index,isCC,isBipolar,isNegative,curveType` of both sources, then
+    /// `destination|transformAmount|transformType`, joined with `|`.
+    #[test]
+    fn test_default_modulators_match_typescript() {
+        let expected = [
+            "2,0,0,1,1|0,0,0,0,0|48|960|0",
+            "1,1,0,0,0|0,0,0,0,0|6|50|0",
+            "7,1,0,1,1|0,0,0,0,0|48|960|0",
+            "13,0,0,0,0|0,0,0,0,0|6|50|0",
+            "14,0,1,0,0|16,0,0,0,0|52|12700|0",
+            "10,1,1,0,0|0,0,0,0,0|17|500|0",
+            "11,1,0,1,1|0,0,0,0,0|48|960|0",
+            "91,1,0,0,0|0,0,0,0,0|16|200|0",
+            "93,1,0,0,0|0,0,0,0,0|15|200|0",
+            "73,1,1,0,2|0,0,0,0,0|34|6000|0",
+            "72,1,1,0,0|0,0,0,0,0|38|3600|0",
+            "75,1,1,0,0|0,0,0,0,0|36|3600|0",
+            "74,1,1,0,0|0,0,0,0,0|8|9600|0",
+            "71,1,1,0,0|0,0,0,0,0|9|250|0",
+            "67,1,0,0,3|0,0,0,0,0|8|-1200|0",
+        ];
+        let src = |s: &ModulatorSource| {
+            format!(
+                "{},{},{},{},{}",
+                s.index, s.is_cc as u8, s.is_bipolar as u8, s.is_negative as u8, s.curve_type
+            )
+        };
+        let actual: Vec<String> = SPESSASYNTH_DEFAULT_MODULATORS
+            .iter()
+            .map(|m| {
+                format!(
+                    "{}|{}|{}|{}|{}",
+                    src(&m.primary_source),
+                    src(&m.secondary_source),
+                    m.destination,
+                    m.transform_amount,
+                    m.transform_type
+                )
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
     // ── MOD_BYTE_SIZE ────────────────────────────────────────────────────────
 
     #[test]
