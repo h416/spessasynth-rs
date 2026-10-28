@@ -255,93 +255,95 @@ pub fn get_used_programs_and_keys(
             }
 
             s if s == midi_message_types::SYSTEM_EXCLUSIVE => {
-                let syx = MidiUtils::analyze_sysex(&e.data);
-                match syx {
-                    AnalyzedMidiMessage::XgReset => {
-                        system = MIDISystem::Xg;
-                        master_key_shift = 0;
-                        reset_channels(system, &mut channels);
-                        SpessaLog::info("XG on detected!");
-                    }
-
-                    AnalyzedMidiMessage::Gm2On => {
-                        system = MIDISystem::Gm2;
-                        master_key_shift = 0;
-                        reset_channels(system, &mut channels);
-                        SpessaLog::info("GM2 on detected!");
-                    }
-
-                    AnalyzedMidiMessage::GmOn => {
-                        system = MIDISystem::Gm;
-                        master_key_shift = 0;
-                        reset_channels(system, &mut channels);
-                        SpessaLog::info("GM on detected!");
-                    }
-
-                    AnalyzedMidiMessage::GmOff | AnalyzedMidiMessage::GsReset => {
-                        system = MIDISystem::Gs;
-                        master_key_shift = 0;
-                        reset_channels(system, &mut channels);
-                        SpessaLog::info("GS on detected!");
-                    }
-
-                    AnalyzedMidiMessage::MasterKeyShift { value } => {
-                        master_key_shift = value;
-                    }
-
-                    // Note: unlike "Drums On" / "Program Change" / "Controller Change" below,
-                    // "Key Shift" is NOT offset by `channel_offset` here — this mirrors the
-                    // TypeScript source exactly (which indexes `channels[syx.channel]` directly),
-                    // even though it looks inconsistent with the other SysEx-channel cases.
-                    AnalyzedMidiMessage::KeyShift { channel, value } => {
-                        if let Some(ch) = channels.get_mut(channel as usize) {
-                            // Drum channels ignore key shift.
-                            // Testcase: th07_19_user_gm.mid
-                            ch.key_shift = if ch.is_drum { 0 } else { value };
+                let syxs = MidiUtils::analyze_sysex(&e.data);
+                for syx in syxs {
+                    match syx {
+                        AnalyzedMidiMessage::XgReset => {
+                            system = MIDISystem::Xg;
+                            master_key_shift = 0;
+                            reset_channels(system, &mut channels);
+                            SpessaLog::info("XG on detected!");
                         }
-                    }
 
-                    AnalyzedMidiMessage::DrumsOn { channel, is_drum } => {
-                        let sysex_channel = channel as usize + channel_offset;
-                        if let Some(ch) = channels.get_mut(sysex_channel) {
-                            ch.is_drum = is_drum;
+                        AnalyzedMidiMessage::Gm2On => {
+                            system = MIDISystem::Gm2;
+                            master_key_shift = 0;
+                            reset_channels(system, &mut channels);
+                            SpessaLog::info("GM2 on detected!");
                         }
-                    }
 
-                    AnalyzedMidiMessage::ProgramChange { channel, value } => {
-                        let sysex_channel = channel as usize + channel_offset;
-                        if let Some(ch) = channels.get_mut(sysex_channel) {
-                            let preset = sound_bank.get_preset(
-                                MidiPatch {
-                                    bank_msb: ch.bank_msb,
-                                    bank_lsb: ch.bank_lsb,
-                                    program: value,
-                                    is_gm_gs_drum: ch.is_drum,
-                                },
-                                system,
-                            );
-                            ch.preset_ptr = preset.map(|p| p as *const BasicPreset as usize);
+                        AnalyzedMidiMessage::GmOn => {
+                            system = MIDISystem::Gm;
+                            master_key_shift = 0;
+                            reset_channels(system, &mut channels);
+                            SpessaLog::info("GM on detected!");
                         }
-                    }
 
-                    AnalyzedMidiMessage::ControllerChange {
-                        channel,
-                        controller,
-                        value,
-                    } => {
-                        let sysex_channel = channel as usize + channel_offset;
-                        if let Some(ch) = channels.get_mut(sysex_channel) {
-                            if controller == midi_controllers::BANK_SELECT_LSB {
-                                ch.bank_lsb = value;
-                            } else if controller == midi_controllers::BANK_SELECT {
-                                ch.bank_msb = value;
+                        AnalyzedMidiMessage::GmOff | AnalyzedMidiMessage::GsReset => {
+                            system = MIDISystem::Gs;
+                            master_key_shift = 0;
+                            reset_channels(system, &mut channels);
+                            SpessaLog::info("GS on detected!");
+                        }
+
+                        AnalyzedMidiMessage::MasterKeyShift { value } => {
+                            master_key_shift = value;
+                        }
+
+                        // Note: unlike "Drums On" / "Program Change" / "Controller Change" below,
+                        // "Key Shift" is NOT offset by `channel_offset` here — this mirrors the
+                        // TypeScript source exactly (which indexes `channels[syx.channel]` directly),
+                        // even though it looks inconsistent with the other SysEx-channel cases.
+                        AnalyzedMidiMessage::KeyShift { channel, value } => {
+                            if let Some(ch) = channels.get_mut(channel as usize) {
+                                // Drum channels ignore key shift.
+                                // Testcase: th07_19_user_gm.mid
+                                ch.key_shift = if ch.is_drum { 0 } else { value };
                             }
                         }
-                    }
 
-                    // Other classifications (Drum Setup, Reverb/Chorus/Delay/Variation/Insertion
-                    // Param, Master Fine Tune, Fine Tune, Other) do not affect used-key tracking.
-                    _ => {}
+                        AnalyzedMidiMessage::DrumsOn { channel, is_drum } => {
+                            let sysex_channel = channel as usize + channel_offset;
+                            if let Some(ch) = channels.get_mut(sysex_channel) {
+                                ch.is_drum = is_drum;
+                            }
+                        }
+
+                        AnalyzedMidiMessage::ProgramChange { channel, value } => {
+                            let sysex_channel = channel as usize + channel_offset;
+                            if let Some(ch) = channels.get_mut(sysex_channel) {
+                                let preset = sound_bank.get_preset(
+                                    MidiPatch {
+                                        bank_msb: ch.bank_msb,
+                                        bank_lsb: ch.bank_lsb,
+                                        program: value,
+                                        is_gm_gs_drum: ch.is_drum,
+                                    },
+                                    system,
+                                );
+                                ch.preset_ptr = preset.map(|p| p as *const BasicPreset as usize);
+                            }
+                        }
+
+                        AnalyzedMidiMessage::ControllerChange {
+                            channel,
+                            controller,
+                            value,
+                        } => {
+                            let sysex_channel = channel as usize + channel_offset;
+                            if let Some(ch) = channels.get_mut(sysex_channel) {
+                                if controller == midi_controllers::BANK_SELECT_LSB {
+                                    ch.bank_lsb = value;
+                                } else if controller == midi_controllers::BANK_SELECT {
+                                    ch.bank_msb = value;
+                                }
+                            }
+                        }
+
+                        // Other classifications (Drum Setup, Reverb/Chorus/Delay/Variation/Insertion
+                        // Param, Master Fine Tune, Fine Tune, Other) do not affect used-key tracking.
+                        _ => {}
+                    }
                 }
             }
 

@@ -864,154 +864,156 @@ pub fn modify_midi_internal(midi: &mut BasicMidi, opts: &ModifyMidiOptions) {
             }
 
             s if s == midi_message_types::SYSTEM_EXCLUSIVE => {
-                let syx = MidiUtils::analyze_sysex(&e_data);
-                match syx {
-                    AnalyzedMidiMessage::XgReset => {
-                        SpessaLog::info("XG system on detected");
-                        system = MIDISystem::Xg;
-                        added_gs = true; // Flag as true so GS won't get added.
-                        reset_track = track_num;
-                        reset_index = index;
-                        for ch in channel_statuses.iter_mut() {
-                            ch.param.reset();
-                            ch.cleared_params = ClearedParams {
-                                p_lsb: true,
-                                p_msb: true,
-                                data: true,
-                            };
+                let syxs = MidiUtils::analyze_sysex(&e_data);
+                for syx in syxs {
+                    match syx {
+                        AnalyzedMidiMessage::XgReset => {
+                            SpessaLog::info("XG system on detected");
+                            system = MIDISystem::Xg;
+                            added_gs = true; // Flag as true so GS won't get added.
+                            reset_track = track_num;
+                            reset_index = index;
+                            for ch in channel_statuses.iter_mut() {
+                                ch.param.reset();
+                                ch.cleared_params = ClearedParams {
+                                    p_lsb: true,
+                                    p_msb: true,
+                                    data: true,
+                                };
+                            }
                         }
-                    }
 
-                    AnalyzedMidiMessage::Gm2On => {
-                        SpessaLog::info("GM2 system on detected");
-                        system = MIDISystem::Gm2;
-                        added_gs = true;
-                        reset_track = track_num;
-                        reset_index = index;
-                        for ch in channel_statuses.iter_mut() {
-                            ch.param.reset();
-                            ch.cleared_params = ClearedParams {
-                                p_lsb: true,
-                                p_msb: true,
-                                data: true,
-                            };
+                        AnalyzedMidiMessage::Gm2On => {
+                            SpessaLog::info("GM2 system on detected");
+                            system = MIDISystem::Gm2;
+                            added_gs = true;
+                            reset_track = track_num;
+                            reset_index = index;
+                            for ch in channel_statuses.iter_mut() {
+                                ch.param.reset();
+                                ch.cleared_params = ClearedParams {
+                                    p_lsb: true,
+                                    p_msb: true,
+                                    data: true,
+                                };
+                            }
                         }
-                    }
 
-                    AnalyzedMidiMessage::GsReset => {
-                        SpessaLog::info("GS on detected!");
-                        added_gs = true;
-                        reset_track = track_num;
-                        reset_index = index;
-                        for ch in channel_statuses.iter_mut() {
-                            ch.param.reset();
-                            ch.cleared_params = ClearedParams {
-                                p_lsb: true,
-                                p_msb: true,
-                                data: true,
-                            };
+                        AnalyzedMidiMessage::GsReset => {
+                            SpessaLog::info("GS on detected!");
+                            added_gs = true;
+                            reset_track = track_num;
+                            reset_index = index;
+                            for ch in channel_statuses.iter_mut() {
+                                ch.param.reset();
+                                ch.cleared_params = ClearedParams {
+                                    p_lsb: true,
+                                    p_msb: true,
+                                    data: true,
+                                };
+                            }
                         }
-                    }
 
-                    AnalyzedMidiMessage::GmOff | AnalyzedMidiMessage::GmOn => {
-                        SpessaLog::info("GM on detected, removing!");
-                        delete_this_event(midi, &mut event_indexes, track_num, index);
-                        added_gs = false;
-                        break 'process;
-                    }
-
-                    AnalyzedMidiMessage::DrumSetup => {
-                        if clear_drum_params {
+                        AnalyzedMidiMessage::GmOff | AnalyzedMidiMessage::GmOn => {
+                            SpessaLog::info("GM on detected, removing!");
                             delete_this_event(midi, &mut event_indexes, track_num, index);
+                            added_gs = false;
                             break 'process;
                         }
-                    }
 
-                    AnalyzedMidiMessage::ReverbParam => {
-                        if opts.reverb_params.is_some() {
-                            delete_this_event(midi, &mut event_indexes, track_num, index);
-                            break 'process;
+                        AnalyzedMidiMessage::DrumSetup => {
+                            if clear_drum_params {
+                                delete_this_event(midi, &mut event_indexes, track_num, index);
+                                break 'process;
+                            }
                         }
-                    }
 
-                    AnalyzedMidiMessage::ChorusParam => {
-                        if opts.chorus_params.is_some() {
-                            delete_this_event(midi, &mut event_indexes, track_num, index);
-                            break 'process;
+                        AnalyzedMidiMessage::ReverbParam => {
+                            if opts.reverb_params.is_some() {
+                                delete_this_event(midi, &mut event_indexes, track_num, index);
+                                break 'process;
+                            }
                         }
-                    }
 
-                    AnalyzedMidiMessage::DelayParam => {
-                        if opts.delay_params.is_some() {
-                            delete_this_event(midi, &mut event_indexes, track_num, index);
-                            break 'process;
+                        AnalyzedMidiMessage::ChorusParam => {
+                            if opts.chorus_params.is_some() {
+                                delete_this_event(midi, &mut event_indexes, track_num, index);
+                                break 'process;
+                            }
                         }
-                    }
 
-                    AnalyzedMidiMessage::InsertionParam => {
-                        if opts.insertion_params.is_some() {
-                            delete_this_event(midi, &mut event_indexes, track_num, index);
-                            break 'process;
+                        AnalyzedMidiMessage::DelayParam => {
+                            if opts.delay_params.is_some() {
+                                delete_this_event(midi, &mut event_indexes, track_num, index);
+                                break 'process;
+                            }
                         }
-                    }
 
-                    AnalyzedMidiMessage::ProgramChange {
-                        channel: syx_channel,
-                        ..
-                    } => {
-                        let target = syx_channel as u32 + port_offset;
-                        if channel_changes
-                            .get(&(target as u8))
-                            .is_some_and(|c| c.patch.is_some())
-                        {
-                            delete_this_event(midi, &mut event_indexes, track_num, index);
-                            break 'process;
+                        AnalyzedMidiMessage::InsertionParam => {
+                            if opts.insertion_params.is_some() {
+                                delete_this_event(midi, &mut event_indexes, track_num, index);
+                                break 'process;
+                            }
                         }
-                    }
 
-                    AnalyzedMidiMessage::FineTune {
-                        channel: syx_channel,
-                        value: cents,
-                    } => {
-                        let target = (syx_channel as u32 + port_offset) as u8;
-                        let has_change = channel_changes.contains_key(&target);
-                        if let Some(syx_status) = channel_statuses.get_mut(target as usize)
-                            && syx_status.is_first_note_on
-                            && has_change
-                        {
-                            // No note-on yet. Then use it as relative!
-                            let new_tune = syx_status.fine_tune + cents;
-                            syx_status.key_shift += (new_tune / 100.0).trunc();
-                            syx_status.fine_tune = new_tune % 100.0;
-                            delete_this_event(midi, &mut event_indexes, track_num, index);
-                            break 'process;
+                        AnalyzedMidiMessage::ProgramChange {
+                            channel: syx_channel,
+                            ..
+                        } => {
+                            let target = syx_channel as u32 + port_offset;
+                            if channel_changes
+                                .get(&(target as u8))
+                                .is_some_and(|c| c.patch.is_some())
+                            {
+                                delete_this_event(midi, &mut event_indexes, track_num, index);
+                                break 'process;
+                            }
                         }
-                    }
 
-                    AnalyzedMidiMessage::ControllerChange {
-                        channel: syx_channel,
-                        controller: cc_num,
-                        ..
-                    } => {
-                        let target = syx_channel as u32 + port_offset;
-                        let syx_change = channel_changes.get(&(target as u8));
-                        let locked = syx_change
-                            .and_then(|c| c.controllers.as_ref())
-                            .and_then(|controllers| controllers.iter().find(|(cc, _)| *cc == cc_num));
-                        if locked.is_some() {
-                            delete_this_event(midi, &mut event_indexes, track_num, index);
-                            break 'process;
+                        AnalyzedMidiMessage::FineTune {
+                            channel: syx_channel,
+                            value: cents,
+                        } => {
+                            let target = (syx_channel as u32 + port_offset) as u8;
+                            let has_change = channel_changes.contains_key(&target);
+                            if let Some(syx_status) = channel_statuses.get_mut(target as usize)
+                                && syx_status.is_first_note_on
+                                && has_change
+                            {
+                                // No note-on yet. Then use it as relative!
+                                let new_tune = syx_status.fine_tune + cents;
+                                syx_status.key_shift += (new_tune / 100.0).trunc();
+                                syx_status.fine_tune = new_tune % 100.0;
+                                delete_this_event(midi, &mut event_indexes, track_num, index);
+                                break 'process;
+                            }
                         }
-                        if (cc_num == midi_controllers::BANK_SELECT
-                            || cc_num == midi_controllers::BANK_SELECT_LSB)
-                            && syx_change.is_some_and(|c| c.patch.is_some())
-                        {
-                            delete_this_event(midi, &mut event_indexes, track_num, index);
-                            break 'process;
-                        }
-                    }
 
-                    _ => {}
+                        AnalyzedMidiMessage::ControllerChange {
+                            channel: syx_channel,
+                            controller: cc_num,
+                            ..
+                        } => {
+                            let target = syx_channel as u32 + port_offset;
+                            let syx_change = channel_changes.get(&(target as u8));
+                            let locked = syx_change
+                                .and_then(|c| c.controllers.as_ref())
+                                .and_then(|controllers| controllers.iter().find(|(cc, _)| *cc == cc_num));
+                            if locked.is_some() {
+                                delete_this_event(midi, &mut event_indexes, track_num, index);
+                                break 'process;
+                            }
+                            if (cc_num == midi_controllers::BANK_SELECT
+                                || cc_num == midi_controllers::BANK_SELECT_LSB)
+                                && syx_change.is_some_and(|c| c.patch.is_some())
+                            {
+                                delete_this_event(midi, &mut event_indexes, track_num, index);
+                                break 'process;
+                            }
+                        }
+
+                        _ => {}
+                    }
                 }
             }
 
