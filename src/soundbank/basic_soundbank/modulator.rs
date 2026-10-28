@@ -1,11 +1,11 @@
-/// modulator.rs
-/// purpose: SF2 Modulator and DecodedModulator structs, default modulators list.
-/// Ported from: src/soundbank/basic_soundbank/modulator.ts
-///
-/// Note: TS 4.3.0 removed the `isEffectModulator` / `isDefaultResonantModulator` fields
-/// from `Modulator` (the detection logic moved into voice/compute_modulator.ts).
-/// Rust retains them until the voice/compute_modulator port (later task), as they are
-/// consumed by voice.rs, dynamic_modulator_system.rs and the DLS/SF2 read-write code.
+//! modulator.rs
+//! purpose: SF2 Modulator and DecodedModulator structs, default modulators list.
+//! Ported from: src/soundbank/basic_soundbank/modulator.ts
+//!
+//! TS keeps the `isEffectModulator` / `isDefaultResonantModulator` / `isModWheelModulator`
+//! flags on a separate `VoiceModulator` (voice_modulator.ts, built by `fromData` /
+//! `fromModulator`). This port folds them into `Modulator` / `DecodedModulator` and
+//! computes them with the same conditions when the modulator is created.
 use std::fmt;
 use std::sync::LazyLock;
 

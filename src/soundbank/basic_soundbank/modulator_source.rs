@@ -1,11 +1,13 @@
-/// modulator_source.rs
-/// purpose: ModulatorSource struct - parses SF2 modulator source enums and computes curve values.
-/// Ported from: src/soundbank/basic_soundbank/modulator_source.ts
-///
-/// Note: TS 4.3.0 changed `getValue()` to take an `SF2Channel` object (separate
-/// `midiParameters.pressure` / `pitchWheelRange` fields, fractional pitch-wheel-range
-/// support). Rust keeps the 4.2.0 flat `midi_controllers` table signature until the
-/// channel-engine rework is ported (later task).
+//! modulator_source.rs
+//! purpose: ModulatorSource struct - parses SF2 modulator source enums and computes curve values.
+//! Ported from: src/soundbank/basic_soundbank/modulator_source.ts
+//!
+//! TS 4.3.0 `getValue()` takes an `SF2Channel` (`midiControllers`, `polyPressures`,
+//! `midiParameters.pressure` / `pitchWheelRange`). Rust passes the flat controller table
+//! instead: the channel pressure (`pressure << 7`) and the pitch wheel range
+//! (`Math.floor(pitchWheelRange * 128)`, fractional ranges included) are mirrored in its
+//! non-CC slots whenever they change, and the poly pressure is copied to the voice before
+//! the modulators are computed. The values read are the same as the TS.
 use std::fmt;
 use std::sync::LazyLock;
 
@@ -175,17 +177,21 @@ impl ModulatorSource {
             midi_controllers[self.index as usize].max(0) as usize
         } else {
             match self.index {
-                modulator_sources::NO_CONTROLLER => 16_383,
                 // TS 4.3.0: voice.targetKey << 7 (effective key, not the raw pressed note).
                 modulator_sources::NOTE_ON_KEY_NUM => (voice.target_key.max(0) as usize) << 7,
                 modulator_sources::NOTE_ON_VELOCITY => (voice.velocity as usize) << 7,
                 modulator_sources::POLY_PRESSURE => (voice.pressure as usize) << 7,
                 modulator_sources::PITCH_WHEEL => pitch_wheel.max(0) as usize,
-                _ => {
-                    // Pitch wheel range and other non-CC sources are stored in the cc table
-                    // at index + NON_CC_INDEX_OFFSET.
+                // TS reads `channel.midiParameters.pressure << 7` and
+                // `Math.floor(channel.midiParameters.pitchWheelRange * 128)`; Rust mirrors both
+                // in the cc table at index + NON_CC_INDEX_OFFSET (see `channel_pressure` and
+                // `set_midi_parameter(PitchWheelRange)`).
+                modulator_sources::CHANNEL_PRESSURE | modulator_sources::PITCH_WHEEL_RANGE => {
                     midi_controllers[self.index as usize + NON_CC_INDEX_OFFSET].max(0) as usize
                 }
+                // `default:` falls through to noController: any undefined non-CC index
+                // (e.g. the SF2.04 link source 127) equals 1
+                _ => 16_383,
             }
         };
 

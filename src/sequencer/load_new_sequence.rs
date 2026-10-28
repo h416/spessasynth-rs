@@ -58,12 +58,6 @@ impl SpessaSynthSequencer {
     ///
     /// Takes a song index into self.songs instead of a reference, to avoid borrow conflicts.
     pub(crate) fn load_new_sequence(&mut self, song_index: usize) {
-        let tracks_len = self.songs[song_index].tracks.len();
-        if tracks_len == 0 {
-            SpessaLog::warn("This MIDI has no tracks!");
-            return;
-        }
-
         let duration = self.songs[song_index].duration;
 
         let time_division = self.songs[song_index].time_division;

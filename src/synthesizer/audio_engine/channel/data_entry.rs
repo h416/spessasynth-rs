@@ -1,19 +1,13 @@
-/// data_entry.rs
-/// purpose: Unified MIDI data entry (RPN/NRPN) handler for MidiChannel.
-/// Ported from: src/synthesizer/audio_engine/channel/data_entry.ts
-///
-/// # 4.3.0 notes
-/// TS 4.3.0 merged the previous `dataEntryCoarse`/`dataEntryFine` pair into a single
-/// `dataEntry()` that is invoked for both the Data Entry MSB and LSB controllers and
-/// reads the full 14-bit value stored in the Data Entry MSB slot. RPN vs NRPN is now
-/// selected by `lastParameterIsRegistered` instead of the old 4-state machine.
-///
-/// The 4.3.0 channel-parameter migration (pitchWheelRange/keyShift/fineTune/modulationDepth
-/// as `_midiParameters`) and the custom-vibrato removal are handled in later tasks; here the
-/// existing Rust primitives (`set_tuning`, `set_modulation_depth`, `set_custom_controller`,
-/// `midi_controllers[NON_CC + ...]`, `channel_vibrato`) are reused, so the numeric fixes
-/// (LSB retention, fractional fine-tuning, 14-bit modulation depth, fractional pitch wheel
-/// range) are applied without touching the LFO/pan rendering path.
+//! data_entry.rs
+//! purpose: Unified MIDI data entry (RPN/NRPN) handler for MidiChannel.
+//! Ported from: src/synthesizer/audio_engine/channel/data_entry.ts
+//!
+//! TS 4.3.0 merged the previous `dataEntryCoarse`/`dataEntryFine` pair into a single
+//! `dataEntry()` that is invoked for both the Data Entry MSB and LSB controllers and
+//! reads the full 14-bit value stored in the Data Entry MSB slot. RPN vs NRPN is
+//! selected by `lastParameterIsRegistered` instead of the old 4-state machine.
+//! The RPN pitch wheel range, fine tune and modulation depth go through the channel MIDI
+//! parameters (`setMIDIParameter`), as in the TS.
 use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::GeneratorType;
 use crate::soundbank::enums::modulator_sources;
