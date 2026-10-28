@@ -53,6 +53,7 @@ cargo run --release --example midi_to_wav -- <soundfont.sf2> <input.mid> <output
 | `-r`, `--sample-rate <hz>` | Output sample rate (default: 44100) |
 | `--no-normalize` | Disable audio normalization |
 | `--no-effects` | Disable reverb/chorus/delay/insertion effects |
+| `--system <name>=<true\|false>` | Set a boolean system parameter (repeatable): `customVibrato`, `drumLock`, `userDrumLock`, `nrpnParamLock` |
 | `-h`, `--help` | Show help |
 
 ```bash
