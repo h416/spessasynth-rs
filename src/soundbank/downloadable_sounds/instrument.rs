@@ -307,12 +307,15 @@ impl DownloadableSoundsInstrument {
         let mut sf_instrument = BasicInstrument::new();
         sf_instrument.name = self.name.clone();
 
-        // Apply DLS global articulation to the SF2 instrument global zone.
-        self.articulation.to_sf_zone(&mut sf_instrument.global_zone);
-
-        // Add each DLS region as an SF2 instrument zone.
+        // Each zone gets its effective articulation (DLS region articulation replaces the instrument one),
+        // Then globalize moves the common values to the global zone
         for region in &self.regions {
-            let _ = region.to_sf_zone(&mut sf_instrument, instrument_idx, &mut sound_bank.samples);
+            let _ = region.to_sf_zone(
+                &mut sf_instrument,
+                instrument_idx,
+                &mut sound_bank.samples,
+                Some(&self.articulation),
+            );
         }
 
         // Move common generators/modulators from all zones to the global zone.

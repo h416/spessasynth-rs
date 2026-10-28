@@ -98,10 +98,11 @@ fn modulator_identical_to_decoded(
 
 // ---------------------------------------------------------------------------
 // Private helper: convert SF2 generator/modulator destination to DLS
-// Equivalent to: private static fromSFDestination(dest, amount)
+// Equivalent to: private static fromSFDestination(dest, amount, isModulator = false)
+// `is_modulator`: the amount is a relative modulator amount rather than an absolute generator value.
 // ---------------------------------------------------------------------------
 
-fn from_sf_destination(dest: GeneratorType, amount: i32) -> Option<SFDestResult> {
+fn from_sf_destination(dest: GeneratorType, amount: i32, is_modulator: bool) -> Option<SFDestResult> {
     match dest {
         gt::INITIAL_ATTENUATION => Some(SFDestResult::Complex {
             // Amount does not get EMU corrected for modulator attenuation;
@@ -126,7 +127,7 @@ fn from_sf_destination(dest: GeneratorType, amount: i32) -> Option<SFDestResult>
         gt::DECAY_VOL_ENV => Some(SFDestResult::Simple(dls_destinations::VOL_ENV_DECAY)),
         gt::SUSTAIN_VOL_ENV => Some(SFDestResult::Complex {
             destination: dls_destinations::VOL_ENV_SUSTAIN,
-            amount: 1000 - amount,
+            amount: if is_modulator { -amount } else { 1000 - amount },
             is_bipolar: false,
             source: dls_sources::NONE,
         }),
@@ -137,7 +138,7 @@ fn from_sf_destination(dest: GeneratorType, amount: i32) -> Option<SFDestResult>
         gt::DECAY_MOD_ENV => Some(SFDestResult::Simple(dls_destinations::MOD_ENV_DECAY)),
         gt::SUSTAIN_MOD_ENV => Some(SFDestResult::Complex {
             destination: dls_destinations::MOD_ENV_SUSTAIN,
-            amount: 1000 - amount,
+            amount: if is_modulator { -amount } else { 1000 - amount },
             is_bipolar: false,
             source: dls_sources::NONE,
         }),
@@ -362,7 +363,7 @@ impl ConnectionBlock {
             }
         };
 
-        let dls_destination = match from_sf_destination(m.destination, m.transform_amount as i32) {
+        let dls_destination = match from_sf_destination(m.destination, m.transform_amount as i32, true) {
             Some(d) => d,
             None => {
                 failed("Invalid destination");
@@ -423,7 +424,7 @@ impl ConnectionBlock {
         }
 
         let amount_i32 = generator.generator_value as i32;
-        let dls_destination = match from_sf_destination(generator.generator_type, amount_i32) {
+        let dls_destination = match from_sf_destination(generator.generator_type, amount_i32, false) {
             Some(d) => d,
             None => {
                 SpessaLog::warn(&format!(
@@ -647,8 +648,9 @@ impl ConnectionBlock {
                 */
                 primary_source.is_negative = true;
             }
-            // Corrupted gm.dls guard: clamp to valid centibel range.
-            amount = amount.clamp(0, 960);
+            // Corrupted gm.dls guard (32,768 cB of attenuation).
+            // The amount is relative, so gain-increasing (negative) connections are kept.
+            amount = amount.clamp(-960, 960);
         }
 
         let mod_ = Modulator::new(
@@ -716,7 +718,8 @@ impl ConnectionBlock {
             dls_destinations::VOL_ENV_DECAY => Some(ToSFDestResult::Simple(gt::DECAY_VOL_ENV)),
             dls_destinations::VOL_ENV_SUSTAIN => Some(ToSFDestResult::WithAmount {
                 generator_type: gt::SUSTAIN_VOL_ENV,
-                new_amount: 1000 - amount,
+                // Modulator amounts are relative, so only the sign changes (level to attenuation)
+                new_amount: -amount,
             }),
             dls_destinations::VOL_ENV_RELEASE => Some(ToSFDestResult::Simple(gt::RELEASE_VOL_ENV)),
             dls_destinations::MOD_ENV_DELAY => Some(ToSFDestResult::Simple(gt::DELAY_MOD_ENV)),
@@ -725,7 +728,8 @@ impl ConnectionBlock {
             dls_destinations::MOD_ENV_DECAY => Some(ToSFDestResult::Simple(gt::DECAY_MOD_ENV)),
             dls_destinations::MOD_ENV_SUSTAIN => Some(ToSFDestResult::WithAmount {
                 generator_type: gt::SUSTAIN_MOD_ENV,
-                new_amount: 1000 - amount,
+                // Modulator amounts are relative, so only the sign changes (level to attenuation)
+                new_amount: -amount,
             }),
             dls_destinations::MOD_ENV_RELEASE => Some(ToSFDestResult::Simple(gt::RELEASE_MOD_ENV)),
             dls_destinations::FILTER_CUTOFF => Some(ToSFDestResult::Simple(gt::INITIAL_FILTER_FC)),

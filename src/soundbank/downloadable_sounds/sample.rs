@@ -232,8 +232,8 @@ impl DownloadableSoundsSample {
         write_word(&mut fmt_data, self.w_format_tag as u32); // wFormatTag
         write_word(&mut fmt_data, 1); // wChannels
         write_dword(&mut fmt_data, self.sample_rate); // dwSamplesPerSec
-        write_dword(&mut fmt_data, self.sample_rate * 2); // dwAvgBytesPerSec (16-bit assumed)
-        write_word(&mut fmt_data, 2); // wBlockAlign
+        write_dword(&mut fmt_data, self.sample_rate * self.bytes_per_sample as u32); // NAvgBytesPerSec
+        write_word(&mut fmt_data, self.bytes_per_sample as u32); // WBlockAlign (mono)
         write_word(&mut fmt_data, self.bytes_per_sample as u32 * 8); // wBitsPerSample
         RIFFChunk::write("fmt ", &fmt_data, false, false)
     }
