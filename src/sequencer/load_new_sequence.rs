@@ -65,12 +65,6 @@ impl SpessaSynthSequencer {
         }
 
         let duration = self.songs[song_index].duration;
-        if duration == 0.0 {
-            SpessaLog::warn("This MIDI file has a duration of exactly 0 seconds.");
-            self.paused_time = Some(0.0);
-            self.is_finished = true;
-            return;
-        }
 
         let time_division = self.songs[song_index].time_division;
         self.one_tick_to_seconds = 60.0 / (120.0 * time_division as f64);
@@ -123,6 +117,15 @@ impl SpessaSynthSequencer {
         self.call_event(SequencerEvent::SongChange(SongChangeEventData {
             song_index: self.song_index,
         }));
+
+        if duration == 0.0 {
+            // The song is loaded, but there is nothing to play
+            // https://github.com/spessasus/SpessaSynth/issues/106
+            SpessaLog::warn("This MIDI file has a duration of exactly 0 seconds.");
+            self.paused_time = Some(0.0);
+            self.is_finished = true;
+            return;
+        }
 
         if duration <= 0.2 {
             let short_str = format_time(duration.round()).time;

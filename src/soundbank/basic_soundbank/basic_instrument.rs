@@ -272,97 +272,86 @@ impl BasicInstrument {
     /// Moves repeated generators / modulators to the global zone to reduce redundancy.
     /// Equivalent to: public globalize()
     pub fn globalize(&mut self) {
-        // ── Generator globalization ─────────────────────────────────────────
-        for checked_type in 0i16..58 {
+        // Create a global zone and add repeating generators to it
+        // Also modulators
+        // Iterate over every type of SF2 generator
+        for checked_type in 0..=gt::OVERRIDING_ROOT_KEY {
+            // Not these though
             if is_not_globalizable(checked_type) {
                 continue;
             }
+            // Unused generator
+            let Some(limit) = GENERATOR_LIMITS[checked_type as usize] else {
+                continue;
+            };
+            let default_for_checked = limit.def;
 
-            let default_for_checked: i32 = GENERATOR_LIMITS
-                .get(checked_type as usize)
-                .and_then(|l| *l)
-                .map(|l| l.def)
-                .unwrap_or(0);
-
-            // occurrences: generator_value → count
-            // The default starts with count 0 to ensure it's always a candidate.
-            let mut occurrences: HashMap<i32, i32> = HashMap::new();
-            occurrences.insert(default_for_checked, 0);
-
-            // Iterate over zones immutably to build occurrence counts.
-            let mut cleared = false;
-            'zone_loop: for zone in &self.zones {
-                let value = zone_get_generator_opt(&zone.zone, checked_type);
-                match value {
-                    None => {
-                        *occurrences.entry(default_for_checked).or_insert(0) += 1;
-                    }
-                    Some(v) => {
-                        *occurrences.entry(v).or_insert(0) += 1;
-                    }
-                }
-
-                // Check relative counterpart: if present in any zone, this type cannot be globalized.
-                let relative_type: Option<GeneratorType> = match checked_type {
-                    gt::DECAY_VOL_ENV => Some(gt::KEY_NUM_TO_VOL_ENV_DECAY),
-                    gt::HOLD_VOL_ENV => Some(gt::KEY_NUM_TO_VOL_ENV_HOLD),
-                    gt::DECAY_MOD_ENV => Some(gt::KEY_NUM_TO_MOD_ENV_DECAY),
-                    gt::HOLD_MOD_ENV => Some(gt::KEY_NUM_TO_MOD_ENV_HOLD),
-                    _ => None,
-                };
-
-                if let Some(rel_type) = relative_type
-                    && zone_get_generator_opt(&zone.zone, rel_type).is_some()
-                {
-                    occurrences.clear();
-                    cleared = true;
-                    break 'zone_loop;
-                }
-            }
-
-            if cleared || occurrences.is_empty() {
+            // If the checked type has the keyNumTo something generator set, it cannot be globalized.
+            let relative_counterpart: Option<GeneratorType> = match checked_type {
+                gt::DECAY_VOL_ENV => Some(gt::KEY_NUM_TO_VOL_ENV_DECAY),
+                gt::HOLD_VOL_ENV => Some(gt::KEY_NUM_TO_VOL_ENV_HOLD),
+                gt::DECAY_MOD_ENV => Some(gt::KEY_NUM_TO_MOD_ENV_DECAY),
+                gt::HOLD_MOD_ENV => Some(gt::KEY_NUM_TO_MOD_ENV_HOLD),
+                _ => None,
+            };
+            if let Some(relative) = relative_counterpart
+                && (zone_get_generator_opt(&self.global_zone, relative).is_some()
+                    || self
+                        .zones
+                        .iter()
+                        .any(|z| zone_get_generator_opt(&z.zone, relative).is_some()))
+            {
                 continue;
             }
 
-            // Find the value with the highest occurrence count.
-            // Ties: first winner wins (matches TS Object.entries iteration starting with default).
-            // Initial: (0, 0) mirrors TypeScript's `let valueToGlobalize: [string, number] = ["0", 0]`.
-            let mut target_value: i32 = 0;
-            let mut max_count: i32 = 0;
-            for (&val, &count) in &occurrences {
-                if count > max_count {
-                    max_count = count;
-                    target_value = val;
+            // The effective value of each zone: local,
+            // Then the existing global one, then the default
+            let global_value = self
+                .global_zone
+                .get_generator(checked_type, default_for_checked);
+            let effective_values: Vec<i32> = self
+                .zones
+                .iter()
+                .map(|z| z.zone.get_generator(checked_type, global_value))
+                .collect();
+            if effective_values.is_empty() {
+                continue;
+            }
+
+            // Find the most used value and make it global
+            let mut occurrences_for_values: HashMap<i32, i32> = HashMap::new();
+            let mut target_value = effective_values[0];
+            let mut target_count = 0;
+            for &value in &effective_values {
+                let count = occurrences_for_values.get(&value).copied().unwrap_or(0) + 1;
+                occurrences_for_values.insert(value, count);
+                if count > target_count {
+                    target_value = value;
+                    target_count = count;
                 }
             }
 
-            // Add to global zone (only if differs from default).
-            if target_value != default_for_checked {
-                self.global_zone
-                    .set_generator(checked_type, Some(target_value as f64), false);
-            }
-
-            // Update individual zones.
-            for zone in &mut self.zones {
-                let gen_value = zone_get_generator_opt(&zone.zone, checked_type);
-                match gen_value {
-                    None => {
-                        // Generator absent in this zone; add the default to make the override explicit.
-                        if target_value != default_for_checked {
-                            zone.zone.set_generator(
-                                checked_type,
-                                Some(default_for_checked as f64),
-                                true,
-                            );
-                        }
-                    }
-                    Some(v) => {
-                        if v == target_value {
-                            // Value matches global; remove from local zone.
-                            zone.zone.set_generator(checked_type, None, true);
-                        }
-                    }
-                }
+            // If the global value is the default value just remove it, no need to add it
+            self.global_zone.set_generator(
+                checked_type,
+                if target_value == default_for_checked {
+                    None
+                } else {
+                    Some(target_value as f64)
+                },
+                false,
+            );
+            // Zones with the global value do not need it, others keep their effective value
+            for (zone, &value) in self.zones.iter_mut().zip(&effective_values) {
+                zone.zone.set_generator(
+                    checked_type,
+                    if value == target_value {
+                        None
+                    } else {
+                        Some(value as f64)
+                    },
+                    false,
+                );
             }
         }
 
@@ -389,10 +378,19 @@ impl BasicInstrument {
             });
 
             if exists_for_all {
-                // Move to global zone.
-                self.global_zone
+                // Every zone overrides the global one, so the existing global amount does not matter
+                if let Some(existing_global) = self
+                    .global_zone
                     .modulators
-                    .push(Modulator::copy_from(checked_modulator));
+                    .iter_mut()
+                    .find(|m| Modulator::is_identical(m, checked_modulator, false))
+                {
+                    existing_global.transform_amount = checked_modulator.transform_amount;
+                } else {
+                    self.global_zone
+                        .modulators
+                        .push(Modulator::copy_from(checked_modulator));
+                }
 
                 // Remove from each local zone (if transform amount matches).
                 for zone in &mut self.zones {
@@ -822,6 +820,25 @@ mod tests {
 
         // PAN=50 occurs twice, so it should win and go to global zone.
         assert_eq!(inst.global_zone.get_generator(gt::PAN, i32::MIN), 50);
+    }
+
+    #[test]
+    fn test_globalize_counts_existing_global_value() {
+        let mut inst = BasicInstrument::new();
+        let mut samples = make_samples(3);
+        inst.create_zone(0, 0, &mut samples);
+        inst.create_zone(0, 1, &mut samples);
+        inst.create_zone(0, 2, &mut samples);
+        // The existing global PAN=100 is the effective value of zones 0 and 1.
+        inst.global_zone.set_generator(gt::PAN, Some(100.0), false);
+        inst.zones[2].zone.set_generator(gt::PAN, Some(50.0), false);
+
+        inst.globalize();
+
+        assert_eq!(inst.global_zone.get_generator(gt::PAN, i32::MIN), 100);
+        assert_eq!(inst.zones[0].zone.get_generator(gt::PAN, i32::MIN), i32::MIN);
+        assert_eq!(inst.zones[1].zone.get_generator(gt::PAN, i32::MIN), i32::MIN);
+        assert_eq!(inst.zones[2].zone.get_generator(gt::PAN, i32::MIN), 50);
     }
 
     #[test]

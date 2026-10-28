@@ -46,13 +46,21 @@ pub struct RIFFChunk {
     /// The chunk's binary data.
     /// Note: `data.length` will be 0 if `read_data` was set to `false` in `read_riff_chunk`.
     pub data: IndexedByteArray,
+    /// The size of the chunk's header in bytes.
+    /// TS sets 12 for 64-bit (RF64) chunks, which this port does not read, so it is always 8.
+    pub header_size: usize,
 }
 
 impl RIFFChunk {
     /// Creates a new RIFF chunk.
-    /// Equivalent to: `new RIFFChunk(header, size, data)`
+    /// Equivalent to: `new RIFFChunk(header, size, data, headerSize = 8)`
     pub fn new(header: FourCC, size: u32, data: IndexedByteArray) -> Self {
-        Self { header, size, data }
+        Self {
+            header,
+            size,
+            data,
+            header_size: 8,
+        }
     }
 
     /// Reads a RIFF chunk from an array.

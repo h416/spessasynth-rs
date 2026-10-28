@@ -69,7 +69,7 @@ pub fn parse_rmidi_internal(
     let mut smf_file_binary = data_chunk.data;
 
     let mut is_sf2_rmidi = false;
-    let mut found_dbnk = false;
+    let mut dbnk: Option<u32> = None;
 
     // Scan remaining RMIDI chunks for embedded sound banks and INFO metadata.
     while binary_data.current_index < binary_data.len() {
@@ -83,9 +83,9 @@ pub fn parse_rmidi_internal(
 
             if chunk_type == "sfbk" || chunk_type == "sfpk" || chunk_type == "dls " {
                 SpessaLog::info("Found embedded soundbank!");
-                // Extract the complete embedded RIFF chunk bytes.
-                // Note: matches TypeScript's slice(startIndex, startIndex + chunk.size).
-                let end = (start_index + current_chunk.size as usize).min(binary_data.len());
+                // Extract the complete embedded RIFF chunk bytes (header included).
+                let end = (start_index + current_chunk.header_size + current_chunk.size as usize)
+                    .min(binary_data.len());
                 output_midi.embedded_sound_bank =
                     Some(binary_data.slice(start_index, end).to_vec());
             } else {
@@ -179,10 +179,7 @@ pub fn parse_rmidi_internal(
                                 .insert("midiEncoding".to_string(), info_data);
                         }
                         Some(RMIDInfoFourCC::Dbnk) => {
-                            if info_data.len() >= 2 {
-                                output_midi.bank_offset = read_little_endian(&info_data, 2, 0);
-                            }
-                            found_dbnk = true;
+                            dbnk = Some(read_little_endian(&info_data, 2, 0));
                         }
                         None => {
                             SpessaLog::warn(&format!(
@@ -196,22 +193,30 @@ pub fn parse_rmidi_internal(
         }
     }
 
-    if is_sf2_rmidi && !found_dbnk {
-        // Defaults to 1 according to the spec.
-        output_midi.bank_offset = 1;
-    }
-    if output_midi.is_dls_rmidi {
-        // Assume bank offset of 0 by default. If we find any bank selects (in the SMF parser),
-        // then the offset is 1.
-        output_midi.bank_offset = 0;
-    }
-    // If no embedded bank, assume 0.
     if output_midi.embedded_sound_bank.is_none() {
+        // If no embedded bank, assume 0
+        output_midi.bank_offset = 0;
+    } else if let Some(d) = dbnk {
+        output_midi.bank_offset = d;
+    } else if is_sf2_rmidi {
+        // Defaults to 1 according to the spec
+        output_midi.bank_offset = 1;
+    } else if output_midi.is_dls_rmidi {
+        // Assume bank offset of 0 by default. If we find any bank selects (in the SMF parser),
+        // Then the offset is 1.
         output_midi.bank_offset = 0;
     }
 
-    // Send the extracted SMF to the parser.
-    parse_smf_internal(output_midi, &mut smf_file_binary, file_name)
+    // Send the extracted SMF to the parser
+    parse_smf_internal(output_midi, &mut smf_file_binary, file_name)?;
+
+    // The DBNK chunk overrides the bank offset detected by the SMF parser
+    if output_midi.embedded_sound_bank.is_some()
+        && let Some(d) = dbnk
+    {
+        output_midi.bank_offset = d;
+    }
+    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
