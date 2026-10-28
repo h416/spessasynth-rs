@@ -16,7 +16,10 @@ use crate::soundbank::enums::modulator_sources;
 use crate::midi::drum_parameters::{DEFAULT_DRUM_REVERB, DrumParameter, DrumParameterUtils};
 use crate::synthesizer::audio_engine::channel::dynamic_modulator_system::DynamicModulatorSystem;
 use crate::synthesizer::audio_engine::channel::render_voice::VoiceSendBuffer;
-use crate::synthesizer::audio_engine::parameters::system::GlobalSystemParameter;
+use crate::synthesizer::audio_engine::parameters::midi::GlobalMIDIParameter;
+use crate::synthesizer::audio_engine::parameters::system::{
+    DEFAULT_GLOBAL_SYSTEM_PARAMETERS, GlobalSystemParameter,
+};
 use crate::synthesizer::audio_engine::channel::parameters::midi::{
     CONTROLLER_TABLE_SIZE, CUSTOM_CONTROLLER_TABLE_SIZE, CUSTOM_RESET_ARRAY,
     ChannelMidiParameter, ChannelMidiParameterValue, DEFAULT_CHANNEL_MIDI_PARAMETERS,
@@ -75,10 +78,10 @@ impl DrumLocks {
     }
 }
 
-/// The synthesizer system parameters the channel reads during MIDI handling.
+/// The synthesizer system parameters the channel reads.
 /// TS reads them from `this.synthCore.systemParameters`; the core keeps this copy
 /// up to date (on channel creation and on every system parameter change).
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct SynthSystemView {
     /// Equivalent to: systemParameters.drumLock
     pub drum_lock: bool,
@@ -86,6 +89,14 @@ pub struct SynthSystemView {
     pub nrpn_param_lock: bool,
     /// Equivalent to: systemParameters.customVibrato
     pub custom_vibrato: bool,
+    /// Equivalent to: systemParameters.gain
+    pub gain: f64,
+    /// Equivalent to: systemParameters.pan
+    pub pan: f64,
+    /// Equivalent to: systemParameters.keyShift
+    pub key_shift: f64,
+    /// Equivalent to: systemParameters.fineTune
+    pub fine_tune: f64,
 }
 
 impl SynthSystemView {
@@ -94,7 +105,17 @@ impl SynthSystemView {
             drum_lock: sys.drum_lock,
             nrpn_param_lock: sys.nrpn_param_lock,
             custom_vibrato: sys.custom_vibrato,
+            gain: sys.gain,
+            pan: sys.pan,
+            key_shift: sys.key_shift,
+            fine_tune: sys.fine_tune,
         }
+    }
+}
+
+impl Default for SynthSystemView {
+    fn default() -> Self {
+        Self::of(&DEFAULT_GLOBAL_SYSTEM_PARAMETERS)
     }
 }
 
@@ -219,16 +240,9 @@ pub struct MidiChannel {
     /// Equivalent to: currentKeyShift (protected)
     current_key_shift: i32,
 
-    /// Global (synth-wide) MIDI key shift in semitones, pushed from
-    /// `SynthesizerCore::set_midi_parameter(KeyShift)`. TS pulls this from
-    /// `synthCore.midiParameters.keyShift` inside `updateInternalParams`; the Rust
-    /// channel has no back-reference, so the value is mirrored here and folded into
-    /// `current_key_shift` (non-drum channels only, matching TS).
-    ///
-    /// Private (like the other `current_*` caches) so it can only be changed through
-    /// `set_global_key_shift`, which keeps `current_key_shift` in sync — direct field
-    /// assignment would leave the cache stale.
-    global_key_shift: f64,
+    /// The synthesizer MIDI parameters (TS reads `this.synthCore.midiParameters`).
+    /// The core keeps this copy up to date, like `synth_system`.
+    pub synth_midi: GlobalMIDIParameter,
 
     /// Current gain, cached from `update_internal_params`.
     /// Equivalent to: currentGain (protected)
@@ -276,10 +290,6 @@ pub struct MidiChannel {
     /// True if per-note pitch mode is active (MIDI 2.0).
     /// Equivalent to: perNotePitch (protected)
     pub per_note_pitch: bool,
-
-    /// Pre-computed channel tuning in cents (sum of all tuning sources).
-    /// Equivalent to: channelTuningCents (protected)
-    pub channel_tuning_cents: f64,
 
     /// Generator offset values for SF2 NRPN support (0 = no change).
     /// Equivalent to: generatorOffsets: Int16Array
@@ -364,7 +374,7 @@ impl MidiChannel {
             current_pan: 0.0,
             current_tuning: 0.0,
             current_key_shift: 0,
-            global_key_shift: 0.0,
+            synth_midi: GlobalMIDIParameter::default(),
             current_gain: 0.0,
             last_parameter_is_registered: true,
             last_portamento_note: -1,
@@ -391,7 +401,6 @@ impl MidiChannel {
             voice_send_buffer_count: 0,
             channel,
             per_note_pitch: false,
-            channel_tuning_cents: 0.0,
             generator_offsets: [0i16; GENERATORS_AMOUNT],
             generator_offsets_enabled: false,
             generator_overrides,
@@ -407,7 +416,6 @@ impl MidiChannel {
             last_mono_note: -1,
             last_mono_velocity: 0,
         };
-        ch.update_channel_tuning();
         ch.update_internal_params();
         ch
     }
@@ -477,38 +485,6 @@ impl MidiChannel {
         ))
     }
 
-    /// Transposes the channel by `semitones`.
-    /// Equivalent to: transposeChannel(semitones, force = false)
-    pub fn transpose_channel(
-        &mut self,
-        mut semitones: f64,
-        force: bool,
-        master_transposition: f64,
-        voices: &mut [Voice],
-        current_time: f64,
-        enable_event_system: bool,
-    ) -> Option<SynthProcessorEvent> {
-        if !self.drum_channel {
-            semitones += master_transposition;
-        }
-        let key_shift = semitones.trunc() as i16;
-        let current_transpose = self.channel_transpose_key_shift as f64
-            + self.custom_controllers[custom_controllers::CHANNEL_TRANSPOSE_FINE as usize] as f64
-                / 100.0;
-        if (self.drum_channel && !force) || (semitones - current_transpose).abs() < f64::EPSILON {
-            return None;
-        }
-        if key_shift != self.channel_transpose_key_shift {
-            self.stop_all_notes_impl(voices, current_time, false);
-        }
-        self.channel_transpose_key_shift = key_shift;
-        self.set_custom_controller(
-            custom_controllers::CHANNEL_TRANSPOSE_FINE,
-            (semitones - key_shift as f64) * 100.0,
-        );
-        self.build_channel_property_event(enable_event_system)
-    }
-
     /// Sets the last pressed note. Strictly internal, used by the sequencer for
     /// very accurate portamento recreation.
     /// Equivalent to: setLastNote(midiNote)
@@ -536,19 +512,6 @@ impl MidiChannel {
             self.channel,
             cents.round()
         ));
-    }
-
-    /// Sets the channel's fine tuning in cents.
-    /// Equivalent to: setTuning(cents, log = true)
-    pub fn set_tuning(&mut self, cents: f64, log: bool) {
-        let cents = cents.round();
-        self.set_custom_controller(custom_controllers::CHANNEL_TUNING, cents);
-        if log {
-            spessa_synth_info(&format!(
-                "Fine tuning for channel {} is now set to {} cents.",
-                self.channel, cents
-            ));
-        }
     }
 
     /// Sets the pitch wheel for this channel (or per-note if midi_note >= 0).
@@ -621,7 +584,6 @@ impl MidiChannel {
     ) -> Vec<SynthProcessorEvent> {
         self.midi_controllers[NON_CC_INDEX_OFFSET + modulator_sources::CHANNEL_PRESSURE as usize] =
             (pressure as i16) << 7;
-        self.update_channel_tuning();
         self.compute_modulators_all_impl(voices, 0, modulator_sources::CHANNEL_PRESSURE as usize);
 
         use crate::synthesizer::types::ChannelPressureCallback;
@@ -653,23 +615,10 @@ impl MidiChannel {
         })]
     }
 
-    /// Sets a custom controller value and updates channel tuning.
+    /// Sets a custom controller value.
     /// Equivalent to: setCustomController(type, value)
     pub fn set_custom_controller(&mut self, controller_type: u8, value: f64) {
         self.custom_controllers[controller_type as usize] = value as f32;
-        self.update_channel_tuning();
-    }
-
-    /// Recomputes the pre-cached channel tuning from all tuning sources.
-    /// Equivalent to: updateChannelTuning()
-    pub fn update_channel_tuning(&mut self) {
-        // Promote to f64 before arithmetic to match TS (Float32Array reads → f64 arithmetic)
-        self.channel_tuning_cents = self.custom_controllers
-            [custom_controllers::CHANNEL_TUNING as usize] as f64
-            + self.custom_controllers[custom_controllers::CHANNEL_TRANSPOSE_FINE as usize] as f64
-            + self.custom_controllers[custom_controllers::MASTER_TUNING as usize] as f64
-            + self.custom_controllers[custom_controllers::CHANNEL_TUNING_SEMITONES as usize] as f64
-                * 100.0;
     }
 
     /// Locks or unlocks the preset from MIDI program changes.
@@ -1123,54 +1072,73 @@ impl MidiChannel {
     }
 
     /// Recomputes the cached `current_pan/current_gain/current_tuning/current_key_shift`
-    /// from the channel's system and MIDI parameters.
+    /// from the synthesizer's and the channel's system and MIDI parameters.
     /// Equivalent to: updateInternalParams()
-    ///
-    /// # Note
-    /// The global (synth-wide) system/MIDI parameters are not yet plumbed into the
-    /// channel. They default to identity (keyShift 0, fineTune 0, gain 1, pan 0) in
-    /// the current engine, so they are omitted from the sums below — this makes the
-    /// cached values equal to the 4.2.0 behavior. The consumers in `render_voice`/
-    /// `compute_modulator` are still on the old fields and are migrated in a later
-    /// stage (see module docs); these cached values are exposed via getters for that.
     pub fn update_internal_params(&mut self) {
+        let global_system = &self.synth_system;
         let channel_system = &self.system_parameters;
+        let global_midi = &self.synth_midi;
         let channel_midi = &self.midi_parameters;
+        // Note:
+        // - System -> System Parameter
+        // - MIDI -> MIDI Parameter
 
-        // Only Channel System is processed for drum channels (drums ignore key shift).
-        // Non-drum channels also fold in the global MIDI key shift (TS sums
-        // globalSystem + globalMIDI + channelSystem + channelMIDI; only globalMIDI is
-        // set by SysEx here, mirrored into `global_key_shift`).
+        // Only Channel System is processed for drum channels.
+        // Drum channels ignore key shift
+        // Testcase: th07_19_user_gm.mid
         let current_key_shift = if self.drum_channel {
             channel_system.key_shift
         } else {
-            self.global_key_shift + channel_system.key_shift + channel_midi.key_shift
+            // Global System
+            global_system.key_shift
+                // Global MIDI
+                + global_midi.key_shift
+                // Channel System
+                + channel_system.key_shift
+                // Channel MIDI
+                + channel_midi.key_shift
         };
-        // Ensure integer.
+        // Ensure integer
         self.current_key_shift = current_key_shift.trunc() as i32;
 
-        // Only Channel System is processed for drum channels.
+        // Only Channel System is processed for drum channels
         self.current_tuning = if self.drum_channel {
             channel_system.fine_tune
         } else {
-            channel_system.fine_tune + channel_midi.fine_tune
+            // Global System
+            global_system.fine_tune
+                // Global MIDI
+                + global_midi.fine_tune
+                // Channel System
+                + channel_system.fine_tune
+                // Channel MIDI
+                + channel_midi.fine_tune
         };
 
-        // [-1;1] normalized (Channel MIDI is the pan controller, handled elsewhere).
-        let current_pan_normalized = channel_system.pan;
-        // For faster render_voice calculation.
+        // [-1;1] normalized
+        let current_pan_normalized =
+            // Global System
+            global_system.pan
+                // Global MIDI
+                + global_midi.pan
+                // Channel System
+                + channel_system.pan;
+        // Channel MIDI is the pan controller
+
+        // For faster renderVoice calculation
         self.current_pan = current_pan_normalized * 500.0;
 
-        self.current_gain = SPESSASYNTH_GAIN_FACTOR * channel_system.gain;
-    }
-
-    /// Sets the global (synth-wide) MIDI key shift mirrored onto this channel and
-    /// recomputes the cached `current_key_shift` (and the other `current_*` caches).
-    /// Equivalent to the per-channel loop in
-    /// `SynthesizerCore::set_midi_parameter(GlobalMIDIParameterChangeCallback::KeyShift)`.
-    pub fn set_global_key_shift(&mut self, semitones: f64) {
-        self.global_key_shift = semitones;
-        self.update_internal_params();
+        self.current_gain =
+            // Global forced
+            SPESSASYNTH_GAIN_FACTOR
+                // Global System
+                * global_system.gain
+                // Global MIDI
+                // It corresponds to CC volume, so volume is squared.
+                * global_midi.volume.powi(2)
+                // Channel System
+                * channel_system.gain;
+        // Channel MIDI are the volume/expression controllers
     }
 
     /// Current pan in range [-500;500]. Equivalent to: currentPan
@@ -1255,24 +1223,23 @@ impl ChannelContext for MidiChannel {
 mod tests {
     use super::*;
 
-    /// TS 4.3.14 `updateInternalParams` (non-drum branch):
+    /// `updateInternalParams` (non-drum branch):
     /// `currentKeyShift = globalSystem.keyShift + globalMIDI.keyShift +
     /// channelSystem.keyShift + channelMIDI.keyShift`, truncated to an integer.
-    /// The Rust cache omits the (still-unplumbed, identity-0) global *system* key
-    /// shift, so with global MIDI key shift = 6 and channel MIDI key shift = 3, the
-    /// sum is 6 + 0 (channelSystem default) + 3 = 9.
+    /// With global MIDI key shift = 6 and channel MIDI key shift = 3, the
+    /// sum is 0 + 6 + 0 + 3 = 9.
     #[test]
     fn test_current_key_shift_sums_global_and_channel_for_non_drum_channel() {
         let mut channel = MidiChannel::new(None, None, 0);
         assert!(!channel.drum_channel);
 
-        channel.set_global_key_shift(6.0);
+        channel.synth_midi.key_shift = 6.0;
         channel.set_midi_parameter(ChannelMidiParameterValue::KeyShift(3.0));
 
         assert_eq!(channel.current_key_shift(), 9);
     }
 
-    /// TS 4.3.14 `updateInternalParams` (drum branch): drum channels ignore the
+    /// `updateInternalParams` (drum branch): drum channels ignore the
     /// global and channel MIDI key shifts entirely and use only
     /// `channelSystem.keyShift`, which defaults to 0 for GS. So even with the same
     /// global/channel-MIDI key shifts as the non-drum test, a drum channel's
@@ -1282,9 +1249,42 @@ mod tests {
         let mut channel = MidiChannel::new(None, None, MIDI_DRUM_CHANNEL);
         channel.drum_channel = true;
 
-        channel.set_global_key_shift(6.0);
+        channel.synth_midi.key_shift = 6.0;
         channel.set_midi_parameter(ChannelMidiParameterValue::KeyShift(3.0));
 
         assert_eq!(channel.current_key_shift(), 0);
+    }
+
+    /// `updateInternalParams`: drum channels use only the channel system fine tune,
+    /// so the global and the channel MIDI fine tunes (RPN fine tune, GS part fine tune,
+    /// universal master fine tune) do not reach them.
+    #[test]
+    fn test_current_tuning_ignores_global_and_channel_midi_for_drum_channel() {
+        let mut melodic = MidiChannel::new(None, None, 0);
+        let mut drum = MidiChannel::new(None, None, MIDI_DRUM_CHANNEL);
+        drum.drum_channel = true;
+        for ch in [&mut melodic, &mut drum] {
+            ch.synth_system.fine_tune = 5.0;
+            ch.synth_midi.fine_tune = 30.0;
+            ch.set_system_parameter(ChannelSystemParameterValue::FineTune(2.0));
+            ch.set_midi_parameter(ChannelMidiParameterValue::FineTune(40.0));
+        }
+        assert!((melodic.current_tuning() - 77.0).abs() < 1e-12);
+        assert!((drum.current_tuning() - 2.0).abs() < 1e-12);
+    }
+
+    /// `updateInternalParams`: the gain folds in the system gain, the squared global
+    /// MIDI volume and the channel system gain; the pan sums the global system,
+    /// global MIDI and channel system pans.
+    #[test]
+    fn test_current_gain_and_pan_fold_global_parameters() {
+        let mut channel = MidiChannel::new(None, None, 0);
+        channel.synth_system.gain = 2.0;
+        channel.synth_system.pan = 0.25;
+        channel.synth_midi.volume = 0.5;
+        channel.synth_midi.pan = -0.5;
+        channel.set_system_parameter(ChannelSystemParameterValue::Gain(0.5));
+        assert!((channel.current_gain() - SPESSASYNTH_GAIN_FACTOR * 2.0 * 0.25 * 0.5).abs() < 1e-12);
+        assert!((channel.current_pan() - (0.25 - 0.5) * 500.0).abs() < 1e-12);
     }
 }

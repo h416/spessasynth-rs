@@ -190,10 +190,6 @@ pub struct SynthesizerCore {
     /// Equivalent to: currentTime
     pub current_time: f64,
 
-    /// Overall MIDI volume gain (set by SysEx master volume, GM2 `volume^E` curve).
-    /// Legacy 4.2.0 plumbing — removed upstream in 4.3.0; see module doc TODO(Task 21).
-    pub midi_volume: f64,
-
     /// Reverb effect processor.
     pub reverb_processor: SpessaSynthReverb,
     /// The synthesizer's XG reverb block.
@@ -274,15 +270,6 @@ pub struct SynthesizerCore {
     /// Equivalent to: xgInsertionBufferL/R
     xg_insertion_buffer_l: Vec<f32>,
     xg_insertion_buffer_r: Vec<f32>,
-
-    /// The pan of the left channel (0.0–1.0), derived from
-    /// `system_parameters.pan + midi_parameters.pan`.
-    /// Legacy 4.2.0 plumbing — removed upstream in 4.3.0; see module doc TODO(Task 21).
-    pub pan_left: f64,
-
-    /// The pan of the right channel (0.0–1.0).
-    /// Legacy 4.2.0 plumbing — removed upstream in 4.3.0; see module doc TODO(Task 21).
-    pub pan_right: f64,
 
     /// Gain smoothing factor adjusted to the sample rate.
     /// Equivalent to: gainSmoothingFactor
@@ -379,7 +366,6 @@ impl SynthesizerCore {
             midi_parameters: DEFAULT_GLOBAL_MIDI_PARAMETERS,
             system_parameters,
             current_time: options.initial_time,
-            midi_volume: 1.0,
             reverb_processor: SpessaSynthReverb::new(sample_rate, buf_size),
             xg_reverb_block: DefaultXGReverb::new(sample_rate, buf_size),
             xg_chorus_block: DefaultXGChorus::new(sample_rate, buf_size),
@@ -415,8 +401,6 @@ impl SynthesizerCore {
             xg_insertion_buffer_r: vec![0.0; buf_size],
             custom_channel_numbers: false,
             port_select_channel_offset: 0,
-            pan_left: 0.5,
-            pan_right: 0.5,
             gain_smoothing_factor,
             pan_smoothing_factor,
             event_callback: Box::new(event_callback),
@@ -450,15 +434,18 @@ impl SynthesizerCore {
         }
     }
 
-    /// Recomputes the legacy shared stereo pan (`pan_left`/`pan_right`) from the sum of the
-    /// system and MIDI global pans (TS 4.3.0 adds them per channel in updateInternalParams;
-    /// legacy plumbing until Task 21 — see module doc).
-    pub(crate) fn update_legacy_pan(&mut self) {
-        let pan = self.system_parameters.pan + self.midi_parameters.pan;
-        // Convert from [-1, 1] to [0, 1] where 0 = left
-        let p = pan / 2.0 + 0.5;
-        self.pan_left = 1.0 - p;
-        self.pan_right = p;
+    /// Copies the synthesizer's system and MIDI parameters into every channel and
+    /// recomputes the channels' cached gain/pan/tuning/key shift.
+    /// TS channels read `synthCore.systemParameters`/`midiParameters` directly.
+    /// Equivalent to: for (const ch of this.midiChannels) ch.updateInternalParams();
+    pub(crate) fn update_channels_internal_params(&mut self) {
+        let system = SynthSystemView::of(&self.system_parameters);
+        let midi = self.midi_parameters;
+        for ch in self.midi_channels.iter_mut() {
+            ch.synth_system = system;
+            ch.synth_midi = midi;
+            ch.update_internal_params();
+        }
     }
 
     /// Assigns the first available (inactive) voice, allocating a new one
@@ -529,6 +516,7 @@ impl SynthesizerCore {
         let (preset, bank_idx) = self.get_default_preset_and_idx();
         let mut channel = MidiChannel::new(preset, bank_idx, channel_number);
         channel.synth_system = SynthSystemView::of(&self.system_parameters);
+        channel.synth_midi = self.midi_parameters;
         // TS allocates these in the MIDIChannel constructor from `synthCore.maxBufferSize`.
         channel.output_left = vec![0.0; self.max_buffer_size];
         channel.output_right = vec![0.0; self.max_buffer_size];
@@ -742,10 +730,6 @@ impl SynthesizerCore {
                 xg_variation_insertion_mode: variation_insertion,
                 gs_delay_active: self.gs_delay_active,
                 gs_insertion_active: self.gs_insertion_active,
-                master_gain: self.system_parameters.gain,
-                midi_volume: self.midi_volume,
-                // 4.3.0: global master pan normalized to [-1, 1] (globalSystem.pan + globalMIDI.pan)
-                global_pan: self.system_parameters.pan + self.midi_parameters.pan,
                 voice_buffer: &mut self.voice_buffer,
                 shared_voice_send_buffer: &mut self.shared_voice_send_buffer,
                 sends: EffectSends {
@@ -1483,34 +1467,6 @@ impl SynthesizerCore {
     pub fn clear_cache(&mut self) {
         self.cached_voices.clear();
         self.user_drum_cached_voices.clear();
-    }
-
-    /// Sets the global MIDI volume (squared, matching 4.3.14).
-    ///
-    /// 4.2.0 raised the master volume to `e` (GM2 §4.1 squared-ish curve) in
-    /// `setMIDIVolume`. 4.3.0 removed that curve and applied `midiParameters.gain`
-    /// linearly. 4.3.14 renamed the parameter to `volume` and squares it again when
-    /// folding it into the channel gain (`Math.pow(globalMIDI.volume, 2)` inside
-    /// `updateInternalParams` — "it corresponds to CC volume, so volume is squared").
-    /// Keep this as the shared `midi_volume` plumbing but store the squared value
-    /// directly, so `midi_volume == midi_parameters.volume^2`.
-    /// Equivalent to: setMIDIParameter("volume", value) (4.3.14) → Math.pow(volume, 2)
-    pub fn set_midi_volume(&mut self, volume: f64) {
-        self.midi_volume = volume.powi(2);
-    }
-
-    /// Sets the master tuning for all channels.
-    /// Legacy 4.2.0 plumbing — removed upstream in 4.3.0 (replaced by
-    /// `midiParameters.fineTune`); see module doc TODO(Task 21).
-    /// TS 4.3.14 folds `globalMIDI.fineTune` into `currentTuning` with no rounding
-    /// (full float, see `updateInternalParams` in `channel/midi_channel.ts`); the old
-    /// 4.2.0 `Math.round(cents)` in `setMasterTuning` does not exist upstream anymore.
-    /// Keep this legacy plumbing full-float too, matching the per-channel fine-tune fix.
-    /// Equivalent to: setMasterTuning(cents) (4.2.0, protected)
-    pub fn set_master_tuning(&mut self, cents: f64) {
-        for ch in self.midi_channels.iter_mut() {
-            ch.set_custom_controller(custom_controllers::MASTER_TUNING, cents);
-        }
     }
 
     /// Destroys the synthesizer, releasing all resources.

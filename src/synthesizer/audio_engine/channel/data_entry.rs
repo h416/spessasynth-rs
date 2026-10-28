@@ -134,14 +134,11 @@ impl MidiChannel {
                 }
 
                 // Fine-tuning: resolution is 100/8192 cents.
-                // TS 4.3.14 uses setMIDIParameter("fineTune", cents) with the FULL float
-                // value (no rounding). Rounding to whole cents quantizes sub-cent real-time
-                // tuning and makes held notes drift out of phase from TS. Route the full
-                // float value into the channel tuning cents consumed by render_voice.
+                // The full float value, no rounding (sub-cent tuning matters for held notes).
                 rpt::FINE_TUNING => {
                     let final_tuning = data_value - 8192;
                     let cents = final_tuning as f64 / 81.92;
-                    self.set_custom_controller(custom_controllers::CHANNEL_TUNING, cents);
+                    self.set_midi_parameter(ChannelMidiParameterValue::FineTune(cents));
                     spessa_synth_info(&format!(
                         "Fine tuning for {} is now set to {} cents.",
                         self.channel,

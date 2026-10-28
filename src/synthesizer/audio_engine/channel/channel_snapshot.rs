@@ -187,7 +187,6 @@ impl ChannelSnapshot {
         core.midi_channels[channel_idx].midi_controllers = self.midi_controllers;
         core.midi_channels[channel_idx].locked_controllers = self.locked_controllers.clone();
         core.midi_channels[channel_idx].custom_controllers = self.custom_controllers;
-        core.midi_channels[channel_idx].update_channel_tuning();
 
         // Restore GS NRPN lock, vibrato, and transpose
         core.midi_channels[channel_idx].lock_gs_nrpn_params = self.lock_vibrato;

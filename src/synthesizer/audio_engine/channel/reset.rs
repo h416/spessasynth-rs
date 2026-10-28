@@ -6,7 +6,8 @@ use crate::midi::midi_tools::sysex_data::{DEFAULT_GS_DRUM_MAP, DEFAULT_XG_DRUM_M
 use crate::soundbank::enums::modulator_sources;
 use crate::synthesizer::audio_engine::channel::midi_channel::{DrumLocks, MidiChannel};
 use crate::synthesizer::audio_engine::channel::parameters::midi::{
-    ChannelMidiParameterValue, CUSTOM_RESET_ARRAY, DEFAULT_MIDI_CONTROLLER_VALUES,
+    ChannelMidiParameterValue, CUSTOM_RESET_ARRAY, DEFAULT_CHANNEL_MIDI_PARAMETERS,
+    DEFAULT_MIDI_CONTROLLER_VALUES,
 };
 use crate::synthesizer::audio_engine::synth_constants::{DEFAULT_NRPN, MIDI_DRUM_CHANNEL};
 use crate::synthesizer::audio_engine::voice::voice::Voice;
@@ -86,8 +87,9 @@ impl MidiChannel {
         let mut events = Vec::new();
 
         // Reset all non-locked controllers to their default values
+        // (TS: cc < CONTROLLER_TABLE_SIZE, which is 128 since 4.4.0)
         #[allow(clippy::needless_range_loop)]
-        for cc in 0..127usize {
+        for cc in 0..128usize {
             if self.locked_controllers[cc] {
                 continue;
             }
@@ -119,6 +121,26 @@ impl MidiChannel {
 
         // Reset Poly pressure
         self.poly_pressures.fill(0);
+
+        // Reset MIDI parameters (TS: resetMIDIParameter(...) for each one).
+        // The ones not listed here are reset further below.
+        // TS: resetMIDIParameter("pressure") -> setMIDIParameter("pressure", 0), which
+        // recomputes the channel pressure modulators. Rust keeps the pressure in the
+        // non-CC controller slot, which `channel_pressure` writes.
+        self.set_midi_parameter(ChannelMidiParameterValue::Pressure(0));
+        events.append(&mut self.channel_pressure(voices, 0));
+        self.set_midi_parameter(ChannelMidiParameterValue::RxChannel(self.channel as i32));
+        self.set_midi_parameter(ChannelMidiParameterValue::KeyShift(
+            DEFAULT_CHANNEL_MIDI_PARAMETERS.key_shift,
+        ));
+        self.set_midi_parameter(ChannelMidiParameterValue::FineTune(
+            DEFAULT_CHANNEL_MIDI_PARAMETERS.fine_tune,
+        ));
+        self.set_midi_parameter(ChannelMidiParameterValue::AssignMode(
+            DEFAULT_CHANNEL_MIDI_PARAMETERS.assign_mode,
+        ));
+        self.set_midi_parameter(ChannelMidiParameterValue::Cc1(DEFAULT_CHANNEL_MIDI_PARAMETERS.cc1));
+        self.set_midi_parameter(ChannelMidiParameterValue::Cc2(DEFAULT_CHANNEL_MIDI_PARAMETERS.cc2));
 
         // Reset portamento
         self.reset_portamento(current_system);

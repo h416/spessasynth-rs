@@ -124,13 +124,6 @@ pub struct RenderVoiceContext<'a> {
     pub gs_delay_active: bool,
     /// Equivalent to: core.gsInsertionActive
     pub gs_insertion_active: bool,
-    /// Global gain folded into the channel gain (Rust keeps it out of `current_gain`):
-    /// globalSystem.gain.
-    pub master_gain: f64,
-    /// globalMIDI.volume, already squared (see `SynthesizerCore::set_midi_volume`).
-    pub midi_volume: f64,
-    /// globalSystem.pan + globalMIDI.pan, normalized to [-1, 1].
-    pub global_pan: f64,
     /// The voice buffer (Float64Array).
     /// Equivalent to: core.voiceBuffer
     pub voice_buffer: &'a mut [f64],
@@ -195,7 +188,7 @@ impl MidiChannel {
         let mut cents = voice.pitch_offset // Voice pitch offset
             + modulated[gt::FINE_TUNE as usize] as f64 // Soundfont fine tune
             + self.channel_octave_tuning[target_key as usize] as f64 // MTS octave tuning
-            + self.channel_tuning_cents; // Channel tuning
+            + self.current_tuning(); // Channel tuning
         let mut semitones = modulated[gt::COARSE_TUNE as usize] as f64; // Soundfont coarse tuning
 
         // MIDI Tuning Standard
@@ -376,12 +369,8 @@ impl MidiChannel {
             voice.current_pan
         };
 
-        // Rust keeps the global gain/pan out of the channel's cached values; TS folds them in
-        // `updateInternalParams` (currentGain = factor * globalGain * globalVolume^2 * channelGain).
-        let current_gain = core.master_gain * core.midi_volume * self.current_gain();
-        let current_pan = self.current_pan() + core.global_pan * 500.0;
-        let output_gain = current_gain * voice_gain;
-        let pan_index = ((pan + current_pan).clamp(-500.0, 500.0) + 500.0) as i32 as usize;
+        let output_gain = self.current_gain() * voice_gain;
+        let pan_index = ((pan + self.current_pan()).clamp(-500.0, 500.0) + 500.0) as i32 as usize;
 
         // Do not send to effects if:
         // - Either effects are disabled

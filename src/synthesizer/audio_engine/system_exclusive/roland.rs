@@ -281,14 +281,8 @@ impl SynthesizerCore {
                                 // cents = (tune - 8192) / 81.92.
                                 let tune = ((message_value as i32) << 7) | syx[8] as i32;
                                 let cents = (tune as f64 - 8192.0) / 81.92;
-                                // TS 4.3.14 setMIDIParameter("fineTune", cents) folds into the
-                                // channel tuning consumed by render_voice. Route the full float
-                                // value into the live CHANNEL_TUNING custom controller (mirrors
-                                // the RPN fine-tune fix in channel/data_entry.rs); the previous
-                                // FineTune parameter path wrote a `current_tuning` field that no
-                                // render code reads.
                                 self.midi_channels[channel]
-                                    .set_custom_controller(custom_controllers::CHANNEL_TUNING, cents);
+                                    .set_midi_parameter(ChannelMidiParameterValue::FineTune(cents));
                                 sys_ex_logging(
                                     syx,
                                     channel as u8,
@@ -899,7 +893,9 @@ impl SynthesizerCore {
                 // Some Roland
                 if syx[4] == 0x10 {
                     // This is a roland master volume message
-                    self.set_midi_volume(syx[7] as f64 / 100.0);
+                    self.set_midi_parameter(GlobalMIDIParameterChangeCallback::Volume(
+                        syx[7] as f64 / 100.0,
+                    ));
                     spessa_synth_info(&format!(
                         "Roland Master Volume control set to: {} via: {:02X?}",
                         syx[7], syx

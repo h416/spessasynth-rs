@@ -70,8 +70,9 @@ fn print_usage() {
     println!("  -r, --sample-rate <hz>  Output sample rate (default: 44100)");
     println!("  --no-normalize       Disable audio normalization");
     println!("  --no-effects         Disable reverb/chorus/delay/insertion effects");
-    println!("  --system <name>=<true|false>  Set a boolean system parameter (repeatable):");
-    println!("                       customVibrato, drumLock, userDrumLock, nrpnParamLock");
+    println!("  --system <name>=<value>  Set a system parameter (repeatable):");
+    println!("                       customVibrato, drumLock, userDrumLock, nrpnParamLock (true|false)");
+    println!("                       fineTune, keyShift, pan, gain (number)");
 }
 
 fn main() {
@@ -147,19 +148,24 @@ fn main() {
                 i += 1;
                 let parsed = args.get(i).and_then(|a| {
                     let (name, value) = a.split_once('=')?;
-                    let v = value.parse::<bool>().ok()?;
+                    let b = || value.parse::<bool>().ok();
+                    let f = || value.parse::<f64>().ok();
                     Some(match name {
-                        "customVibrato" => GlobalSystemParameterChange::CustomVibrato(v),
-                        "drumLock" => GlobalSystemParameterChange::DrumLock(v),
-                        "userDrumLock" => GlobalSystemParameterChange::UserDrumLock(v),
-                        "nrpnParamLock" => GlobalSystemParameterChange::NrpnParamLock(v),
+                        "customVibrato" => GlobalSystemParameterChange::CustomVibrato(b()?),
+                        "drumLock" => GlobalSystemParameterChange::DrumLock(b()?),
+                        "userDrumLock" => GlobalSystemParameterChange::UserDrumLock(b()?),
+                        "nrpnParamLock" => GlobalSystemParameterChange::NrpnParamLock(b()?),
+                        "fineTune" => GlobalSystemParameterChange::FineTune(f()?),
+                        "keyShift" => GlobalSystemParameterChange::KeyShift(f()?),
+                        "pan" => GlobalSystemParameterChange::Pan(f()?),
+                        "gain" => GlobalSystemParameterChange::Gain(f()?),
                         _ => return None,
                     })
                 });
                 match parsed {
                     Some(p) => system_parameters.push(p),
                     None => {
-                        eprintln!("Error: --system requires <name>=<true|false>");
+                        eprintln!("Error: --system requires <name>=<value>");
                         print_usage();
                         std::process::exit(1);
                     }

@@ -21,13 +21,9 @@
 /// fires NO event (only the MIDI-parameter setter fires `globalParamChange`) and
 /// early-returns when the value is unchanged. Both are ported.
 ///
-/// TODO(Task 21, channel restructuring): TS calls `ch.updateInternalParams()` on every channel
-/// after a change; that channel method doesn't exist yet. Legacy plumbing kept instead:
-/// - `pan` recomputes the shared `pan_left`/`pan_right` (with `midi_parameters.pan` summed in)
-/// - `gain` is read directly by the render loop (as 4.2.0's masterGain was)
-/// - `keyShift`/`fineTune` (API side) currently have NO audible effect (4.2.0 had no such
-///   parameters; they only feed channel updateInternalParams in TS 4.3.0) — wired in Task 21
-use crate::synthesizer::audio_engine::channel::midi_channel::SynthSystemView;
+/// TS calls `ch.updateInternalParams()` on every channel right after storing the value
+/// (before the per-parameter handling); the order does not matter for `voiceCap`/`keyShift`,
+/// so the Rust version runs it after the `match`.
 use crate::synthesizer::audio_engine::synth_constants::VOICE_CAP;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::audio_engine::voice::voice::Voice;
@@ -231,11 +227,7 @@ impl SynthesizerCore {
             C::MonophonicRetrigger(v) => set_or_return!(monophonic_retrigger, v),
             C::CustomVibrato(v) => set_or_return!(custom_vibrato, v),
 
-            C::Pan(v) => {
-                set_or_return!(pan, v);
-                // Legacy plumbing (see module doc TODO): recompute the shared stereo pan.
-                self.update_legacy_pan();
-            }
+            C::Pan(v) => set_or_return!(pan, v),
 
             // Additional handling for specific parameters
             C::VoiceCap(v) => {
@@ -271,13 +263,8 @@ impl SynthesizerCore {
             }
         }
 
-        // TODO(Task 21): for (const ch of this.midiChannels) ch.updateInternalParams();
-
-        // The channels read these from the core in TS
-        let view = SynthSystemView::of(&self.system_parameters);
-        for ch in self.midi_channels.iter_mut() {
-            ch.synth_system = view;
-        }
+        // for (const ch of this.midiChannels) ch.updateInternalParams();
+        self.update_channels_internal_params();
     }
 
     /// Allocates new voices.
@@ -444,12 +431,24 @@ mod tests {
     }
 
     #[test]
-    fn test_set_pan_updates_legacy_pan() {
+    fn test_set_pan_updates_channel_pan() {
         let (mut core, _) = make_core();
+        for _ in 0..16 {
+            core.create_midi_channel(false);
+        }
         core.set_system_parameter(GlobalSystemParameterChange::Pan(-1.0));
-        // pan -1.0 → p = 0.0 → left 1, right 0
-        assert!((core.pan_left - 1.0).abs() < 1e-12);
-        assert!((core.pan_right - 0.0).abs() < 1e-12);
+        assert!((core.midi_channels[0].current_pan() + 500.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_set_fine_tune_reaches_melodic_channels_only() {
+        let (mut core, _) = make_core();
+        for _ in 0..16 {
+            core.create_midi_channel(false);
+        }
+        core.set_system_parameter(GlobalSystemParameterChange::FineTune(12.5));
+        assert!((core.midi_channels[0].current_tuning() - 12.5).abs() < 1e-12);
+        assert!((core.midi_channels[9].current_tuning() - 0.0).abs() < 1e-12);
     }
 
     #[test]
