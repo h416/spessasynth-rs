@@ -58,7 +58,7 @@ pub fn parse_rmidi_internal(
     }
 
     // The first sub-chunk must be "data" and contains the raw SMF bytes.
-    let data_chunk = RIFFChunk::read(binary_data, true, false);
+    let data_chunk = RIFFChunk::read(binary_data, false, true);
     if data_chunk.header != "data" {
         SpessaLog::group_end();
         return Err(format!(
@@ -74,7 +74,7 @@ pub fn parse_rmidi_internal(
     // Scan remaining RMIDI chunks for embedded sound banks and INFO metadata.
     while binary_data.current_index < binary_data.len() {
         let start_index = binary_data.current_index;
-        let mut current_chunk = RIFFChunk::read(binary_data, true, false);
+        let mut current_chunk = RIFFChunk::read(binary_data, false, true);
 
         if current_chunk.header == "RIFF" {
             // The embedded chunk type is the first 4 bytes of the chunk data.
@@ -106,7 +106,7 @@ pub fn parse_rmidi_internal(
                 SpessaLog::info("Found RMIDI INFO chunk!");
                 // Iterate sub-chunks inside the INFO list.
                 while current_chunk.data.current_index < current_chunk.data.len() {
-                    let info_chunk = RIFFChunk::read(&mut current_chunk.data, true, false);
+                    let info_chunk = RIFFChunk::read(&mut current_chunk.data, false, true);
                     let info_data: Vec<u8> = info_chunk.data.to_vec();
 
                     let header_typed = RMIDInfoFourCC::from_str(&info_chunk.header);

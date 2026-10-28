@@ -3,6 +3,24 @@
 /// Ported from: src/utils/byte_functions/little_endian.ts
 use crate::utils::indexed_array::IndexedByteArray;
 
+/// Reads the number as little endian from an IndexedByteArray, going above 32 bits.
+/// Equivalent to: readLE64Indexed(dataArray, bytesAmount)
+pub fn read_le64_indexed(data: &mut IndexedByteArray, bytes_amount: usize) -> u64 {
+    let res = read_le64(data, bytes_amount, data.current_index);
+    data.current_index += bytes_amount;
+    res
+}
+
+/// Reads the number as little endian, going above 32 bits (TS uses BigInt).
+/// Equivalent to: readLE64(dataArray, bytesAmount, offset = 0)
+pub fn read_le64(data: &[u8], bytes_amount: usize, offset: usize) -> u64 {
+    let mut out: u64 = 0;
+    for i in 0..bytes_amount {
+        out |= (data[offset + i] as u64) << (i * 8);
+    }
+    out
+}
+
 /// Reads `bytes_amount` bytes as a little-endian unsigned integer from `data` at `offset`.
 /// Equivalent to: readLittleEndian(dataArray, bytesAmount, offset)
 /// Assumes bytes_amount <= 4.

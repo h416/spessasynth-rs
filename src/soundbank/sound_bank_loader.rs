@@ -11,28 +11,32 @@ use crate::utils::byte_functions::string::read_binary_string;
 // load_sound_bank
 // ---------------------------------------------------------------------------
 
-/// Detects whether `data` is a DLS or SF2/SF3 file, then parses it.
+/// Detects whether `data` is a DLS or SF2/SF3/SFE file, then parses it.
 ///
-/// Detection reads bytes 8-11 (the RIFF list-type FourCC) and checks whether
-/// it equals `"dls "` (case-insensitive).  Any other value is treated as SF2.
+/// The RIFF list-type FourCC is at bytes 8-11, or 12-15 for a 64-bit "RIFS" header.
+/// `"dls "` (case-insensitive) is DLS; anything else is parsed as a SoundFont.
 ///
 /// # Panics
-/// Panics if the data is too short to contain a type identifier, or if the
-/// underlying parser fails (e.g. malformed RIFF structure).
+/// Panics if the header is neither "RIFF" nor "RIFS", or if the underlying parser
+/// fails (e.g. malformed RIFF structure).
 ///
 /// Equivalent to: SoundBankLoader.fromArrayBuffer(buffer)
 pub fn load_sound_bank(data: Vec<u8>) -> BasicSoundBank {
-    // Read bytes 8-11 to identify the bank format.
-    // Equivalent to:
-    //   const check = buffer.slice(8, 12);
-    //   const a = new IndexedByteArray(check);
-    //   const id = readBinaryStringIndexed(a, 4).toLowerCase();
-    if data.len() >= 12 {
-        let id = read_binary_string(&data, 4, 8).to_lowercase();
-        if id == "dls " {
-            return load_dls(&data);
-        }
+    let riff_text = read_binary_string(&data, 4, 0);
+    if riff_text != "RIFF" && riff_text != "RIFS" {
+        panic!("Expected 'RIFF' or 'RIFS' header, got '{riff_text}'");
     }
+
+    let rf64 = riff_text == "RIFS";
+
+    // Equivalent to: const check = rf64 ? buffer.slice(12, 16) : buffer.slice(8, 12);
+    let check_offset = if rf64 { 12 } else { 8 };
+    let id = read_binary_string(&data, 4, check_offset).to_lowercase();
+    if id == "dls " {
+        // The magic happens here!
+        return load_dls(&data);
+    }
+    // TS: `new SoundFont2(buffer, id === "sfen")`; the SFE flag only sets the bank type
     parse_sound_font2(data)
 }
 

@@ -58,7 +58,7 @@ mod tests {
         bytes.extend_from_slice(&[0u8; 10]);
         RIFFChunk::new(
             "pmod".to_string(),
-            bytes.len() as u32,
+            bytes.len(),
             IndexedByteArray::from_vec(bytes),
         )
     }

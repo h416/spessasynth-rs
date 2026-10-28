@@ -199,7 +199,7 @@ mod tests {
         let len = data.len();
         RIFFChunk::new(
             "phdr".to_string(),
-            len as u32,
+            len,
             IndexedByteArray::from_vec(data),
         )
     }

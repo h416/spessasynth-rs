@@ -100,7 +100,7 @@ impl DownloadableSounds {
         // Collect all top-level chunks.
         let mut chunks: Vec<RIFFChunk> = Vec::new();
         while data_array.current_index < data_array.len() {
-            chunks.push(RIFFChunk::read(&mut data_array, true, false));
+            chunks.push(RIFFChunk::read(&mut data_array, false, true));
         }
 
         let mut dls = DownloadableSounds::new();
@@ -108,7 +108,7 @@ impl DownloadableSounds {
         // Parse the INFO LIST chunk.
         if let Some(info_chunk) = RIFFChunk::find_list_type(&mut chunks, "INFO") {
             while info_chunk.data.current_index < info_chunk.data.len() {
-                let mut info_part = RIFFChunk::read(&mut info_chunk.data, true, false);
+                let mut info_part = RIFFChunk::read(&mut info_chunk.data, false, true);
                 let size = info_part.size as usize;
                 let text = read_binary_string_indexed(&mut info_part.data, size);
                 match info_part.header.as_str() {

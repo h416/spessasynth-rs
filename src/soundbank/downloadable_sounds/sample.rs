@@ -131,7 +131,7 @@ impl DownloadableSoundsSample {
             let info_chunk = &mut chunks[info_pos];
             info_chunk.data.current_index = 4; // skip "INFO" FourCC
             while info_chunk.data.current_index < info_chunk.data.len() {
-                let sub = RIFFChunk::read(&mut info_chunk.data, true, false);
+                let sub = RIFFChunk::read(&mut info_chunk.data, false, true);
                 if sub.header == "INAM" {
                     let size = sub.size as usize;
                     let mut sub_data = sub.data;
@@ -283,7 +283,7 @@ mod tests {
         for (i, &b) in body.iter().enumerate() {
             arr[i] = b;
         }
-        RIFFChunk::new("LIST".to_string(), size, arr)
+        RIFFChunk::new("LIST".to_string(), size as usize, arr)
     }
 
     /// Returns the 16 bytes of a minimal PCM `fmt ` chunk body.

@@ -15,13 +15,15 @@
 ///
 /// The associated functions below mirror the new 4.3.0 class layout 1:1.
 use crate::utils::indexed_array::IndexedByteArray;
-use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, write_dword};
+use crate::utils::byte_functions::little_endian::{
+    read_le64_indexed, read_little_endian_indexed, write_dword,
+};
 use crate::utils::byte_functions::string::{
     get_string_bytes, read_binary_string, read_binary_string_indexed, write_binary_string_indexed,
 };
 use std::borrow::Cow;
 
-/// Equivalent to TypeScript's `GenericRIFFFourCC = "RIFF" | "LIST" | "INFO"`.
+/// Equivalent to TypeScript's `GenericRIFFFourCC = "RIFF" | "RIFS" | "LIST" | "INFO"`.
 pub type GenericRIFFFourCC = String;
 
 /// Equivalent to TypeScript's `WAVFourCC = "wave" | "cue " | "fmt "`.
@@ -37,19 +39,20 @@ pub struct RIFFChunk {
     /// The chunk's FourCC code.
     pub header: FourCC,
     /// The chunk's size in bytes.
-    pub size: u32,
+    /// TS `number`: 64-bit (RF64) chunks can exceed `u32`.
+    pub size: usize,
     /// The chunk's binary data.
     /// Note: `data.length` will be 0 if `read_data` was set to `false` in `RIFFChunk::read`.
     pub data: IndexedByteArray,
-    /// The size of the chunk's header in bytes.
-    /// TS sets 12 for 64-bit (RF64) chunks, which this port does not read, so it is always 8.
+    /// The size of the chunk's header in bytes (8, or 12 for 64-bit (RF64) chunks).
     pub header_size: usize,
 }
 
 impl RIFFChunk {
     /// Creates a new RIFF chunk.
     /// Equivalent to: `new RIFFChunk(header, size, data, headerSize = 8)`
-    pub fn new(header: FourCC, size: u32, data: IndexedByteArray) -> Self {
+    /// (only `RIFFChunk.read` passes a non-default `headerSize`; it builds the struct directly)
+    pub fn new(header: FourCC, size: usize, data: IndexedByteArray) -> Self {
         Self {
             header,
             size,
@@ -60,14 +63,17 @@ impl RIFFChunk {
 
     /// Reads a RIFF chunk from an array.
     /// * `data_array` - the array to read from.
+    /// * `rf64` - if the chunk uses a 64-bit size.
     /// * `read_data` - if the data should be read as well.
-    /// * `force_shift` - if the index should be shifted to the end of the chunk even if the
-    ///   data has not been read.
     ///
-    /// Equivalent to: `RIFFChunk.read(dataArray, readData = true, forceShift = false)`
-    pub fn read(data_array: &mut IndexedByteArray, read_data: bool, force_shift: bool) -> RIFFChunk {
+    /// Equivalent to: `RIFFChunk.read(dataArray, rf64 = false, readData = true)`
+    pub fn read(data_array: &mut IndexedByteArray, rf64: bool, read_data: bool) -> RIFFChunk {
         let header = read_binary_string_indexed(data_array, 4);
-        let mut size = read_little_endian_indexed(data_array, 4);
+        let mut size = if rf64 {
+            read_le64_indexed(data_array, 8) as usize
+        } else {
+            read_little_endian_indexed(data_array, 4) as usize
+        };
         // Safeguard against evil DLS files (e.g. CrysDLS v1.23.dls)
         // https://github.com/spessasus/spessasynth_core/issues/5
         if header.is_empty() {
@@ -76,21 +82,26 @@ impl RIFFChunk {
 
         let chunk_data = if read_data {
             let start = data_array.current_index;
-            let end = start + size as usize;
+            let end = start + size;
             data_array.slice(start, end)
         } else {
             IndexedByteArray::new(0)
         };
 
-        if read_data || force_shift {
-            data_array.current_index += size as usize;
+        if read_data {
+            data_array.current_index += size;
             #[allow(clippy::manual_is_multiple_of)]
             if size % 2 != 0 {
                 data_array.current_index += 1;
             }
         }
 
-        RIFFChunk::new(header, size, chunk_data)
+        RIFFChunk {
+            header,
+            size,
+            data: chunk_data,
+            header_size: if rf64 { 12 } else { 8 },
+        }
     }
 
     /// Writes a RIFF chunk correctly.
@@ -277,7 +288,7 @@ mod tests {
     #[test]
     fn test_read_basic_chunk() {
         let mut buf = make_chunk_bytes("fmt ", &[1, 2, 3, 4]);
-        let chunk = RIFFChunk::read(&mut buf, true, false);
+        let chunk = RIFFChunk::read(&mut buf, false, true);
         assert_eq!(chunk.header, "fmt ");
         assert_eq!(chunk.size, 4);
         assert_eq!(chunk.data.len(), 4);
@@ -295,7 +306,7 @@ mod tests {
         bytes.extend_from_slice(&3u32.to_le_bytes()); // size = 3
         bytes.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0x00]); // 3 bytes + 1 pad
         let mut buf = IndexedByteArray::from_vec(bytes);
-        let chunk = RIFFChunk::read(&mut buf, true, false);
+        let chunk = RIFFChunk::read(&mut buf, false, true);
         assert_eq!(chunk.size, 3);
         assert_eq!(chunk.data.len(), 3);
         // 4 (header) + 4 (size) + 3 (data) + 1 (pad) = 12
@@ -314,12 +325,18 @@ mod tests {
     }
 
     #[test]
-    fn test_read_chunk_force_shift_advances_without_reading() {
-        let mut buf = make_chunk_bytes("fmt ", &[1, 2, 3, 4]);
-        let chunk = RIFFChunk::read(&mut buf, false, true);
-        assert_eq!(chunk.data.len(), 0); // data not read
-        // Cursor advanced past all bytes: 4 + 4 + 4 = 12
-        assert_eq!(buf.current_index, 12);
+    fn test_read_chunk_rf64_size_and_header_size() {
+        // "RIFS"-style chunk: 4 (header) + 8 (64-bit size) + 3 (data) + 1 (pad)
+        let mut bytes = b"smpl".to_vec();
+        bytes.extend_from_slice(&3u64.to_le_bytes());
+        bytes.extend_from_slice(&[7, 8, 9, 0]);
+        let mut buf = IndexedByteArray::from_vec(bytes);
+        let chunk = RIFFChunk::read(&mut buf, true, true);
+        assert_eq!(chunk.header, "smpl");
+        assert_eq!(chunk.size, 3);
+        assert_eq!(chunk.header_size, 12);
+        assert_eq!((chunk.data[0], chunk.data[1], chunk.data[2]), (7, 8, 9));
+        assert_eq!(buf.current_index, 16);
     }
 
     #[test]
@@ -328,7 +345,7 @@ mod tests {
         let mut bytes = vec![0x00, 0x00, 0x00, 0x00]; // header = ""
         bytes.extend_from_slice(&100u32.to_le_bytes()); // file says size = 100
         let mut buf = IndexedByteArray::from_vec(bytes);
-        let chunk = RIFFChunk::read(&mut buf, true, false);
+        let chunk = RIFFChunk::read(&mut buf, false, true);
         assert_eq!(chunk.header, "");
         assert_eq!(chunk.size, 0); // overridden to 0
         assert_eq!(chunk.data.len(), 0);
@@ -345,11 +362,11 @@ mod tests {
         bytes.extend_from_slice(&[0x0A, 0x0B]);
         let mut buf = IndexedByteArray::from_vec(bytes);
 
-        let c1 = RIFFChunk::read(&mut buf, true, false);
+        let c1 = RIFFChunk::read(&mut buf, false, true);
         assert_eq!(c1.header, "fmt ");
         assert_eq!(c1.data[0], 0x01);
 
-        let c2 = RIFFChunk::read(&mut buf, true, false);
+        let c2 = RIFFChunk::read(&mut buf, false, true);
         assert_eq!(c2.header, "data");
         assert_eq!(c2.data[0], 0x0A);
     }
@@ -535,7 +552,7 @@ mod tests {
         data_bytes.extend_from_slice(content);
         RIFFChunk::new(
             "LIST".to_string(),
-            data_bytes.len() as u32,
+            data_bytes.len(),
             IndexedByteArray::from_vec(data_bytes),
         )
     }
@@ -598,7 +615,7 @@ mod tests {
         let original_data: &[u8] = &[0x10, 0x20, 0x30, 0x40];
         let written = RIFFChunk::write("fmt ", original_data, false, false);
         let mut buf = IndexedByteArray::from_vec(written.to_vec());
-        let chunk = RIFFChunk::read(&mut buf, true, false);
+        let chunk = RIFFChunk::read(&mut buf, false, true);
         assert_eq!(chunk.header, "fmt ");
         assert_eq!(chunk.size, 4);
         let s: &[u8] = &chunk.data;
@@ -610,7 +627,7 @@ mod tests {
         let content: &[u8] = &[0xDE, 0xAD];
         let written = RIFFChunk::write("INFO", content, false, true);
         let mut buf = IndexedByteArray::from_vec(written.to_vec());
-        let chunk = RIFFChunk::read(&mut buf, true, false);
+        let chunk = RIFFChunk::read(&mut buf, false, true);
         assert_eq!(chunk.header, "LIST");
 
         let mut collection = vec![chunk];

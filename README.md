@@ -1,7 +1,7 @@
 # spessasynth-rs
 
 A Rust port of [SpessaSynth](https://github.com/spessasus/SpessaSynth).
-Offline WAV rendering from SoundFont2 (.sf2) and MIDI files.
+Offline WAV rendering from MIDI files with SoundFont2 (.sf2), SF-Enhanced (.sfe) or DLS sound banks.
 
 ## Quick start
 
@@ -20,7 +20,7 @@ This is a partial port of [spessasynth_core v4.4.1](https://github.com/spessasus
 ported file-by-file and function-by-function. The following limitations apply:
 
 - **MIDI to WAV offline rendering only** — real-time playback and other features are not included
-- **No SoundFont3 (SF3 / Vorbis) support** — only SoundFont2 (.sf2) is supported
+- **No SoundFont3 (SF3 / Vorbis) support** — only uncompressed SoundFont2 / SF-Enhanced (.sf2 / .sfe) and DLS are supported
 - **No XMF support**
 - **No tracker module (MOD / XM / S3M) support**
 

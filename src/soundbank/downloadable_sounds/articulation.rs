@@ -145,7 +145,7 @@ impl DownloadableSoundsArticulation {
         if let Some(lart) = RIFFChunk::find_list_type(chunks, "lart") {
             self.mode = DlsMode::Dls1;
             while lart.data.current_index < lart.data.len() {
-                let chunk = RIFFChunk::read(&mut lart.data, true, false);
+                let chunk = RIFFChunk::read(&mut lart.data, false, true);
                 // Note: DLS spec says lart should only have art1, but DirectMusic Producer
                 // "FarmGame.dls" has art2 in lart. We allow both art1 and art2 here.
                 if chunk.header != "art1" && chunk.header != "art2" {
@@ -168,7 +168,7 @@ impl DownloadableSoundsArticulation {
         } else if let Some(lar2) = RIFFChunk::find_list_type(chunks, "lar2") {
             self.mode = DlsMode::Dls2;
             while lar2.data.current_index < lar2.data.len() {
-                let chunk = RIFFChunk::read(&mut lar2.data, true, false);
+                let chunk = RIFFChunk::read(&mut lar2.data, false, true);
                 // Note: same as above – allow both art2 and art1 in lar2.
                 if chunk.header != "art1" && chunk.header != "art2" {
                     // There may be a cdl chunk, testcase romania_main.dls
@@ -388,7 +388,7 @@ mod tests {
         for (i, &b) in content.iter().enumerate() {
             data[4 + i] = b;
         }
-        RIFFChunk::new("LIST".to_string(), (4 + content.len()) as u32, data)
+        RIFFChunk::new("LIST".to_string(), (4 + content.len()), data)
     }
 
     fn art_chunk_as_list(art_type: &str, connections: &[ConnectionBlock]) -> RIFFChunk {
@@ -505,7 +505,7 @@ mod tests {
         let s: &[u8] = &written;
         let size = u32::from_le_bytes([s[4], s[5], s[6], s[7]]);
         let data = IndexedByteArray::from_slice(&s[8..]);
-        let list_chunk = RIFFChunk::new("LIST".to_string(), size, data);
+        let list_chunk = RIFFChunk::new("LIST".to_string(), size as usize, data);
         let mut chunks = vec![list_chunk];
 
         let mut recovered = DownloadableSoundsArticulation::new();

@@ -683,7 +683,7 @@ mod tests {
         let chunks = get_shdr(&bank, &[0], &[10]);
         let raw = pdta_data_bytes(&chunks);
         let mut arr = IndexedByteArray::from_vec(raw);
-        let chunk = RIFFChunk::read(&mut arr, true, false);
+        let chunk = RIFFChunk::read(&mut arr, false, true);
         assert_eq!(chunk.header, "shdr");
         assert_eq!(chunk.size as usize, 2 * SAMPLE_RECORD_SIZE);
     }

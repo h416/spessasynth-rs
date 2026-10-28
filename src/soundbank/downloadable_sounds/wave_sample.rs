@@ -380,7 +380,7 @@ mod tests {
     fn make_wsmp_chunk(data: &[u8]) -> RIFFChunk {
         RIFFChunk::new(
             "wsmp".to_string(),
-            data.len() as u32,
+            data.len(),
             IndexedByteArray::from_vec(data.to_vec()),
         )
     }
@@ -1009,7 +1009,7 @@ mod tests {
         let written = ws_orig.write();
         let written_bytes = written.to_vec();
         let mut buf = IndexedByteArray::from_vec(written_bytes);
-        let mut chunk = RIFFChunk::read(&mut buf, true, false);
+        let mut chunk = RIFFChunk::read(&mut buf, false, true);
         let ws_read = WaveSample::read(&mut chunk).unwrap();
 
         assert_eq!(ws_read.unity_note, 48);
@@ -1034,7 +1034,7 @@ mod tests {
         let written = ws_orig.write();
         let written_bytes = written.to_vec();
         let mut buf = IndexedByteArray::from_vec(written_bytes);
-        let mut chunk = RIFFChunk::read(&mut buf, true, false);
+        let mut chunk = RIFFChunk::read(&mut buf, false, true);
         let ws_read = WaveSample::read(&mut chunk).unwrap();
 
         assert_eq!(ws_read.unity_note, 60);
@@ -1054,7 +1054,7 @@ mod tests {
         let written = ws_orig.write();
         let written_bytes = written.to_vec();
         let mut buf = IndexedByteArray::from_vec(written_bytes);
-        let mut chunk = RIFFChunk::read(&mut buf, true, false);
+        let mut chunk = RIFFChunk::read(&mut buf, false, true);
         let ws_read = WaveSample::read(&mut chunk).unwrap();
 
         assert_eq!(ws_read.unity_note, 72);

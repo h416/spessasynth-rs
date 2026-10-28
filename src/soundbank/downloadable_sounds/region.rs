@@ -443,7 +443,7 @@ mod tests {
         for (i, &b) in body.iter().enumerate() {
             arr[i] = b;
         }
-        RIFFChunk::new("LIST".to_string(), size, arr)
+        RIFFChunk::new("LIST".to_string(), size as usize, arr)
     }
 
     /// Builds minimal wlnk bytes for a given table index (mono sample → channel = 1).
@@ -1035,7 +1035,7 @@ mod tests {
         let bytes = written.to_vec();
         let size = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
         let data = IndexedByteArray::from_slice(&bytes[8..]);
-        RIFFChunk::new("LIST".to_string(), size, data)
+        RIFFChunk::new("LIST".to_string(), size as usize, data)
     }
 
     #[test]

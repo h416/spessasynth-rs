@@ -455,7 +455,7 @@ mod tests {
         let data: Vec<u8> = records.iter().flat_map(|r| r.iter().copied()).collect();
         RIFFChunk::new(
             "shdr".to_string(),
-            data.len() as u32,
+            data.len(),
             IndexedByteArray::from_vec(data),
         )
     }

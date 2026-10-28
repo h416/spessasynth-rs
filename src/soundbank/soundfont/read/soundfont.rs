@@ -67,6 +67,21 @@ fn verify_text(text: &str, expected: &str) {
     }
 }
 
+/// Panics with a descriptive error if `text` is not one of `expected` (case-insensitive).
+/// Equivalent to: protected verifyTexts(text, expected)
+fn verify_texts(text: &str, expected: &[&str]) {
+    if !expected.contains(&text.to_lowercase().as_str()) {
+        SpessaLog::group_end();
+        let list: Vec<String> = expected.iter().map(|s| format!("\"{s}\"")).collect();
+        panic!(
+            "SF parsing error: Invalid FourCC: Expected {} but got \"{}\". \
+             The file may be corrupted.",
+            list.join(", "),
+            text.to_lowercase()
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Private helpers: type conversions
 // ---------------------------------------------------------------------------
@@ -135,14 +150,17 @@ fn soundfont_sample_to_basic_sample(mut sfs: SoundFontSample) -> BasicSample {
 // parse_sound_font2
 // ---------------------------------------------------------------------------
 
-/// Parses a SoundFont2 (`.sf2` / `.sf3`) binary into a `BasicSoundBank`.
+/// Parses a SoundFont2 (`.sf2` / `.sf3`) or SF-Enhanced (`.sfe`, 64-bit "RIFS") binary
+/// into a `BasicSoundBank`.
 ///
 /// `.sf2pack` (vorbis-compressed smpl) is out of scope (like SF3) and panics.
+/// TS also passes `sfe` to set `BasicSoundBank.type` ("sfe" / "sf2"); this port has no
+/// `type` field (it does not affect rendering), so the flag is not taken.
 ///
 /// # Panics
 /// Panics on malformed RIFF structure, unrecognised FourCC, or corrupted data.
 ///
-/// Equivalent to: `new SoundFont2(arrayBuffer, false)` constructor
+/// Equivalent to: `new SoundFont2(arrayBuffer, sfe)` constructor
 pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
     let mut main_file_array = IndexedByteArray::from_vec(data);
     let mut bank = BasicSoundBank::new();
@@ -150,38 +168,32 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
     SpessaLog::group("Parsing a SoundFont2 file...");
 
     // ── Main RIFF chunk ──────────────────────────────────────────────────────
-    // Equivalent to: const firstChunk = readRIFFChunk(mainFileArray, false)
-    let first_chunk = RIFFChunk::read(&mut main_file_array, false, false);
-    verify_header(&first_chunk, "riff");
+    // Read RIFF header
+    let four_cc = read_binary_string(&main_file_array, 4, 0).to_lowercase();
+    verify_texts(&four_cc, &["riff", "rifs"]);
+    let rf64 = four_cc == "rifs";
+    if rf64 {
+        SpessaLog::info("RIFF64 Detected!");
+    }
+
+    // Read the main chunk (don't verify as we just did)
+    RIFFChunk::read(&mut main_file_array, rf64, false);
 
     let type_str = read_binary_string_indexed(&mut main_file_array, 4).to_lowercase();
-    if type_str != "sfbk" && type_str != "sfpk" {
-        SpessaLog::group_end();
-        panic!(
-            "Invalid soundFont! Expected \"sfbk\" or \"sfpk\" got \"{}\"",
-            type_str
-        );
-    }
+    verify_texts(&type_str, &["sfbk", "sfpk", "sfen"]);
     let is_sf2_pack = type_str == "sfpk";
 
     // ── INFO chunk ───────────────────────────────────────────────────────────
-    // Equivalent to: const infoChunk = readRIFFChunk(mainFileArray)
-    let mut info_chunk = RIFFChunk::read(&mut main_file_array, true, false);
+    let mut info_chunk = RIFFChunk::read(&mut main_file_array, rf64, true);
     verify_header(&info_chunk, "list");
     let info_string = read_binary_string_indexed(&mut info_chunk.data, 4);
-    if info_string != "INFO" {
-        SpessaLog::group_end();
-        panic!(
-            "Invalid soundFont! Expected \"INFO\" got \"{}\"",
-            info_string
-        );
-    }
+    verify_text(&info_string, "info");
 
     // Optional xdta chunk (Extended SF2 – extended sample / zone limits)
     let mut xdta_chunk: Option<RIFFChunk> = None;
 
     while info_chunk.data.len() > info_chunk.data.current_index {
-        let mut chunk = RIFFChunk::read(&mut info_chunk.data, true, false);
+        let mut chunk = RIFFChunk::read(&mut info_chunk.data, rf64, true);
         // Read full text without advancing the chunk cursor (used for most string fields)
         let text = read_binary_string(&chunk.data, chunk.data.len(), 0);
 
@@ -250,29 +262,28 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
     // Equivalent to: if (xdtaChunk !== undefined) { xChunks.phdr = readRIFFChunk(...); … }
     let mut x_chunks: Option<XChunks> = if let Some(ref mut xdta) = xdta_chunk {
         Some(XChunks {
-            phdr: RIFFChunk::read(&mut xdta.data, true, false),
-            pbag: RIFFChunk::read(&mut xdta.data, true, false),
-            pmod: RIFFChunk::read(&mut xdta.data, true, false),
-            pgen: RIFFChunk::read(&mut xdta.data, true, false),
-            inst: RIFFChunk::read(&mut xdta.data, true, false),
-            ibag: RIFFChunk::read(&mut xdta.data, true, false),
-            imod: RIFFChunk::read(&mut xdta.data, true, false),
-            igen: RIFFChunk::read(&mut xdta.data, true, false),
-            shdr: RIFFChunk::read(&mut xdta.data, true, false),
+            phdr: RIFFChunk::read(&mut xdta.data, rf64, true),
+            pbag: RIFFChunk::read(&mut xdta.data, rf64, true),
+            pmod: RIFFChunk::read(&mut xdta.data, rf64, true),
+            pgen: RIFFChunk::read(&mut xdta.data, rf64, true),
+            inst: RIFFChunk::read(&mut xdta.data, rf64, true),
+            ibag: RIFFChunk::read(&mut xdta.data, rf64, true),
+            imod: RIFFChunk::read(&mut xdta.data, rf64, true),
+            igen: RIFFChunk::read(&mut xdta.data, rf64, true),
+            shdr: RIFFChunk::read(&mut xdta.data, rf64, true),
         })
     } else {
         None
     };
 
     // ── SDTA chunk (sample data) ─────────────────────────────────────────────
-    // Equivalent to: const sdtaChunk = readRIFFChunk(mainFileArray, false)
-    let sdta_chunk = RIFFChunk::read(&mut main_file_array, false, false);
+    let sdta_chunk = RIFFChunk::read(&mut main_file_array, rf64, false);
     verify_header(&sdta_chunk, "list");
     let sdta_text = read_binary_string_indexed(&mut main_file_array, 4);
     verify_text(&sdta_text, "sdta");
 
     SpessaLog::info("Verifying smpl chunk...");
-    let sample_data_chunk = RIFFChunk::read(&mut main_file_array, false, false);
+    let sample_data_chunk = RIFFChunk::read(&mut main_file_array, rf64, false);
     verify_header(&sample_data_chunk, "smpl");
 
     if is_sf2_pack {
@@ -285,38 +296,37 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
     let sample_data_start_index = main_file_array.current_index;
     SpessaLog::info(&format!(
         "Skipping sample chunk, length: {}",
-        (sdta_chunk.size as usize).saturating_sub(12)
+        sdta_chunk.size.saturating_sub(4 + sdta_chunk.header_size)
     ));
 
     // Skip past all SDTA content (smpl data + optional sm24 chunk)
-    // Equivalent to: mainFileArray.currentIndex += sdtaChunk.size - 12
-    main_file_array.current_index += (sdta_chunk.size as usize).saturating_sub(12);
+    // Equivalent to: mainFileArray.currentIndex += sdtaChunk.size - 4 - sdtaChunk.headerSize
+    main_file_array.current_index += sdta_chunk.size.saturating_sub(4 + sdta_chunk.header_size);
 
     // ── PDTA chunk (hydra) ───────────────────────────────────────────────────
     SpessaLog::info("Loading preset data chunk...");
-    // Equivalent to: const presetChunk = readRIFFChunk(mainFileArray)
-    let mut preset_chunk = RIFFChunk::read(&mut main_file_array, true, false);
+    let mut preset_chunk = RIFFChunk::read(&mut main_file_array, rf64, true);
     verify_header(&preset_chunk, "list");
     // Consume the "pdta" FourCC from the list content
     let _pdta_type = read_binary_string_indexed(&mut preset_chunk.data, 4);
 
-    let mut phdr_chunk = RIFFChunk::read(&mut preset_chunk.data, true, false);
+    let mut phdr_chunk = RIFFChunk::read(&mut preset_chunk.data, rf64, true);
     verify_header(&phdr_chunk, "phdr");
-    let mut pbag_chunk = RIFFChunk::read(&mut preset_chunk.data, true, false);
+    let mut pbag_chunk = RIFFChunk::read(&mut preset_chunk.data, rf64, true);
     verify_header(&pbag_chunk, "pbag");
-    let mut pmod_chunk = RIFFChunk::read(&mut preset_chunk.data, true, false);
+    let mut pmod_chunk = RIFFChunk::read(&mut preset_chunk.data, rf64, true);
     verify_header(&pmod_chunk, "pmod");
-    let mut pgen_chunk = RIFFChunk::read(&mut preset_chunk.data, true, false);
+    let mut pgen_chunk = RIFFChunk::read(&mut preset_chunk.data, rf64, true);
     verify_header(&pgen_chunk, "pgen");
-    let mut inst_chunk = RIFFChunk::read(&mut preset_chunk.data, true, false);
+    let mut inst_chunk = RIFFChunk::read(&mut preset_chunk.data, rf64, true);
     verify_header(&inst_chunk, "inst");
-    let mut ibag_chunk = RIFFChunk::read(&mut preset_chunk.data, true, false);
+    let mut ibag_chunk = RIFFChunk::read(&mut preset_chunk.data, rf64, true);
     verify_header(&ibag_chunk, "ibag");
-    let mut imod_chunk = RIFFChunk::read(&mut preset_chunk.data, true, false);
+    let mut imod_chunk = RIFFChunk::read(&mut preset_chunk.data, rf64, true);
     verify_header(&imod_chunk, "imod");
-    let mut igen_chunk = RIFFChunk::read(&mut preset_chunk.data, true, false);
+    let mut igen_chunk = RIFFChunk::read(&mut preset_chunk.data, rf64, true);
     verify_header(&igen_chunk, "igen");
-    let mut shdr_chunk = RIFFChunk::read(&mut preset_chunk.data, true, false);
+    let mut shdr_chunk = RIFFChunk::read(&mut preset_chunk.data, rf64, true);
     verify_header(&shdr_chunk, "shdr");
 
     // ── Read samples ─────────────────────────────────────────────────────────
@@ -843,7 +853,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Invalid soundFont")]
+    #[should_panic(expected = "Invalid FourCC")]
     fn test_parse_invalid_type_panics() {
         // Build a RIFF file with wrong FourCC "XXXX"
         let mut data: Vec<u8> = Vec::new();
@@ -854,7 +864,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Invalid chunk header")]
+    #[should_panic(expected = "Invalid FourCC")]
     fn test_parse_wrong_first_chunk_panics() {
         // Not a RIFF file (starts with "LIST")
         let mut data: Vec<u8> = Vec::new();
