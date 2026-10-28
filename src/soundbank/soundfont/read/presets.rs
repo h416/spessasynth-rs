@@ -127,7 +127,9 @@ impl SoundFontPresetZoneSink for SoundFontPreset {
 ///
 /// Note: the `parent: BasicSoundBank` parameter of the TypeScript version is not needed in Rust
 /// because `BasicPreset` no longer stores a `parentSoundBank` reference.
-pub fn read_presets(chunk: &mut RIFFChunk) -> Vec<SoundFontPreset> {
+///
+/// `keep_terminal` keeps the EOP record (needed when extending with xdta).
+pub fn read_presets(chunk: &mut RIFFChunk, keep_terminal: bool) -> Vec<SoundFontPreset> {
     let mut presets: Vec<SoundFontPreset> = Vec::new();
 
     while chunk.data.len() > chunk.data.current_index {
@@ -143,7 +145,9 @@ pub fn read_presets(chunk: &mut RIFFChunk) -> Vec<SoundFontPreset> {
     }
 
     // Remove EOP (End Of Presets sentinel record)
-    presets.pop();
+    if !keep_terminal {
+        presets.pop();
+    }
 
     presets
 }
@@ -362,13 +366,13 @@ mod tests {
     #[test]
     fn test_read_presets_empty_chunk_returns_empty() {
         let mut chunk = make_chunk(vec![]);
-        assert!(read_presets(&mut chunk).is_empty());
+        assert!(read_presets(&mut chunk, false).is_empty());
     }
 
     #[test]
     fn test_read_presets_single_record_is_eop_returns_empty() {
         let mut chunk = make_chunk(make_phdr_simple("EOP", 0, 0, 0));
-        assert!(read_presets(&mut chunk).is_empty());
+        assert!(read_presets(&mut chunk, false).is_empty());
     }
 
     #[test]
@@ -376,7 +380,7 @@ mod tests {
         let mut data = make_phdr_simple("Piano", 0, 0, 0);
         data.extend(make_phdr_simple("EOP", 0, 0, 3));
         let mut chunk = make_chunk(data);
-        let presets = read_presets(&mut chunk);
+        let presets = read_presets(&mut chunk, false);
         assert_eq!(presets.len(), 1);
         assert_eq!(presets[0].preset.name, "Piano");
     }
@@ -386,7 +390,7 @@ mod tests {
         let mut data = make_phdr_simple("Piano", 0, 0, 0);
         data.extend(make_phdr_simple("EOP", 0, 0, 0));
         let mut chunk = make_chunk(data);
-        let presets = read_presets(&mut chunk);
+        let presets = read_presets(&mut chunk, false);
         assert_eq!(presets.len(), 1);
         assert_ne!(presets[0].preset.name, "EOP");
     }
@@ -399,7 +403,7 @@ mod tests {
         data.extend(make_phdr_simple("Guitar", 25, 0, 4));
         data.extend(make_phdr_simple("EOP", 0, 0, 9));
         let mut chunk = make_chunk(data);
-        let presets = read_presets(&mut chunk);
+        let presets = read_presets(&mut chunk, false);
         assert_eq!(presets.len(), 2);
         assert_eq!(presets[0].zones_count, 4);
         assert_eq!(presets[1].zones_count, 5);
@@ -412,7 +416,7 @@ mod tests {
         data.extend(make_phdr_simple("Violin", 40, 0, 6));
         data.extend(make_phdr_simple("EOP", 0, 0, 10));
         let mut chunk = make_chunk(data);
-        let presets = read_presets(&mut chunk);
+        let presets = read_presets(&mut chunk, false);
         assert_eq!(presets.len(), 3);
         assert_eq!(presets[0].preset.name, "Piano");
         assert_eq!(presets[1].preset.name, "Guitar");
@@ -426,7 +430,7 @@ mod tests {
         data.extend(make_phdr_simple("C", 2, 0, 5));
         data.extend(make_phdr_simple("EOP", 0, 0, 7));
         let mut chunk = make_chunk(data);
-        let presets = read_presets(&mut chunk);
+        let presets = read_presets(&mut chunk, false);
         assert_eq!(presets[0].zones_count, 2); // 2-0
         assert_eq!(presets[1].zones_count, 3); // 5-2
         assert_eq!(presets[2].zones_count, 2); // 7-5
@@ -438,7 +442,7 @@ mod tests {
         let mut data = make_phdr_simple("Drums", 0, 0x0080, 0);
         data.extend(make_phdr_simple("EOP", 0, 0, 1));
         let mut chunk = make_chunk(data);
-        let presets = read_presets(&mut chunk);
+        let presets = read_presets(&mut chunk, false);
         assert!(presets[0].preset.is_gm_gs_drum);
     }
 
@@ -448,7 +452,7 @@ mod tests {
         let mut data = make_phdr_simple("Guitar", 25, 0x0007, 0);
         data.extend(make_phdr_simple("EOP", 0, 0, 1));
         let mut chunk = make_chunk(data);
-        let presets = read_presets(&mut chunk);
+        let presets = read_presets(&mut chunk, false);
         assert_eq!(presets[0].preset.program, 25);
         assert_eq!(presets[0].preset.bank_msb, 7);
     }

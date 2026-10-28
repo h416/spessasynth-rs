@@ -358,11 +358,13 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
     // ── Read instruments ─────────────────────────────────────────────────────
     let instrument_generators = read_generators(&mut igen_chunk);
     let instrument_modulators = decoded_mods_to_mods(read_modulators(&mut imod_chunk));
-    let mut instruments = read_instruments(&mut inst_chunk);
+    // Keep the terminal record (EOI) when extending, the last zone count needs its index
+    let extend_instruments = x_chunks.is_some();
+    let mut instruments = read_instruments(&mut inst_chunk, extend_instruments);
 
     // Apply xdta extensions to instruments (extend name and zone_start_index upper bits)
     if let Some(ref mut x) = x_chunks {
-        let x_instruments = read_instruments(&mut x.inst);
+        let x_instruments = read_instruments(&mut x.inst, true);
         if x_instruments.len() == instruments.len() {
             for (i, inst) in instruments.iter_mut().enumerate() {
                 inst.instrument
@@ -380,6 +382,8 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
                 }
             }
         }
+        // Remove EOI
+        instruments.pop();
     }
 
     // Trim instrument names
@@ -418,11 +422,13 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
     // ── Read presets ─────────────────────────────────────────────────────────
     let preset_generators = read_generators(&mut pgen_chunk);
     let preset_modulators = decoded_mods_to_mods(read_modulators(&mut pmod_chunk));
-    let mut presets = read_presets(&mut phdr_chunk);
+    // Keep the terminal record (EOP) when extending, the last zone count needs its index
+    let extend_presets = x_chunks.is_some();
+    let mut presets = read_presets(&mut phdr_chunk, extend_presets);
 
     // Apply xdta extensions to presets (extend name and zone_start_index upper bits)
     if let Some(ref mut x) = x_chunks {
-        let x_presets = read_presets(&mut x.phdr);
+        let x_presets = read_presets(&mut x.phdr, true);
         if x_presets.len() == presets.len() {
             for (i, pres) in presets.iter_mut().enumerate() {
                 pres.preset.name.push_str(&x_presets[i].preset.name);
@@ -438,6 +444,8 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
                 }
             }
         }
+        // Remove EOP
+        presets.pop();
     }
 
     // Trim preset names
