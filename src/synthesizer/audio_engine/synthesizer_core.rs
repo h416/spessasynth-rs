@@ -300,8 +300,24 @@ pub struct SynthesizerCore {
     /// Equivalent to: sampleTime (private)
     sample_time: f64,
 
-    /// Insertion effect processor.
+    /// The selected insertion effect processor.
+    /// Equivalent to: gsInsertionProcessor
+    /// TS keeps references to the registered instances and the fallback; Rust moves the
+    /// selected one out of `insertion_effects` / `gs_insertion_fallback` into this field
+    /// (see `select_gs_insertion_processor`).
     pub insertion_processor: Box<dyn InsertionProcessor>,
+
+    /// Where `insertion_processor` came from: `Some(type)` for a registered processor,
+    /// `None` for the Thru fallback.
+    insertion_slot: Option<u16>,
+
+    /// The registered insertion processors, one instance per type, except the selected one.
+    /// Equivalent to: insertionEffects
+    insertion_effects: HashMap<u16, Box<dyn InsertionProcessor>>,
+
+    /// The Thru fallback, used when unsupported or after a reset. `None` while selected.
+    /// Equivalent to: gsInsertionFallback
+    gs_insertion_fallback: Option<Box<dyn InsertionProcessor>>,
 
     /// True if any channel has insertion enabled (optimization flag).
     pub gs_insertion_active: bool,
@@ -404,6 +420,13 @@ impl SynthesizerCore {
             event_queue: Vec::new(),
             sample_time: 1.0 / sample_rate,
             insertion_processor: Box::new(ThruFx::new(sample_rate)),
+            insertion_slot: None,
+            // Register insertion
+            insertion_effects: insertion::gs_insertion_effect_list(sample_rate, buf_size)
+                .into_iter()
+                .map(|p| (p.effect_type(), p))
+                .collect(),
+            gs_insertion_fallback: None,
             gs_insertion_active: false,
             insertion_input_l: vec![0.0; buf_size],
             insertion_input_r: vec![0.0; buf_size],
@@ -1337,7 +1360,7 @@ impl SynthesizerCore {
         // 4.3.16 dropped the `insertionActive = false` here: the flag is now derived from
         // the per-channel efxAssign state by `update_active_gs_effects()`, which `reset()`
         // calls after every channel has been reset.
-        self.insertion_processor = Box::new(ThruFx::new(self.sample_rate));
+        self.select_gs_insertion_processor(None);
         self.insertion_processor.reset();
         self.insertion_processor
             .set_send_level_to_reverb(40.0 / 127.0 * EFX_SENDS_GAIN_CORRECTION);
@@ -1572,14 +1595,32 @@ impl SynthesizerCore {
             .sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
     }
 
-    /// Registers a factory-constructed insertion processor (used by tests and the snapshot
-    /// SysEx path via the insertion module's `create_insertion_processor`).
-    #[allow(dead_code)]
-    pub(crate) fn set_insertion_processor_by_type(&mut self, efx_type: u16) {
-        if let Some(proc) = insertion::create_insertion_processor(efx_type, self.sample_rate, self.max_buffer_size) {
-            self.insertion_processor = proc;
-        } else {
-            self.insertion_processor = Box::new(ThruFx::new(self.sample_rate));
+    /// Selects a registered insertion processor (`Some(type)`) or the Thru fallback (`None`),
+    /// returning the previously selected one to where it belongs.
+    /// Equivalent to: `this.gsInsertionProcessor = this.insertionEffects.get(type)` /
+    /// `= this.gsInsertionFallback`
+    pub(crate) fn select_gs_insertion_processor(&mut self, slot: Option<u16>) {
+        if slot == self.insertion_slot {
+            return;
         }
+        let selected = match slot {
+            Some(efx_type) => self.insertion_effects.remove(&efx_type),
+            None => self.gs_insertion_fallback.take(),
+        }
+        .expect("insertion processor is registered");
+        let previous = std::mem::replace(&mut self.insertion_processor, selected);
+        match self.insertion_slot {
+            Some(efx_type) => {
+                self.insertion_effects.insert(efx_type, previous);
+            }
+            None => self.gs_insertion_fallback = Some(previous),
+        }
+        self.insertion_slot = slot;
+    }
+
+    /// True if an insertion processor of this type is registered.
+    /// Equivalent to: `this.insertionEffects.get(type) !== undefined`
+    pub(crate) fn has_gs_insertion_processor(&self, efx_type: u16) -> bool {
+        self.insertion_slot == Some(efx_type) || self.insertion_effects.contains_key(&efx_type)
     }
 }

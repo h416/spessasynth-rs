@@ -1,7 +1,8 @@
 //! thru.rs
 //! purpose: Pass-through insertion effect (no processing).
-//! Ported from: src/synthesizer/audio_engine/effects/insertion/thru.ts
+//! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/insertion/thru.ts
 
+use crate::synthesizer::audio_engine::synth_constants::EFX_SENDS_GAIN_CORRECTION;
 use super::InsertionProcessor;
 
 pub struct ThruFx {
@@ -13,7 +14,7 @@ pub struct ThruFx {
 impl ThruFx {
     pub fn new(_sample_rate: f64) -> Self {
         Self {
-            send_level_to_reverb: 40.0 / 127.0,
+            send_level_to_reverb: 40.0 / 127.0 * EFX_SENDS_GAIN_CORRECTION,
             send_level_to_chorus: 0.0,
             send_level_to_delay: 0.0,
         }

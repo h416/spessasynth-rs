@@ -1,7 +1,7 @@
 //! insertion/mod.rs
-//! purpose: Insertion effect trait, module declarations, and factory function.
-//! Ported from: src/synthesizer/audio_engine/effects/types.ts (InsertionProcessor interface)
-//!              src/synthesizer/audio_engine/effects/insertion_list.ts
+//! purpose: Insertion effect trait, module declarations, and the list of insertion types.
+//! Ported from: src/synthesizer/audio_engine/effects/gs/interface/gs_insertion_processor.ts
+//!              src/synthesizer/audio_engine/effects/gs/implementation/insertion_list.ts
 
 pub mod auto_pan;
 pub mod auto_wah;
@@ -58,20 +58,19 @@ pub trait InsertionProcessor {
     fn set_send_level_to_delay(&mut self, value: f64);
 }
 
-/// Creates an insertion processor for the given EFX type, or None if unsupported.
-pub fn create_insertion_processor(
-    efx_type: u16,
+/// Creates one processor of every supported insertion type, in the TS list order.
+/// Equivalent to: GS_INSERTION_EFFECT_LIST (each entry constructed by registerInsertionProcessor)
+pub fn gs_insertion_effect_list(
     sample_rate: f64,
     max_buffer_size: usize,
-) -> Option<Box<dyn InsertionProcessor>> {
-    match efx_type {
-        0x0000 => Some(Box::new(ThruFx::new(sample_rate))),
-        0x0100 => Some(Box::new(StereoEqFx::new(sample_rate))),
-        0x0120 => Some(Box::new(PhaserFx::new(sample_rate))),
-        0x0121 => Some(Box::new(AutoWahFx::new(sample_rate))),
-        0x0125 => Some(Box::new(TremoloFx::new(sample_rate))),
-        0x0126 => Some(Box::new(AutoPanFx::new(sample_rate))),
-        0x1108 => Some(Box::new(PhAutoWahFx::new(sample_rate, max_buffer_size))),
-        _ => None,
-    }
+) -> Vec<Box<dyn InsertionProcessor>> {
+    vec![
+        Box::new(ThruFx::new(sample_rate)),
+        Box::new(StereoEqFx::new(sample_rate)),
+        Box::new(PhaserFx::new(sample_rate)),
+        Box::new(AutoPanFx::new(sample_rate)),
+        Box::new(AutoWahFx::new(sample_rate)),
+        Box::new(PhAutoWahFx::new(sample_rate, max_buffer_size)),
+        Box::new(TremoloFx::new(sample_rate)),
+    ]
 }

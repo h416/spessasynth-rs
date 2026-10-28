@@ -1,11 +1,12 @@
 //! ph_auto_wah.rs
 //! purpose: Parallel Phaser + Auto-wah insertion effect.
-//! Ported from: src/synthesizer/audio_engine/effects/insertion/ph_auto_wah.ts
+//! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/insertion/ph_auto_wah.ts
 
 use super::utils::{get_pan_table_left, get_pan_table_right};
 use super::phaser::PhaserFx;
 use super::auto_wah::AutoWahFx;
 use super::InsertionProcessor;
+use crate::synthesizer::audio_engine::synth_constants::EFX_SENDS_GAIN_CORRECTION;
 
 const DEFAULT_LEVEL: f64 = 127.0;
 
@@ -34,7 +35,7 @@ impl PhAutoWahFx {
         auto_wah.set_send_level_to_delay(0.0);
 
         let mut fx = Self {
-            send_level_to_reverb: 40.0 / 127.0,
+            send_level_to_reverb: 40.0 / 127.0 * EFX_SENDS_GAIN_CORRECTION,
             send_level_to_chorus: 0.0,
             send_level_to_delay: 0.0,
             ph_pan: 0,
@@ -95,32 +96,41 @@ impl InsertionProcessor for PhAutoWahFx {
         let chr = self.send_level_to_chorus;
         let dly = self.send_level_to_delay;
 
-        // Process phaser (left input only)
-        // TS uses same buffer for L/R output; in Rust we need separate mutable refs
-        self.buffer_ph[..sample_count].fill(0.0);
-        let mut dummy_r = vec![0.0f32; sample_count];
-        let mut send_rev = vec![0.0f32; sample_count];
-        let mut send_chr = vec![0.0f32; sample_count];
-        let mut send_dly = vec![0.0f32; sample_count];
-        self.phaser.process(
-            input_l, input_l,
-            &mut self.buffer_ph, &mut dummy_r,
-            &mut send_rev, &mut send_chr, &mut send_dly,
-            0, sample_count,
+        // Process phaser
+        // TS passes `bufferPh` as every output, so both channels and the (level 0) sends sum into it
+        let buffer_ph = &mut self.buffer_ph;
+        buffer_ph.fill(0.0);
+        let (ph_rev, ph_chr, ph_dly) = (
+            self.phaser.send_level_to_reverb(),
+            self.phaser.send_level_to_chorus(),
+            self.phaser.send_level_to_delay(),
         );
+        // Only takes input from left!
+        self.phaser.process_with(input_l, input_l, sample_count, |i, out_l, out_r| {
+            buffer_ph[i] = (buffer_ph[i] as f64 + out_l) as f32;
+            buffer_ph[i] = (buffer_ph[i] as f64 + out_r) as f32;
+            let mono = (out_l + out_r) * 0.5;
+            buffer_ph[i] = (buffer_ph[i] as f64 + mono * ph_rev) as f32;
+            buffer_ph[i] = (buffer_ph[i] as f64 + mono * ph_chr) as f32;
+            buffer_ph[i] = (buffer_ph[i] as f64 + mono * ph_dly) as f32;
+        });
 
-        // Process auto wah (right input only)
-        self.buffer_aw[..sample_count].fill(0.0);
-        dummy_r[..sample_count].fill(0.0);
-        send_rev[..sample_count].fill(0.0);
-        send_chr[..sample_count].fill(0.0);
-        send_dly[..sample_count].fill(0.0);
-        self.auto_wah.process(
-            input_r, input_r,
-            &mut self.buffer_aw, &mut dummy_r,
-            &mut send_rev, &mut send_chr, &mut send_dly,
-            0, sample_count,
+        // Process auto wah
+        let buffer_aw = &mut self.buffer_aw;
+        buffer_aw.fill(0.0);
+        let (aw_rev, aw_chr, aw_dly) = (
+            self.auto_wah.send_level_to_reverb(),
+            self.auto_wah.send_level_to_chorus(),
+            self.auto_wah.send_level_to_delay(),
         );
+        // Only takes input from right!
+        self.auto_wah.process_with(input_r, input_r, sample_count, |i, out_l, out_r, mono| {
+            buffer_aw[i] = (buffer_aw[i] as f64 + out_l) as f32;
+            buffer_aw[i] = (buffer_aw[i] as f64 + out_r) as f32;
+            buffer_aw[i] = (buffer_aw[i] as f64 + mono * aw_rev) as f32;
+            buffer_aw[i] = (buffer_aw[i] as f64 + mono * aw_chr) as f32;
+            buffer_aw[i] = (buffer_aw[i] as f64 + mono * aw_dly) as f32;
+        });
 
         let pan_l_table = get_pan_table_left();
         let pan_r_table = get_pan_table_right();

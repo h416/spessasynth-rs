@@ -1,7 +1,8 @@
 //! stereo_eq.rs
 //! purpose: 4-band stereo parametric EQ insertion effect.
-//! Ported from: src/synthesizer/audio_engine/effects/insertion/stereo_eq.ts
+//! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/insertion/stereo_eq.ts
 
+use crate::synthesizer::audio_engine::synth_constants::EFX_SENDS_GAIN_CORRECTION;
 use super::utils::{
     BiquadCoeffs, BiquadState, compute_peaking_eq_coeffs, compute_shelf_coeffs, process_biquad,
 };
@@ -43,7 +44,7 @@ pub struct StereoEqFx {
 impl StereoEqFx {
     pub fn new(sample_rate: f64) -> Self {
         let mut fx = Self {
-            send_level_to_reverb: 0.0,
+            send_level_to_reverb: 40.0 / 127.0 * EFX_SENDS_GAIN_CORRECTION,
             send_level_to_chorus: 0.0,
             send_level_to_delay: 0.0,
             sample_rate,

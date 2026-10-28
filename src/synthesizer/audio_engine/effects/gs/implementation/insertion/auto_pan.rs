@@ -1,7 +1,8 @@
 //! auto_pan.rs
 //! purpose: Automatic panning insertion effect.
-//! Ported from: src/synthesizer/audio_engine/effects/insertion/auto_pan.ts
+//! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/insertion/auto_pan.ts
 
+use crate::synthesizer::audio_engine::synth_constants::EFX_SENDS_GAIN_CORRECTION;
 use super::utils::{BiquadCoeffs, BiquadState, apply_shelves, compute_shelf_coeffs};
 use super::convert::InsertionValueConverter;
 use super::InsertionProcessor;
@@ -38,7 +39,7 @@ pub struct AutoPanFx {
 impl AutoPanFx {
     pub fn new(sample_rate: f64) -> Self {
         let mut fx = Self {
-            send_level_to_reverb: 40.0 / 127.0,
+            send_level_to_reverb: 40.0 / 127.0 * EFX_SENDS_GAIN_CORRECTION,
             send_level_to_chorus: 0.0,
             send_level_to_delay: 0.0,
             sample_rate,
