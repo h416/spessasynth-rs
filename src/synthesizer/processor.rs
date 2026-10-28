@@ -153,8 +153,8 @@ impl SynthesizerCore {
 
     /// Sends a channel pressure message to a channel, dispatching events.
     /// Equivalent to: midiChannels[channel].setMIDIParameter("pressure", pressure)
-    /// (TODO(Task 21): the channel-side setMIDIParameter does not exist yet; the legacy
-    /// channelPressure channel method is used.)
+    /// (`channel_pressure` stores the value and recomputes the channel pressure modulators,
+    /// which is what setMIDIParameter does for "pressure".)
     pub fn channel_pressure_channel(&mut self, channel: usize, pressure: u8) {
         let voices = &mut self.voices;
         let events = self.midi_channels[channel].channel_pressure(voices, pressure);
@@ -342,19 +342,6 @@ impl SynthesizerCore {
                 _ => {}
             }
         }
-    }
-
-    /// Renders per-channel audio.
-    /// Stub: processSplit from synthesizer_core.ts is not yet ported.
-    pub fn render_audio_split(
-        &mut self,
-        _reverb: &mut [Vec<f32>],
-        _chorus: &mut [Vec<f32>],
-        _separate: &mut Vec<Vec<Vec<f32>>>,
-        _start_index: usize,
-        _sample_count: usize,
-    ) {
-        // TODO: Port from synthesizer_core.ts processSplit
     }
 }
 

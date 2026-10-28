@@ -24,11 +24,8 @@ use crate::utils::byte_functions::bit_mask::{bit_mask_to_bool, to_numeric_bool};
 
 /// Minimal voice data needed by [`ModulatorSource::get_value`].
 ///
-/// Placeholder until `voice.ts` is ported. Only the three fields that
-/// `getValue()` actually reads are included: `midiNote`, `velocity`, and
-/// `pressure`.
-///
-/// When `voice.ts` is ported, callers can switch to the real `Voice` type.
+/// Only the fields that `getValue()` actually reads are included, so the caller can
+/// pass them without borrowing the whole `Voice`.
 /// Equivalent to the subset of `Voice` used in `getValue()`.
 pub struct VoiceModInputs {
     /// MIDI note number (0–127) — the raw pressed key.

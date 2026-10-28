@@ -18,10 +18,8 @@
 /// this codebase already handle optional `...Options` parameters (see `audio_to_wav` in
 /// `write_wav.rs`).
 ///
-/// As of this port, no caller in the Rust codebase uses this function yet (the TS call sites
-/// — `basic_midi.ts`, `midi_builder.ts`, `downloadable_sounds.ts`, `soundfont/write/write.ts`,
-/// `synthesizer/processor.ts` — belong to files ported in later phase-2 tasks). It is added
-/// now, self-contained and unit-tested, so those later tasks can adopt it directly.
+/// The only Rust caller is `audio_to_wav` (`write_wav.rs`); the other TS call sites take
+/// their options as plain Rust structs.
 ///
 /// Equivalent to: `fillWithDefaults<T>(obj, defObj)`
 pub fn fill_with_defaults<T>(obj: Option<T>, def_obj: T) -> T {

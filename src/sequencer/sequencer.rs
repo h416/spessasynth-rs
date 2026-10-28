@@ -5,7 +5,7 @@
 /// Changes from 4.2.0 (reviewed against the 4.3.0 diff):
 /// - `eventIndexes: number[]` (one cursor per track, resolved via `findFirstEventIndex()`) was
 ///   replaced by a single `index: number` cursor into `BasicMIDI.timeline` (a flattened,
-///   time-sorted `{tr, ev}` list computed once when the MIDI is flushed — ported in Task 18).
+///   time-sorted `{tr, ev}` list computed once when the MIDI is flushed).
 ///   `findFirstEventIndex()`/`find_first_event_index()` no longer exists.
 /// - `playingNotes: {midiNote, channel, velocity}[]` (a flat array, linearly scanned by
 ///   `findIndex`/`splice` on every note on/off) became `playingNotes: Map<number, number>[]`
@@ -33,7 +33,7 @@
 ///   to real/virtual hardware) is out of scope for this offline-WAV-rendering project and was
 ///   never implemented — every `sendMIDI*` wrapper below only has the internal-synth branch.
 /// - `SpessaSynthWarn`/`SpessaSynthGroup`/`SpessaSynthGroupEnd` calls became
-///   `SpessaLog::warn`/`SpessaLog::group`/`SpessaLog::group_end` (Task 18 API; behavior-identical
+///   `SpessaLog::warn`/`SpessaLog::group`/`SpessaLog::group_end` (behavior-identical
 ///   thin wrappers, see `utils/loggin.rs`).
 /// - Cosmetic-only: doc comment wording ("shuffleMode" → "shuffle mode"), `midiControllers` /
 ///   `midiMessageTypes` → `MIDIControllers` / `MIDIMessageTypes` (TS casing convention change;
@@ -343,7 +343,8 @@ impl SpessaSynthSequencer {
         }
         self.song_index = 0;
         self.shuffle_song_indexes();
-        // TODO: preloadSynth for songs without embedded sound bank
+        // preloadSynth is not ported: it only fills the voice cache ahead of time
+        // (getVoicesForPreset), which does not change the rendered output.
         self.load_current_song();
     }
 

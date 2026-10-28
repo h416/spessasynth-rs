@@ -18,8 +18,8 @@
 ///
 /// ## applyInstrumentZones
 /// TypeScript: directly calls `SoundFontInstrument`'s `createSoundFontZone` / `globalZone` methods.
-/// Rust: since `SoundFontInstrument` is not yet ported, the required operations are abstracted
-/// into the `SoundFontInstrumentZoneSink` trait. Implement this trait when porting `SoundFontInstrument`.
+/// Rust: the required operations are abstracted into the `SoundFontInstrumentZoneSink` trait,
+/// implemented by `SoundFontInstrument` (`instruments.rs`).
 ///
 /// ## samples parameter
 /// TypeScript: passes `BasicSample[]` and indexes into it.

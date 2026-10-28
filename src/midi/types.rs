@@ -8,7 +8,7 @@
 ///
 /// TS 4.3.0 also *removed* `DesiredProgramChange`, `DesiredControllerChange`, and
 /// `DesiredChannelTranspose` from this file — folded into `midi_tools/modify_midi.ts`'s
-/// restructured `ModifyMIDIOptions`. The Rust equivalents were deleted in Task 18 along with the
+/// restructured `ModifyMIDIOptions`. The Rust equivalents were deleted along with the
 /// `modify_midi.rs` 4.3.0 port (see `midi_tools::modify_midi::{ModifyMidiOptions,
 /// ChannelModification, ClearableParameter}`).
 use chrono::NaiveDateTime;

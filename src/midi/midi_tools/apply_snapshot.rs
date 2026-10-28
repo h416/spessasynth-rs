@@ -20,7 +20,7 @@
 ///   `reverb_processor`/`chorus_processor`/`delay_processor` snapshots
 ///
 /// `ChannelSnapshot` is still 4.2.0-shaped (flat fields, not the 4.3.0 `systemParameters`
-/// sub-struct — that restructuring lands in Task 21), so the per-channel reads use the bridge:
+/// sub-struct; see `synthesizer_snapshot.rs`), so the per-channel reads use the bridge:
 ///
 /// - `channelSnapshot.systemParameters.isMuted` -> `ChannelSnapshot::is_muted`
 /// - `channelSnapshot.systemParameters.presetLock` -> `ChannelSnapshot::lock_preset`
@@ -31,8 +31,8 @@
 ///
 /// The one remaining gap is `insertionParams`: TS passes `snapshot.insertionProcessor`
 /// (`InsertionProcessorSnapshot`), but `ModifyMidiOptions.insertion_params` expects
-/// `InsertionEffectParams`. Unifying those two effect types is deferred to Task 26 (effects);
-/// it is not WAV-relevant, since the render path never applies snapshots.
+/// `InsertionEffectParams`. Unifying those two effect types is not done: it is not
+/// WAV-relevant, since the render path never applies snapshots.
 use std::collections::HashMap;
 
 use crate::midi::basic_midi::BasicMidi;
@@ -134,10 +134,9 @@ pub fn apply_snapshot_internal(midi: &mut BasicMidi, snapshot: &SynthesizerSnaps
             reverb_params,
             chorus_params,
             delay_params,
-            // TODO(Task 26, effects): TS passes `snapshot.insertionProcessor`
-            // (InsertionProcessorSnapshot) here, but `ModifyMidiOptions.insertion_params`
-            // expects `InsertionEffectParams`. Wiring this requires unifying those two
-            // effect types (not WAV-relevant: the render path never applies snapshots).
+            // Not wired: TS passes `snapshot.insertionProcessor` (InsertionProcessorSnapshot)
+            // here, but `ModifyMidiOptions.insertion_params` expects `InsertionEffectParams`
+            // (see module doc; not WAV-relevant).
             insertion_params: None,
         },
     );

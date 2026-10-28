@@ -5,7 +5,7 @@
 /// Changes from 4.2.0 (reviewed against the 4.3.0 diff):
 /// - `findFirstEventIndex()` (called twice per loop iteration: once to find the event to
 ///   process, once more to find the *next* event to process) is gone entirely. The single
-///   `index` cursor into `BasicMIDI.timeline` (ported in Task 18) replaces the per-track
+///   `index` cursor into `BasicMIDI.timeline` replaces the per-track
 ///   `eventIndexes` array: `timeline[index++]` directly gives the event to process, and
 ///   `timeline[index]` (no further increment) gives the next one — same two-event-lookahead
 ///   shape as before, just without the linear track scan.

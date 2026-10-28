@@ -16,13 +16,12 @@
 ///   `allControllerReset` → `reset` (now carrying the `MIDISystem`), `synthDisplay` →
 ///   `displayMessage`, `masterParameterChange` → `globalParamChange` (now only for the
 ///   global *MIDI* parameters; system-parameter changes fire no event).
-/// - TODO(Task 21, channel restructuring): TS 4.3.0 moved the per-channel callback payload
-///   types (`NoteOnCallback`, `NoteOffCallback`, `ControllerChangeCallback`,
+/// - Not ported (event API, outside the MIDI-to-WAV scope): TS 4.3.0 moved the per-channel
+///   callback payload types (`NoteOnCallback`, `NoteOffCallback`, `ControllerChangeCallback`,
 ///   `ProgramChangeCallback`, `PolyPressureCallback`, `StopAllCallback`, ...) to
 ///   `audio_engine/channel/types.ts` and replaced `channelPropertyChange`/`ChannelProperty`
 ///   with `channelParamChange`/`ChannelMIDIParameterChange`. The Rust equivalents stay here
-///   (with the 4.2.0 payload shapes for the channel-fired ones) until the channel
-///   restructuring lands.
+///   with the 4.2.0 payload shapes. Events do not affect the rendered audio.
 use crate::midi::enums::MidiController;
 use crate::soundbank::basic_soundbank::midi_patch::{MidiPatch, MidiPatchFull};
 use crate::soundbank::types::MIDISystem;
@@ -134,7 +133,7 @@ pub enum GlobalMIDIParameterChangeCallback {
 
 /// Channel property snapshot.
 /// Equivalent to: ChannelProperty (removed in TS 4.3.0 — replaced by the channel MIDI
-/// parameter set; kept until the Task 21 channel restructuring, see module doc)
+/// parameter set; the 4.2.0 event payload is kept, see module doc)
 #[derive(Clone, Copy, Debug)]
 pub struct ChannelProperty {
     pub voices_amount: u32,
@@ -148,7 +147,7 @@ pub struct ChannelProperty {
 }
 
 /// Equivalent to: ChannelPropertyChangeCallback (removed in TS 4.3.0 — replaced by
-/// `channelParamChange`/`ChannelMIDIParameterChange`; kept until Task 21, see module doc)
+/// `channelParamChange`/`ChannelMIDIParameterChange`; kept, see module doc)
 #[derive(Clone, Copy, Debug)]
 pub struct ChannelPropertyChangeCallback {
     pub channel: u8,
@@ -205,7 +204,7 @@ pub enum SynthProcessorEvent {
     GlobalParamChange(GlobalMIDIParameterChangeCallback),
     /// Equivalent to: effectChange
     EffectChange(EffectChangeCallback),
-    /// Kept from 4.2.0 until Task 21 (TS 4.3.0: channelParamChange) — see module doc.
+    /// Kept from 4.2.0 (TS 4.3.0: channelParamChange) — see module doc.
     ChannelPropertyChange(ChannelPropertyChangeCallback),
 }
 

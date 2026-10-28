@@ -270,11 +270,10 @@ impl SynthesizerCore {
     /// Allocates new voices.
     /// Equivalent to: allocateNewVoices(count) (protected)
     pub(crate) fn allocate_new_voices(&mut self, count: usize) {
-        // TODO(Task 22, voice restructuring): TS 4.3.0 passes maxBufferSize to the Voice
-        // constructor (per-voice render buffer); the current Rust Voice takes only sampleRate.
         let sample_rate = self.sample_rate;
+        let max_buffer_size = self.max_buffer_size;
         for _ in 0..count {
-            self.voices.push(Voice::new(sample_rate));
+            self.voices.push(Voice::new(sample_rate, max_buffer_size));
         }
     }
 }

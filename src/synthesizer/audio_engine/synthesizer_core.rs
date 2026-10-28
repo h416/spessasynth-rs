@@ -8,7 +8,7 @@
 /// between the two structs; methods on MidiChannel receive the needed data as parameters.
 ///
 /// # Changes from 4.2.0 (reviewed against the 4.3.0 diff)
-/// Orchestration-layer changes ported in Task 20:
+/// Orchestration-layer changes:
 /// - `masterParameters` split into `midiParameters: GlobalMIDIParameter` +
 ///   `systemParameters: GlobalSystemParameter` (see `parameters/{midi,system}.rs`).
 ///   `enableEffects`/`enableEventSystem` core fields folded into the system parameters.
@@ -26,9 +26,9 @@
 ///   `allControllerReset`), calling `resetMIDIParameters(system)` and respecting
 ///   `delayLock`. The 4.2.0 post-reset locked-controller / pitch-wheel / channel-pressure
 ///   event-restoration block was removed upstream (TS 4.3.0 fires those from
-///   `ch.reset(false)` instead) — removed here too. TODO(Task 21): the per-channel reset
-///   still uses the legacy `reset_controllers`/`reset_preset` pair (TS 4.3.0: `ch.reset()`),
-///   which does not re-fire locked-controller events.
+///   `ch.reset(false)` instead) — removed here too. The per-channel reset is split into
+///   `reset_controllers` + `reset_preset` (TS: `ch.reset(false)`); together they reset the
+///   same state, but the locked-controller restore events are not fired (events only).
 /// - `setReverbMacro`/`setChorusMacro`/`setDelayMacro`: now guarded by the corresponding
 ///   lock system parameter; an *invalid* macro number warns and returns instead of falling
 ///   back to macro 0 (Room1/Chorus1/Delay1); fires `effectChange`.
@@ -39,28 +39,21 @@
 ///   gone (folded into params[20..23]).
 /// - `setMIDIVolume`/`setMasterTuning` were removed upstream (replaced by the
 ///   `midiParameters.volume`/`fineTune` flow applied in the channels' `updateInternalParams`).
-///   TODO(Task 21): they are kept here as legacy plumbing called by
-///   `set_midi_parameter` and the (pre-4.3.0) SysEx handlers, because the current render
-///   path still consumes `midi_volume`/the MASTER_TUNING custom controller. `set_midi_volume`
-///   stores `Math.pow(volume, 2)` (TS 4.3.14: `updateInternalParams` squares
-///   `globalMIDI.volume` — "it corresponds to CC volume, so volume is squared").
+///   Removed here too; the channels get the parameter sets through
+///   `update_channels_internal_params`.
 /// - `processMessage` lost its `force` parameter (and the force-kill Note Off branch).
 /// - `createMIDIChannel`: fires `ChannelAdded` (was `newChannel` + `sendChannelProperty`).
-///   Pre-existing phase-1 divergence kept: the TS constructor-side `channel.setDrums(true)`
-///   for event-sending channels is not called (the Rust port sets `drum_channel` by
-///   `channel % 16 == 9` instead) — revisit in Task 21.
+///   The TS constructor calls `setDrumFlag(true)` on every 16th channel 10; Rust sets
+///   `drum_channel` and recomputes the internal params the same way.
 /// - The per-channel `updateVoiceCount()` loop at the end of `process()` was removed
 ///   upstream (channel voice-count events move to the channel side) — removed here too.
-/// - `process()` no longer skips voices on muted channels in TS 4.3.0 (muting became part of
-///   the channel gain computed in `updateInternalParams`). TODO(Task 21): the `is_muted`
-///   skip is KEPT here, because the current channel code has no gain-based muting yet —
-///   removing it would audibly un-mute muted channels.
-/// - TODO(Task 21-23, not ported — channel/voice/effects internals): `voiceBuffer` (shared
-///   per-voice render buffer), `ch.midiParameters.rxChannel` (currently `rx_channel` is not
-///   implemented in the Rust channel; `customChannelNumbers` dispatch is likewise not
-///   implemented), `ch.setMIDIParameter("pressure", ...)`, `ch.destroy()`, per-channel
-///   `systemParameters.presetLock` juggling in the preset-list refresh, and effect processor
-///   constructors taking `maxBufferSize`.
+/// - `process()` no longer skips voices on muted channels in TS 4.3.0: TS mutes through the
+///   channel system parameter `isMuted` (note-ons are refused and the notes are stopped).
+///   Muting is API-only (no MIDI message sets it); the Rust port keeps the 4.2.0 `is_muted`
+///   flag and its render skip for the API.
+/// - Not ported (API only, no effect on the MIDI-to-WAV output): `ch.destroy()` (Rust drops
+///   the channels) and `updatePresetList()` (TS reruns program changes and `reset()` when a
+///   sound bank is added or removed; Rust loads the sound banks before playback).
 use crate::synthesizer::audio_engine::effects::xg::implementation::chorus::DefaultXGChorus;
 use crate::synthesizer::audio_engine::effects::xg::implementation::insertion::DefaultXGInsertion;
 use crate::synthesizer::audio_engine::effects::xg::implementation::variation::DefaultXGVariation;
@@ -344,7 +337,7 @@ impl SynthesizerCore {
         let voice_cap = DEFAULT_GLOBAL_SYSTEM_PARAMETERS.voice_cap as usize;
         let mut voices = Vec::with_capacity(voice_cap);
         for _ in 0..voice_cap {
-            voices.push(Voice::new(sample_rate));
+            voices.push(Voice::new(sample_rate, buf_size));
         }
 
         let tunings = vec![-1.0f32; 128 * 128];
@@ -522,20 +515,36 @@ impl SynthesizerCore {
         channel.output_right = vec![0.0; self.max_buffer_size];
 
         // Channel 9 (0-based) is the default percussion channel.
-        // (Pre-existing phase-1 divergence from TS's `channel.setDrums(true)` — see module doc.)
         if channel_number % 16 == MIDI_DRUM_CHANNEL {
+            // TS: this.setDrumFlag(true) in the MIDIChannel constructor
             channel.drum_channel = true;
+            channel.update_internal_params();
         }
-
-        // TS 4.3.14 `createMIDIChannel` does NOT fold the live global MIDI key shift
-        // into a newly created channel: it only calls `channel.setDrums(true)` when
-        // `sendEvent` is true (which recomputes the drum-branch key shift, ignoring the
-        // global), and does nothing extra otherwise. A new channel's `currentKeyShift`
-        // therefore starts at the field default (0), just like `MidiChannel::new` already
-        // computes here (its constructor calls `update_internal_params` once with
-        // `global_key_shift` at its default 0.0). Do not eagerly mirror
-        // `self.midi_parameters.key_shift` here — that would diverge from TS.
         self.midi_channels.push(channel);
+
+        // New channels need the default controllers, otherwise they are silent (CC7 = 0)
+        // TS: channel.reset(false)
+        let ch_idx = self.midi_channels.len() - 1;
+        let events_enabled = self.system_parameters.events_enabled;
+        let current_time = self.current_time;
+        let system = self.midi_parameters.system;
+        let mut events = self.midi_channels[ch_idx].reset_controllers(
+            false, // do not send CC events
+            &mut self.voices,
+            current_time,
+            system,
+            DrumLocks::of(&self.system_parameters),
+            events_enabled,
+        );
+        events.append(&mut self.midi_channels[ch_idx].reset_preset(
+            &self.sound_bank_manager,
+            system,
+            DrumLocks::of(&self.system_parameters),
+            events_enabled,
+        ));
+        for event in events {
+            self.call_event(event);
+        }
 
         if send_event {
             self.call_event(SynthProcessorEvent::ChannelAdded);
@@ -611,8 +620,7 @@ impl SynthesizerCore {
 
         // Reset channels
         // Do not send CC changes as we call reset
-        // TODO(Task 21): TS 4.3.0 calls ch.reset(false) — the legacy
-        // reset_controllers/reset_preset pair is kept until the channel restructuring.
+        // TS: ch.reset(false); split into reset_controllers + reset_preset (see module doc)
         for ch_idx in 0..self.midi_channels.len() {
             let mut sub = self.midi_channels[ch_idx].reset_controllers(
                 false, // do not send CC events
@@ -752,8 +760,7 @@ impl SynthesizerCore {
                     continue;
                 }
                 let ch = &mut self.midi_channels[v.channel as usize];
-                // TODO(Task 21): TS 4.3.0 removed this skip (muting moved into the channel gain);
-                // kept because the current channel code has no gain-based muting yet.
+                // Not in TS 4.3.0+ (API-only muting, see module doc).
                 if ch.is_muted {
                     continue;
                 }
@@ -1473,7 +1480,7 @@ impl SynthesizerCore {
     /// Equivalent to: destroySynthProcessor()
     pub fn destroy(&mut self) {
         self.voices.clear();
-        // TODO(Task 21): TS 4.3.0 calls c.destroy() per channel.
+        // TS calls c.destroy() per channel (see module doc).
         for ch in self.midi_channels.iter_mut() {
             ch.locked_controllers.clear();
             ch.preset = None;

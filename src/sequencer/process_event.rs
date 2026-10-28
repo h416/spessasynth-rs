@@ -14,7 +14,7 @@
 ///   (pure rename with an identical default system parameter — see `sequencer.rs`'s module doc
 ///   comment for details). This Rust file keeps calling the existing
 ///   `reset_all_controllers(DEFAULT_SYNTH_MODE)` (out of scope: `processor.rs`).
-/// - `SpessaSynthInfo` → `SpessaLog::info` (Task 18 API; behavior-identical).
+/// - `SpessaSynthInfo` → `SpessaLog::info` (behavior-identical).
 /// - The 4.3.0 top-of-function `if (this.externalMIDIPlayback && event.statusByte >= 0x80) { ...
 ///   return; }` early-out is not reachable in this port: `externalMIDIPlayback` is out of scope
 ///   for this offline-WAV-rendering project and was never implemented (see `sequencer.rs`'s

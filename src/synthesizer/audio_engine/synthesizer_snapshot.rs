@@ -22,12 +22,12 @@
 ///   state) instead of `snapshot.*` — so chorus/delay/midi/system values are effectively
 ///   NOT restored from the snapshot (the system-parameter loop is a complete no-op thanks
 ///   to the equality early-return; the midi-parameter loop re-sets current values, firing
-///   events and legacy plumbing updates only). Only channels, reverb, and
+///   events and channel updates only). Only channels, reverb, and
 ///   insertion are actually restored. (4.4.0 removed Key Modifiers and `keyMappings`.)
 ///
-/// TODO(Task 21, channel restructuring): `midi_channels` still uses the 4.2.0-shaped
-/// `ChannelSnapshot` (flat fields) until `channel_snapshot.rs` is restructured to the 4.3.0
-/// `ChannelSnapshot` (with nested midi/system parameter sets).
+/// `midi_channels` still uses the 4.2.0-shaped `ChannelSnapshot` (flat fields), not the
+/// 4.3.0 one with nested midi/system parameter sets. Snapshots are an API feature: the
+/// MIDI-to-WAV render path never takes or applies one, so this is left as is.
 use std::collections::HashMap;
 
 use crate::midi::midi_tools::midi_utils::MidiUtils;
@@ -94,7 +94,7 @@ pub fn apply_snapshot(core: &mut SynthesizerCore, snapshot: &SynthesizerSnapshot
 
     // Restore channels
     for (i, ch_snap) in snapshot.midi_channels.iter().enumerate() {
-        // TODO(Task 21): TS 4.3.0 is `this.midiChannels[i].applySnapshot(...)`; the legacy
+        // TS 4.3.0 is `this.midiChannels[i].applySnapshot(...)`; the 4.2.0-shaped
         // ChannelSnapshot::apply targets the channel by its stored channel number.
         let _ = i;
         ch_snap.apply(core);
@@ -145,7 +145,7 @@ pub fn apply_snapshot(core: &mut SynthesizerCore, snapshot: &SynthesizerSnapshot
     // Restore MIDI parameters
     // TS 4.3.0 iterates `Object.entries(this.midiParameters)` — the LIVE values, not the
     // snapshot — so this re-sets every MIDI parameter to its current value (firing
-    // globalParamChange events and updating the legacy plumbing) without restoring anything
+    // globalParamChange events and updating the channels) without restoring anything
     // from the snapshot. Ported bug-for-bug, including the iteration order: `Object.entries`
     // follows the key insertion order of `DEFAULT_GLOBAL_MIDI_PARAMETERS`
     // (volume, pan, keyShift, fineTune, system).

@@ -224,8 +224,8 @@ impl Voice {
     /// The default oscillator type is `HERMITE` (= 2), matching
     /// `DEFAULT_GLOBAL_SYSTEM_PARAMETERS.interpolation_type`.
     ///
-    /// Equivalent to: constructor(sampleRate: number)
-    pub fn new(sample_rate: f64) -> Self {
+    /// Equivalent to: constructor(sampleRate: number, bufferSize: number)
+    pub fn new(sample_rate: f64, buffer_size: usize) -> Self {
         Self {
             oscillators: [
                 WavetableOscillator::new(interpolation_types::LINEAR),
@@ -239,7 +239,7 @@ impl Voice {
             modulators: Vec::new(),
             modulator_values: Vec::new(),
             mod_env: ModulationEnvelope::new(),
-            vol_env: VolumeEnvelope::new(sample_rate),
+            vol_env: VolumeEnvelope::new(sample_rate, buffer_size),
             resonance_offset: 0.0,
             priority: 0,
             is_active: false,
@@ -495,6 +495,7 @@ impl VoiceContext for Voice {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::synthesizer::audio_engine::synth_constants::SPESSA_BUFSIZE;
     use crate::soundbank::basic_soundbank::generator_types::{
         GENERATORS_AMOUNT, generator_types as gt,
     };
@@ -510,13 +511,13 @@ mod tests {
 
     #[test]
     fn test_new_oscillator_count() {
-        let v = Voice::new(SAMPLE_RATE);
+        let v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         assert_eq!(v.oscillators.len(), 3);
     }
 
     #[test]
     fn test_new_oscillator_types_match_interpolation_constants() {
-        let v = Voice::new(SAMPLE_RATE);
+        let v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         assert_eq!(
             v.oscillators[0].interpolation_type,
             interpolation_types::LINEAR
@@ -533,7 +534,7 @@ mod tests {
 
     #[test]
     fn test_new_default_oscillator_type_is_hermite() {
-        let v = Voice::new(SAMPLE_RATE);
+        let v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         assert_eq!(
             v.oscillator_type,
             DEFAULT_GLOBAL_SYSTEM_PARAMETERS.interpolation_type
@@ -543,56 +544,56 @@ mod tests {
 
     #[test]
     fn test_new_generators_are_zero() {
-        let v = Voice::new(SAMPLE_RATE);
+        let v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         assert_eq!(v.generators.len(), GENERATORS_AMOUNT);
         assert!(v.generators.iter().all(|&x| x == 0));
     }
 
     #[test]
     fn test_new_modulated_generators_are_zero() {
-        let v = Voice::new(SAMPLE_RATE);
+        let v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         assert!(v.modulated_generators.iter().all(|&x| x == 0));
     }
 
     #[test]
     fn test_new_inactive() {
-        let v = Voice::new(SAMPLE_RATE);
+        let v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         assert!(!v.is_active);
     }
 
     #[test]
     fn test_new_not_in_release() {
-        let v = Voice::new(SAMPLE_RATE);
+        let v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         assert!(!v.is_in_release);
     }
 
     #[test]
     fn test_new_release_start_time_is_infinity() {
-        let v = Voice::new(SAMPLE_RATE);
+        let v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         assert!(v.release_start_time.is_infinite() && v.release_start_time > 0.0);
     }
 
     #[test]
     fn test_new_gain_modifier_is_one() {
-        let v = Voice::new(SAMPLE_RATE);
+        let v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         assert!((v.gain_modifier - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
     fn test_new_tuning_ratio_is_one() {
-        let v = Voice::new(SAMPLE_RATE);
+        let v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         assert!((v.tuning_ratio - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
     fn test_new_portamento_from_key_is_minus_one() {
-        let v = Voice::new(SAMPLE_RATE);
+        let v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         assert_eq!(v.portamento_from_key, -1);
     }
 
     #[test]
     fn test_new_resonance_offset_is_zero() {
-        let v = Voice::new(SAMPLE_RATE);
+        let v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         assert!((v.resonance_offset - 0.0).abs() < f64::EPSILON);
     }
 
@@ -602,7 +603,7 @@ mod tests {
 
     #[test]
     fn test_wavetable_returns_hermite_by_default() {
-        let v = Voice::new(SAMPLE_RATE);
+        let v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         assert_eq!(
             v.wavetable().interpolation_type,
             interpolation_types::HERMITE
@@ -611,7 +612,7 @@ mod tests {
 
     #[test]
     fn test_wavetable_linear_when_type_zero() {
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.oscillator_type = interpolation_types::LINEAR;
         assert_eq!(
             v.wavetable().interpolation_type,
@@ -621,7 +622,7 @@ mod tests {
 
     #[test]
     fn test_wavetable_mut_allows_modification() {
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.wavetable_mut().cursor = 42.0;
         // oscillator_type defaults to HERMITE (2)
         assert!((v.oscillators[2].cursor - 42.0).abs() < f64::EPSILON);
@@ -633,21 +634,21 @@ mod tests {
 
     #[test]
     fn test_setup_sets_start_time() {
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.setup(1.5, 0, 60, 0);
         assert!((v.start_time - 1.5).abs() < f64::EPSILON);
     }
 
     #[test]
     fn test_setup_activates_voice() {
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.setup(0.0, 0, 60, 0);
         assert!(v.is_active);
     }
 
     #[test]
     fn test_setup_clears_release_flags() {
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.is_in_release = true;
         v.has_rendered = true;
         v.setup(0.0, 0, 60, 0);
@@ -657,7 +658,7 @@ mod tests {
 
     #[test]
     fn test_setup_resets_release_start_time_to_infinity() {
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.release_start_time = 1.0;
         v.setup(0.0, 0, 60, 0);
         assert!(v.release_start_time.is_infinite() && v.release_start_time > 0.0);
@@ -665,7 +666,7 @@ mod tests {
 
     #[test]
     fn test_setup_sets_channel_and_note() {
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.setup(0.0, 3, 64, 0);
         assert_eq!(v.channel, 3);
         assert_eq!(v.midi_note, 64);
@@ -673,7 +674,7 @@ mod tests {
 
     #[test]
     fn test_setup_resets_portamento() {
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.portamento_from_key = 50;
         v.portamento_duration = 0.5;
         v.setup(0.0, 0, 60, 0);
@@ -685,7 +686,7 @@ mod tests {
     fn test_setup_resets_tuning_cache() {
         // 4.3.18: voices are recycled, and render_voice only recomputes `tuning_ratio`
         // when the rounded cents change — a stale pair would be reused verbatim.
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.tuning_cents = 137.0;
         v.tuning_ratio = 1.0824;
         v.setup(0.0, 0, 60, 0);
@@ -695,7 +696,7 @@ mod tests {
 
     #[test]
     fn test_setup_resets_override_release_vol_env() {
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.override_release_vol_env = -2320;
         v.setup(0.0, 0, 60, 0);
         assert_eq!(v.override_release_vol_env, 0);
@@ -703,7 +704,7 @@ mod tests {
 
     #[test]
     fn test_setup_resets_pressure() {
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.pressure = 64;
         v.setup(0.0, 0, 60, 0);
         assert_eq!(v.pressure, 0);
@@ -715,7 +716,7 @@ mod tests {
 
     #[test]
     fn test_release_voice_sets_release_time() {
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.setup(0.0, 0, 60, 0);
         v.release_voice(1.0, MIN_NOTE_LENGTH);
         assert!((v.release_start_time - 1.0).abs() < f64::EPSILON);
@@ -723,7 +724,7 @@ mod tests {
 
     #[test]
     fn test_release_voice_extends_short_note() {
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.start_time = 0.0;
         // Release at 0.001 s, which is less than MIN_NOTE_LENGTH (0.03 s)
         v.release_voice(0.001, MIN_NOTE_LENGTH);
@@ -733,7 +734,7 @@ mod tests {
 
     #[test]
     fn test_release_voice_does_not_shorten_long_note() {
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.start_time = 0.0;
         let release_time = 1.0; // much longer than MIN_NOTE_LENGTH
         v.release_voice(release_time, MIN_NOTE_LENGTH);
@@ -746,7 +747,7 @@ mod tests {
 
     #[test]
     fn test_exclusive_release_sets_cutoff_time() {
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.setup(0.0, 0, 60, 0);
         v.exclusive_release(0.5, MIN_EXCLUSIVE_LENGTH);
         assert_eq!(v.override_release_vol_env, EXCLUSIVE_CUTOFF_TIME);
@@ -754,7 +755,7 @@ mod tests {
 
     #[test]
     fn test_exclusive_release_clears_is_in_release() {
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.is_in_release = true;
         v.exclusive_release(0.0, MIN_EXCLUSIVE_LENGTH);
         assert!(!v.is_in_release);
@@ -762,7 +763,7 @@ mod tests {
 
     #[test]
     fn test_exclusive_release_sets_release_start_time() {
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.start_time = 0.0;
         v.exclusive_release(1.0, MIN_EXCLUSIVE_LENGTH);
         // 1.0 − 0.0 = 1.0 ≥ MIN_EXCLUSIVE_LENGTH → release_start_time = 1.0
@@ -775,19 +776,19 @@ mod tests {
 
     #[test]
     fn test_decoded_modulators_empty_by_default() {
-        let v = Voice::new(SAMPLE_RATE);
+        let v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         assert!(v.decoded_modulators().is_empty());
     }
 
     #[test]
     fn test_generators_returns_correct_slice() {
-        let v = Voice::new(SAMPLE_RATE);
+        let v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         assert_eq!(v.generators().len(), GENERATORS_AMOUNT);
     }
 
     #[test]
     fn test_midi_note_returns_usize() {
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.midi_note = 72;
         assert_eq!(v.midi_note(), 72usize);
     }
@@ -809,7 +810,7 @@ mod tests {
 
     #[test]
     fn test_compute_single_modulator_zero_amount_returns_zero() {
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.modulators = vec![make_no_controller_mod(gt::PAN, 0)];
         v.modulator_values = vec![99];
         let midi_controllers = vec![0i16; 147];
@@ -820,7 +821,7 @@ mod tests {
 
     #[test]
     fn test_compute_single_modulator_nonzero_amount_nonzero() {
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         // NO_CONTROLLER source → 1.0; secondary NO_CONTROLLER → 1.0;
         // amount = 100 → computed = 1.0 * 1.0 * 100.0 = 100.0
         v.modulators = vec![make_no_controller_mod(gt::PAN, 100)];
@@ -835,7 +836,7 @@ mod tests {
 
     #[test]
     fn test_compute_single_modulator_writes_to_modulator_values() {
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.modulators = vec![make_no_controller_mod(gt::PAN, 50)];
         v.modulator_values = vec![0];
         let midi_controllers = vec![0i16; 147];
@@ -845,7 +846,7 @@ mod tests {
 
     #[test]
     fn test_compute_single_modulator_transform_type_2_is_abs() {
-        let mut v = Voice::new(SAMPLE_RATE);
+        let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         // transform_type = 2 → abs. Use a negative amount to get negative before abs.
         // But NO_CONTROLLER source → positive, amount negative → negative → |result| > 0
         let mod_ = DecodedModulator::new(0, 0, gt::PAN, -100, 2);
@@ -861,7 +862,7 @@ mod tests {
 
     #[test]
     fn test_modulator_values_empty_by_default() {
-        let v = Voice::new(SAMPLE_RATE);
+        let v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         assert!(v.modulator_values().is_empty());
     }
 }

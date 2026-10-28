@@ -10,7 +10,7 @@
 ///   needed.
 /// - `loadNewSequenceInternal`: only parameter rename (`parsedMidi` → `parsedMIDI`, a JS-only
 ///   identifier rename with no Rust-side equivalent) and `SpessaSynthInfo`/`SpessaSynthWarn` →
-///   `SpessaLog.info`/`SpessaLog.warn` (Task 18 API; behavior-identical thin wrappers, see
+///   `SpessaLog.info`/`SpessaLog.warn` (behavior-identical thin wrappers, see
 ///   `utils/loggin.rs`). No other logic changes.
 /// - `this.synth.clearEmbeddedBank()` → `this.synth.clearEmbeddedSoundBank()` (pure rename on
 ///   `SpessaSynthProcessor`, out of scope: `processor.rs` is not part of this task's file list).
@@ -83,7 +83,7 @@ impl SpessaSynthSequencer {
                 .unwrap();
             let bank_offset = self.songs[song_index].bank_offset as u8;
             self.synth.set_embedded_sound_bank(bank_data, bank_offset);
-            // TODO: preloadSynth for embedded sound bank
+            // preloadSynth is not ported (see `load_new_song_list`)
         }
 
         // Copy over the port data

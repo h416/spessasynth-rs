@@ -10,7 +10,7 @@
 /// caller of `getEvent` — was rewritten in 4.3.0 to inline the same channel/status split instead
 /// of calling `getEvent`.
 ///
-/// Task 19 (sequencer 4.3.0 port) removed this file's `get_event`/`get_channel`/
+/// The sequencer 4.3.0 port removed this file's `get_event`/`get_channel`/
 /// `data_bytes_amount` and `MidiEventInfo` accordingly, since `sequencer/process_event.rs` and
 /// `sequencer/set_time_to.rs` no longer call `get_event` (their last remaining caller) and now
 /// inline the equivalent split, matching TS.

@@ -5,17 +5,16 @@
 /// # TypeScript vs Rust design differences
 ///
 /// ## this: MIDIChannel → ChannelContext trait
-/// TypeScript's `this: MIDIChannel` is abstracted into a `ChannelContext` trait in Rust.
-/// Implement this trait when `MIDIChannel` is ported.
+/// TypeScript's `this: MIDIChannel` is abstracted into a `ChannelContext` trait in Rust
+/// (implemented by `MidiChannel`).
 ///
 /// ## Voice → VoiceContext trait
-/// `Voice` is also not yet ported, so it is abstracted into a `VoiceContext` trait.
+/// `Voice` is abstracted into a `VoiceContext` trait (implemented by `Voice`).
 ///
 /// ## Separation of modulated_generators
 /// TypeScript: directly overwrites `voice.modulatedGenerators`.
 /// Rust: since `voice.compute_single_modulator(&mut self)` requires the same `&mut Voice` borrow,
 /// `modulated_generators` is passed separately as `&mut [i16]` by the caller.
-/// When Voice is ported, extract via `voice.modulated_generators_mut()` before calling this function.
 ///
 /// ## generator_offsets (Mode 2)
 /// TypeScript: creates an offset-applied copy with `generators = new Int16Array(generators)`.

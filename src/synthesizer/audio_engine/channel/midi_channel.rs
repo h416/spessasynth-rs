@@ -139,8 +139,9 @@ pub struct MidiChannel {
     /// Equivalent to: lockedControllers: boolean[]
     pub locked_controllers: Vec<bool>,
 
-    /// Custom (non-SF2) controller values: tuning, modulation depth, etc.
-    /// Equivalent to: customControllers: Float32Array
+    /// Custom (non-SF2) controller values: the SF2 NRPN generator LSB, the modulation
+    /// multiplier and the channel transpose fine tune (see `enums::custom_controllers`).
+    /// Equivalent to: customControllers: Float32Array (removed in TS 4.3.0)
     pub custom_controllers: [f32; CUSTOM_CONTROLLER_TABLE_SIZE],
 
     /// Key shift of the channel in semitones.
@@ -582,6 +583,7 @@ impl MidiChannel {
         voices: &mut [Voice],
         pressure: u8,
     ) -> Vec<SynthProcessorEvent> {
+        self.midi_parameters.pressure = pressure as i32;
         self.midi_controllers[NON_CC_INDEX_OFFSET + modulator_sources::CHANNEL_PRESSURE as usize] =
             (pressure as i16) << 7;
         self.compute_modulators_all_impl(voices, 0, modulator_sources::CHANNEL_PRESSURE as usize);
@@ -1004,9 +1006,9 @@ impl MidiChannel {
     ///
     /// # Note
     /// The TS version additionally recomputes modulators for `pitchWheel`/`pressure`
-    /// and fires a `channelParamChange` event. In this stage those two parameters are
-    /// still handled by the dedicated `pitch_wheel`/`channel_pressure` methods (which
-    /// keep their storage in the `midi_controllers` table and recompute modulators),
+    /// and fires a `channelParamChange` event. Those two parameters go through the
+    /// dedicated `pitch_wheel`/`channel_pressure` methods (which also keep the value in the
+    /// `midi_controllers` table the modulator sources read, and recompute the modulators),
     /// so no voice recompute is done here. The event has no effect on rendering.
     pub fn set_midi_parameter(&mut self, value: ChannelMidiParameterValue) {
         use ChannelMidiParameterValue::*;
@@ -1051,10 +1053,9 @@ impl MidiChannel {
     ///
     /// # Note
     /// The TS version has additional per-parameter side effects (e.g. `presetLock`
-    /// records the locked system, `isMuted`/`keyShift` stop all notes). Those side
-    /// effects require access to voices / the current system and their callers are
-    /// migrated in a later stage; this stage keeps them on the existing dedicated
-    /// paths (`set_preset_lock`, `mute_channel`, `transpose_channel`).
+    /// records the locked system, `isMuted`/`keyShift` stop all notes). Channel system
+    /// parameters are API-only (no MIDI message sets them), so those side effects stay on
+    /// the dedicated API paths (`set_preset_lock`, `mute_channel`).
     pub fn set_system_parameter(&mut self, value: ChannelSystemParameterValue) {
         use ChannelSystemParameterValue::*;
         match value {

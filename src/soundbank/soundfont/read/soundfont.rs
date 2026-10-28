@@ -137,7 +137,7 @@ fn soundfont_sample_to_basic_sample(mut sfs: SoundFontSample) -> BasicSample {
 
 /// Parses a SoundFont2 (`.sf2` / `.sf3`) binary into a `BasicSoundBank`.
 ///
-/// `.sf2pack` (vorbis-compressed smpl) is not yet supported and will panic.
+/// `.sf2pack` (vorbis-compressed smpl) is out of scope (like SF3) and panics.
 ///
 /// # Panics
 /// Panics on malformed RIFF structure, unrecognised FourCC, or corrupted data.
@@ -277,7 +277,7 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
 
     if is_sf2_pack {
         SpessaLog::group_end();
-        panic!("SF2Pack not yet supported: vorbis decoding is not yet implemented.");
+        panic!("SF2Pack is not supported: vorbis decoding is out of scope.");
     }
 
     // Save the start of smpl audio data (cursor points here after reading smpl header)

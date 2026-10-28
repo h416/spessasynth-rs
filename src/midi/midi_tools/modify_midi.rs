@@ -157,8 +157,8 @@ pub struct ChannelModification {
 /// insertion-enabled flags — tracked per-`ChannelSnapshot` instead in the current Rust engine)
 /// and packs only 20 raw parameter bytes, whereas TS 4.3.0's `params` is 23 bytes wide (20
 /// parameters + 3 trailing effect-send slots, indices 20-22). Reconciling the two engine-state
-/// shapes is left to Task 20; `apply_snapshot.rs` bridges between them with a documented,
-/// best-effort field mapping.
+/// shapes is not done (snapshots are API-only); `apply_snapshot.rs` bridges between them
+/// with a documented, best-effort field mapping.
 #[derive(Clone, Debug)]
 pub struct InsertionEffectParams {
     /// The EFX type of this processor, stored as `MSB << 8 | LSB`.

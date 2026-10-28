@@ -18,8 +18,8 @@
 ///
 /// ## applyPresetZones
 /// TypeScript: directly calls `SoundFontPreset`'s `createSoundFontZone` / `globalZone` methods.
-/// Rust: since `SoundFontPreset` is not yet ported, the required operations are abstracted
-/// into the `SoundFontPresetZoneSink` trait. Implement this trait when porting `SoundFontPreset`.
+/// Rust: the required operations are abstracted into the `SoundFontPresetZoneSink` trait,
+/// implemented by `SoundFontPreset` (`presets.rs`).
 ///
 /// ## instruments parameter
 /// TypeScript: passes `BasicInstrument[]` and indexes into it.

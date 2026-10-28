@@ -125,9 +125,7 @@ impl MidiChannel {
         // Reset MIDI parameters (TS: resetMIDIParameter(...) for each one).
         // The ones not listed here are reset further below.
         // TS: resetMIDIParameter("pressure") -> setMIDIParameter("pressure", 0), which
-        // recomputes the channel pressure modulators. Rust keeps the pressure in the
-        // non-CC controller slot, which `channel_pressure` writes.
-        self.set_midi_parameter(ChannelMidiParameterValue::Pressure(0));
+        // recomputes the channel pressure modulators (`channel_pressure` does both).
         events.append(&mut self.channel_pressure(voices, 0));
         self.set_midi_parameter(ChannelMidiParameterValue::RxChannel(self.channel as i32));
         self.set_midi_parameter(ChannelMidiParameterValue::KeyShift(

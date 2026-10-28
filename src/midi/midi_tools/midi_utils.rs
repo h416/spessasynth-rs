@@ -5,10 +5,11 @@
 ///
 /// TS 4.3.0 introduced this file, which absorbed and replaced two 4.2.0 files:
 /// - `src/midi/midi_tools/get_gs_on.ts` (the `getGsOn` free function, now `MidiUtils::gs_reset`;
-///   the temporary Rust `get_gs_on` compatibility wrapper was removed in Task 18)
+///   the temporary Rust `get_gs_on` compatibility wrapper was removed)
 /// - `src/utils/sysex_detector.ts` (the `isXGOn`/`isGSOn`/`isGMOn`/`isGM2On`/`isGSDrumsOn`/
-///   `syxToChannel` free functions, now unified into `MidiUtils::analyze_sysex` which returns a
-///   single `AnalyzedMIDIMessage` classification instead of several independent booleans, plus
+///   `syxToChannel` free functions, now unified into `MidiUtils::analyze_sysex` which returns
+///   `AnalyzedMIDIMessage` classifications (a list since 4.4.0) instead of several
+///   independent booleans, plus
 ///   many previously-unrecognized GS/XG/GM SysEx messages: reverb/chorus/delay/variation/
 ///   insertion effect parameters, master/per-channel key-shift and fine-tune, and — notably —
 ///   GS/XG SysEx-encoded bank-select/program-change/mono-poly messages, which are now converted
@@ -16,14 +17,9 @@
 ///   uses this to replace such SysEx events with regular CC/PC events during RMIDI bank
 ///   correction; this is the "wider MIDI/SysEx support" mentioned in the 4.3.0 release notes).
 ///
-/// Task 17 ported only the subset of `MIDIUtils` consumed by `write/rmidi.rs`: `analyze_sysex`
-/// (plus its private `analyze_gm`/`analyze_gs`/`analyze_xg` helpers), `syx_to_channel`,
-/// `channel_to_syx`, `gs_data`, `gs_message`, `gs_drum_change`, and `gs_reset`.
-///
-/// Task 18 adds `analyze_rpn`/`analyze_nrpn` (channel-parameter-tracker helpers used by
-/// `parameter_tracker.rs` / `modify_midi.rs` / `used_programs_and_keys.rs`), completing the
-/// `MIDIUtils` port and letting those three files drop their dependency on the pre-4.3.0
-/// `utils/sysex_detector.rs` free functions (now deleted).
+/// `analyze_rpn`/`analyze_nrpn` are the channel-parameter-tracker helpers used by
+/// `parameter_tracker.rs` / `modify_midi.rs` / `used_programs_and_keys.rs`, replacing the
+/// pre-4.3.0 `utils/sysex_detector.rs` free functions (now deleted).
 use crate::midi::enums::{
     midi_controllers, midi_message_types, non_registered_lsb, non_registered_msb,
     registered_parameter_types,

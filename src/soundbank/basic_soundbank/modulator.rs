@@ -37,7 +37,7 @@ pub const DEFAULT_RESONANT_MOD_SOURCE: u16 = 711;
 // SoundFontWriteIndexes (minimal stub)
 //
 // Equivalent to: SoundFontWriteIndexes (from src/soundbank/soundfont/write/types.ts)
-// TODO: Move to soundbank/soundfont/write/types.rs when that file is ported.
+// The SF2 writer is outside the MIDI-to-WAV scope, so only this stub is kept.
 // ---------------------------------------------------------------------------
 
 /// Minimal stub for SoundFontWriteIndexes.

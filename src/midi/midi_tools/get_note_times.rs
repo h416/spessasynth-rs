@@ -5,7 +5,7 @@
 ///
 /// TS 4.3.0 dropped the function-local "flatten all track events and sort by tick" step in
 /// favor of iterating `midi.timeline` (a flattened, time-sorted `{tr, ev}` index list computed
-/// once by `BasicMIDI.flush()`, ported in Task 17). This Rust file follows suit: `event_index`
+/// once by `BasicMIDI.flush()`). This Rust file follows suit: `event_index`
 /// walks `midi.timeline` and dereferences `midi.tracks[e.tr].events[e.ev]` instead of maintaining
 /// its own locally-sorted `Vec<&MidiMessage>`.
 use crate::midi::basic_midi::BasicMidi;

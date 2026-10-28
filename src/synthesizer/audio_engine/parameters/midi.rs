@@ -34,7 +34,7 @@ pub struct GlobalMIDIParameter {
     /// From 0 (silent) to 1 (full volume).
     ///
     /// This differs from the `gain` system parameter in that it is squared internally
-    /// (see `SynthesizerCore::set_midi_volume`).
+    /// (see `MidiChannel::update_internal_params`).
     pub volume: f64,
     /// The master pan.
     /// From -1 (left) to 1 (right). 0 is center.

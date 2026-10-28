@@ -144,8 +144,7 @@ impl ChannelSnapshot {
                 patch: ch.patch,
                 name: preset_name,
                 // Equivalent to: isDrum: this.preset.isDrum
-                // (the channel's drum flag tracks preset.isDrum on program change;
-                // the full preset->bank lookup is reworked in a later channel task)
+                // (the channel's drum flag tracks preset.isDrum on program change)
                 is_drum: ch.drum_channel,
             },
             lock_preset: ch.lock_preset,

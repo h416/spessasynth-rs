@@ -12,7 +12,7 @@
 /// the old name.
 ///
 /// TS 4.3.0 also added `RegisteredParameterTypes`, `NonRegisteredMSB`, and `NonRegisteredLSB`
-/// (used by `midi_tools/midi_utils.ts`'s `analyzeRPN`/`analyzeNRPN`, not yet ported).
+/// (used by `midi_tools/midi_utils.ts`'s `analyzeRPN`/`analyzeNRPN`).
 /// MIDI message type constants.
 /// Equivalent to: midiMessageTypes
 pub mod midi_message_types {

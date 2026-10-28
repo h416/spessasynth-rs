@@ -8,13 +8,11 @@
 ///   `ALL_CHANNELS_OR_DIFFERENT_ACTION` (callers now use a literal -1, matching the
 ///   `deviceID: -1` default in `parameters/system.ts`).
 /// - `SYNTHESIZER_GAIN` (1) was replaced by `SPESSASYNTH_GAIN_FACTOR` (0.6), which is applied
-///   inside the channel's `updateInternalParams()` gain computation. TODO(Task 21, channel
-///   restructuring): the constant is defined here but not yet wired into the render path —
-///   doing so requires the 4.3.0 channel gain model and WILL change WAV output.
+///   inside the channel's `updateInternalParams()` gain computation.
 /// - Added: `EFX_SENDS_GAIN_CORRECTION`, `CONTROLLER_TABLE_SIZE` (128 — NOT the same constant
 ///   as the 4.2.0-era `channel/parameters/midi.rs::CONTROLLER_TABLE_SIZE` = 147, which appends
-///   non-CC modulator-source slots and remains in use by the pre-4.3.0 channel code until
-///   Task 21), and `SPESSA_BUFSIZE` documentation updates.
+///   non-CC modulator-source slots and is still used by the Rust channel's controller table),
+///   and `SPESSA_BUFSIZE` documentation updates.
 use std::sync::OnceLock;
 
 use crate::soundbank::types::MIDISystem;
@@ -69,8 +67,7 @@ pub const MIN_EXCLUSIVE_LENGTH: f64 = 0.07;
 
 /// This panning factor ensures that spessasynth doesn't stay too loud.
 /// You can set the `gain` system parameter to an inverse of it to negate the effect.
-/// Equivalent to: SPESSASYNTH_GAIN_FACTOR (new in TS 4.3.0; see module doc TODO — not yet
-/// wired into the render path)
+/// Equivalent to: SPESSASYNTH_GAIN_FACTOR (new in TS 4.3.0)
 pub const SPESSASYNTH_GAIN_FACTOR: f64 = 0.6;
 
 /// The default buffer size for the synthesizer, in samples.

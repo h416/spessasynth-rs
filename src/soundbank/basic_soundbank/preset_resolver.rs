@@ -13,9 +13,8 @@
 ///   `get_used_programs_and_keys` (in `midi_tools::used_programs_and_keys`) is the one that
 ///   depends on this trait to stay decoupled from `basic_soundbank.rs`.
 ///
-/// Implementors:
-/// - `BasicSoundBank`    (implemented when `basic_soundbank.rs` is ported)
-/// - `SoundBankManager`  (implemented when `sound_bank_manager.rs` is ported)
+/// Implementors: `BasicSoundBank` (and test mocks). TS also passes a `SoundBankManager`
+/// to `getUsedProgramsAndKeys` (from `preloadSynth`, which is not ported).
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::soundbank::types::MIDISystem;
