@@ -310,34 +310,34 @@ impl SynthesizerCore {
                         }
                         // Apply to channels (ordered from 0)
                         // Bit 1: channels 14 and 15
-                        if (syx[4] & 1) == 1 {
-                            if let Some(ch) = self.midi_channels.get_mut(14 + channel_offset) {
-                                ch.set_octave_tuning(&new_octave_tuning);
-                            }
+                        if (syx[4] & 1) == 1
+                            && let Some(ch) = self.midi_channels.get_mut(14 + channel_offset)
+                        {
+                            ch.set_octave_tuning(&new_octave_tuning);
                         }
-                        if ((syx[4] >> 1) & 1) == 1 {
-                            if let Some(ch) = self.midi_channels.get_mut(15 + channel_offset) {
-                                ch.set_octave_tuning(&new_octave_tuning);
-                            }
+                        if ((syx[4] >> 1) & 1) == 1
+                            && let Some(ch) = self.midi_channels.get_mut(15 + channel_offset)
+                        {
+                            ch.set_octave_tuning(&new_octave_tuning);
                         }
 
                         // Bit 2: channels 7 to 13
                         for i in 0..7usize {
                             let bit = (syx[5] >> i) & 1;
-                            if bit == 1 {
-                                if let Some(ch) = self.midi_channels.get_mut(7 + i + channel_offset) {
-                                    ch.set_octave_tuning(&new_octave_tuning);
-                                }
+                            if bit == 1
+                                && let Some(ch) = self.midi_channels.get_mut(7 + i + channel_offset)
+                            {
+                                ch.set_octave_tuning(&new_octave_tuning);
                             }
                         }
 
                         // Bit 3: channels 0 to 6
                         for i in 0..7usize {
                             let bit = (syx[6] >> i) & 1;
-                            if bit == 1 {
-                                if let Some(ch) = self.midi_channels.get_mut(i + channel_offset) {
-                                    ch.set_octave_tuning(&new_octave_tuning);
-                                }
+                            if bit == 1
+                                && let Some(ch) = self.midi_channels.get_mut(i + channel_offset)
+                            {
+                                ch.set_octave_tuning(&new_octave_tuning);
                             }
                         }
 

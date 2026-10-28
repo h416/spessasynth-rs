@@ -696,13 +696,12 @@ impl SynthesizerCore {
                     channel.xg_insertion_assigned = true;
                 }
             }
-            if variation_insertion {
-                if let Some(channel) = usize::try_from(self.xg_variation_block.part_number)
+            if variation_insertion
+                && let Some(channel) = usize::try_from(self.xg_variation_block.part_number)
                     .ok()
                     .and_then(|n| self.midi_channels.get_mut(n))
-                {
-                    channel.xg_insertion_assigned = true;
-                }
+            {
+                channel.xg_insertion_assigned = true;
             }
         }
 
@@ -821,10 +820,10 @@ impl SynthesizerCore {
 
             // Variation is processed last
             // See MU128 manual, page 154
-            if variation_insertion {
-                if let Some(channel) = part(self.xg_variation_block.part_number) {
-                    self.process_xg_insertion(XGInsertionTarget::Variation, channel, sample_count);
-                }
+            if variation_insertion
+                && let Some(channel) = part(self.xg_variation_block.part_number)
+            {
+                self.process_xg_insertion(XGInsertionTarget::Variation, channel, sample_count);
             }
 
             // If a channel has insertion assigned (or variation in insertion mode) then its sends are routed globally (not in renderVoice)

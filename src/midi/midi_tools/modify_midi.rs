@@ -975,15 +975,16 @@ pub fn modify_midi_internal(midi: &mut BasicMidi, opts: &ModifyMidiOptions) {
                     } => {
                         let target = (syx_channel as u32 + port_offset) as u8;
                         let has_change = channel_changes.contains_key(&target);
-                        if let Some(syx_status) = channel_statuses.get_mut(target as usize) {
-                            if syx_status.is_first_note_on && has_change {
-                                // No note-on yet. Then use it as relative!
-                                let new_tune = syx_status.fine_tune + cents;
-                                syx_status.key_shift += (new_tune / 100.0).trunc();
-                                syx_status.fine_tune = new_tune % 100.0;
-                                delete_this_event(midi, &mut event_indexes, track_num, index);
-                                break 'process;
-                            }
+                        if let Some(syx_status) = channel_statuses.get_mut(target as usize)
+                            && syx_status.is_first_note_on
+                            && has_change
+                        {
+                            // No note-on yet. Then use it as relative!
+                            let new_tune = syx_status.fine_tune + cents;
+                            syx_status.key_shift += (new_tune / 100.0).trunc();
+                            syx_status.fine_tune = new_tune % 100.0;
+                            delete_this_event(midi, &mut event_indexes, track_num, index);
+                            break 'process;
                         }
                     }
 

@@ -108,7 +108,7 @@ pub struct DrumParameterUtils;
 
 impl DrumParameterUtils {
     /// The default parameters of a drum key.
-    /// Equivalent to: DrumParameterUtils.DEFAULT_DATA[midiNote]
+    /// Equivalent to: DrumParameterUtils.DEFAULT_DATA\[midiNote\]
     pub fn default_data(midi_note: usize) -> DrumParameter {
         DrumParameter {
             pitch_coarse: 0.0,
@@ -125,7 +125,7 @@ impl DrumParameterUtils {
     }
 
     /// The default parameters of a GS User Drum Set key.
-    /// Equivalent to: DrumParameterUtils.DEFAULT_USER_DATA[midiNote]
+    /// Equivalent to: DrumParameterUtils.DEFAULT_USER_DATA\[midiNote\]
     pub fn default_user_data(midi_note: usize) -> UserDrumSetParameter {
         UserDrumSetParameter {
             drum: Self::default_data(midi_note),

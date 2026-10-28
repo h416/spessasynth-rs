@@ -4,7 +4,7 @@
 //! A lot of the tricks here come from FluidSynth.
 //! They are the real smart guys.
 //! Shoutout to them!
-//! https://github.com/FluidSynth/fluidsynth
+//! <https://github.com/FluidSynth/fluidsynth>
 //!
 //! The filtering loop itself is inlined in `render_voice` (as in the TS), so this file only
 //! holds the filter state and the coefficient calculation.
@@ -33,10 +33,12 @@ const CACHE_MAX_CENTS: i32 = 16_384;
 /// Cached biquad filter coefficients: [a0, a1, a2, a3, a4].
 type Coefficients = [f64; 5];
 
-/// Global coefficient caches, shared between all synthesizer instances.
 /// Key: (sample rate bits, resonanceCb, cutoff cents).
+type CacheKey = (u64, i16, i32);
+
+/// Global coefficient caches, shared between all synthesizer instances.
 /// Equivalent to: LowpassFilter.caches
-static CACHES: LazyLock<Mutex<HashMap<(u64, i16, i32), Coefficients>>> =
+static CACHES: LazyLock<Mutex<HashMap<CacheKey, Coefficients>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Biquad lowpass filter applied per voice.
