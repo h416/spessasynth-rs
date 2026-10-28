@@ -185,8 +185,10 @@ pub fn parse_smf_internal(
                 event_data_length = data_bytes_amount(status_byte >> 4) as usize;
                 // Save the status byte
                 running_byte = Some(status_byte);
-            } else if status_byte == midi_message_types::SYSTEM_EXCLUSIVE {
-                // Sysex: VLQ length follows.
+            } else if status_byte == midi_message_types::SYSTEM_EXCLUSIVE
+                || status_byte == midi_message_types::SYSTEM_EXCLUSIVE_ESCAPE
+            {
+                // Sysex or sysex escape/continuation, both have a length
                 event_data_length = read_variable_length_quantity(&mut track_data) as usize;
             } else if status_byte == 0xff {
                 // Meta message (the next byte is the actual status byte).

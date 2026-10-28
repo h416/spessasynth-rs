@@ -196,17 +196,18 @@ impl SynthesizerCore {
                     sys_ex_not_recognized(syx, "Universal System Exclusive");
                     return;
                 }
-                match syx[3] {
-                    0x01 => {
+                // A short (split) SysEx reads `undefined` in TS and takes the default case
+                match syx.get(3).copied() {
+                    Some(0x01) => {
                         spessa_synth_info("MIDI System: General MIDI 1");
                         self.reset(MIDISystem::Gm);
                     }
-                    0x02 => {
+                    Some(0x02) => {
                         // GM System Off
                         spessa_synth_info("MIDI System: Roland GS");
                         self.reset(MIDISystem::Gs);
                     }
-                    0x03 => {
+                    Some(0x03) => {
                         spessa_synth_info("MIDI System: General MIDI 2");
                         self.reset(MIDISystem::Gm2);
                     }

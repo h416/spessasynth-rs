@@ -54,8 +54,8 @@ fn ms_to_timecents(ms: f64) -> i16 {
 }
 
 #[inline]
-fn hz_to_cents(hz: f64) -> i16 {
-    (6900.0 + 1200.0 * (hz / 440.0).log2()) as i16
+fn hz_to_cents(hz: f64) -> f64 {
+    6900.0 + 1200.0 * (hz / 440.0).log2()
 }
 
 impl MidiChannel {
@@ -103,7 +103,12 @@ impl MidiChannel {
             // LFO frequencies (realtime)
             gt::FREQ_VIB_LFO | gt::FREQ_MOD_LFO => {
                 let hz = 0.084 * data_lsb as f64;
-                self.set_generator_override(generator, hz_to_cents(hz), true, voices);
+                self.set_generator_override(
+                    generator,
+                    hz_to_cents(hz).max(-16_000.0) as i16,
+                    true,
+                    voices,
+                );
             }
 
             // Sustains
