@@ -168,8 +168,11 @@ impl XGTremoloBase {
             let m0 = memory[k as usize] as f64;
             let tap_r = (memory[((k + 1) & mask) as usize] as f64 - m0) * frac_right + m0;
             let r = in_r[i] as f64;
-            memory[((t_write_l + pointer) & mask) as usize] = (right_to_l * r + in_l[i] as f64) as f32;
+            // The right line is written first, so the left line wins if both inputs share an address.
+            // Below 44.1 kHz the input addresses 1 and 0 both scale to 0, which would silence the left line.
+            // At 44.1 kHz the left line overwrites the same sample one step later, so this matches it.
             memory[((t_write_r + pointer) & mask) as usize] = (right_to_r * r) as f32;
+            memory[((t_write_l + pointer) & mask) as usize] = (right_to_l * r + in_l[i] as f64) as f32;
             output_left[i] = (tap_l * amp_left * out_l) as f32;
             output_right[i] = (tap_r * amp_right * out_r) as f32;
             pointer = (pointer - 1) & mask;

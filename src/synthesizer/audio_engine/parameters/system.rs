@@ -1,7 +1,7 @@
 /// system.rs (parameters)
 /// purpose: Global system parameters of the synthesizer (editable only via the API):
 /// struct, defaults, and the set handler for SynthesizerCore.
-/// Ported from: src/synthesizer/audio_engine/parameters/system.ts (spessasynth_core 4.3.0)
+/// Ported from: src/synthesizer/audio_engine/parameters/system.ts (spessasynth_core 4.4.2)
 ///
 /// New in TS 4.3.0: the single `MasterParameterType` (4.2.0
 /// `engine_components/master_parameters.ts` + `engine_methods/controller_control/
@@ -79,6 +79,11 @@ pub struct GlobalSystemParameter {
     pub black_midi_mode: bool,
     /// Synthesizer's device ID for system exclusive messages. Set to -1 to accept all.
     pub device_id: i32,
+    /// Some MIDI synths (most notably Microsoft GS Wavetable Synth) incorrectly treat the
+    /// "coarse tune" RPN as semitone pitch change instead of true key shift.
+    /// When this parameter is enabled, `GlobalMIDIParameter::key_shift` and
+    /// `ChannelMIDIParameter::key_shift` are treated as semitone pitch changes.
+    pub pitch_based_key_shift: bool,
 
     // Shared with channel
     /// The master gain. From 0 to any number. 1 is 100% volume.
@@ -132,6 +137,7 @@ pub const DEFAULT_GLOBAL_SYSTEM_PARAMETERS: GlobalSystemParameter = GlobalSystem
 
     black_midi_mode: false,
     device_id: -1,
+    pitch_based_key_shift: false,
 
     // Shared with channel
     gain: 1.0,
@@ -176,6 +182,7 @@ pub enum GlobalSystemParameterChange {
     UserDrumLock(bool),
     BlackMidiMode(bool),
     DeviceId(i32),
+    PitchBasedKeyShift(bool),
     Gain(f64),
     Pan(f64),
     KeyShift(f64),
@@ -190,7 +197,7 @@ impl GlobalSystemParameter {
     /// All parameters with their values, in the key order of
     /// `DEFAULT_GLOBAL_SYSTEM_PARAMETERS`.
     /// Equivalent to: Object.entries(systemParameters)
-    pub fn entries(&self) -> [GlobalSystemParameterChange; 28] {
+    pub fn entries(&self) -> [GlobalSystemParameterChange; 29] {
         use GlobalSystemParameterChange as C;
         [
             C::EffectsEnabled(self.effects_enabled),
@@ -213,6 +220,7 @@ impl GlobalSystemParameter {
             C::UserDrumLock(self.user_drum_lock),
             C::BlackMidiMode(self.black_midi_mode),
             C::DeviceId(self.device_id),
+            C::PitchBasedKeyShift(self.pitch_based_key_shift),
             C::Gain(self.gain),
             C::Pan(self.pan),
             C::KeyShift(self.key_shift),
@@ -298,6 +306,12 @@ impl SynthesizerCore {
                 self.system_parameters.key_shift = v;
                 // TS: if (prev !== value) this.stopAll(true);
                 // (the early return above already guarantees the value changed)
+                self.stop_all(true);
+            }
+
+            C::PitchBasedKeyShift(v) => {
+                set_or_return!(pitch_based_key_shift, v);
+                // Held notes would be released with a different key shift
                 self.stop_all(true);
             }
         }
