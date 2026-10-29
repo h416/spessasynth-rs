@@ -153,8 +153,11 @@ impl XGRotarySpeaker {
             let d = read(memory, (tap_d + pointer + int_d) & mask, frac_d);
             let l = in_l[i] as f64;
             let r = in_r[i] as f64;
-            memory[((write_l + pointer) & mask) as usize] = (right_to_l * r + l) as f32;
+            // The right line is written first, so the left line wins if both inputs share an address.
+            // Below 44.1 kHz the input addresses 1 and 0 both scale to 0, which would silence the left line.
+            // At 44.1 kHz the left line overwrites the same sample one step later, so this matches it.
             memory[((write_r + pointer) & mask) as usize] = (right_to_r * r) as f32;
+            memory[((write_l + pointer) & mask) as usize] = (right_to_l * r + l) as f32;
             output_left[i] = (dry_l * l + a * wet_a_l + s * wet_c_l + d * wet_d_l) as f32;
             output_right[i] = (dry_r * r + b * wet_b_r + s * wet_c_r + d * wet_d_r) as f32;
             pointer = (pointer - 1) & mask;

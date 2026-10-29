@@ -97,6 +97,8 @@ pub struct SynthSystemView {
     pub key_shift: f64,
     /// Equivalent to: systemParameters.fineTune
     pub fine_tune: f64,
+    /// Equivalent to: systemParameters.pitchBasedKeyShift
+    pub pitch_based_key_shift: bool,
 }
 
 impl SynthSystemView {
@@ -109,6 +111,7 @@ impl SynthSystemView {
             pan: sys.pan,
             key_shift: sys.key_shift,
             fine_tune: sys.fine_tune,
+            pitch_based_key_shift: sys.pitch_based_key_shift,
         }
     }
 }
@@ -975,6 +978,10 @@ impl MidiChannel {
         // - System -> System Parameter
         // - MIDI -> MIDI Parameter
 
+        // Global MIDI + Channel MIDI
+        let midi_key_shift = global_midi.key_shift + channel_midi.key_shift;
+        let pitch_based = global_system.pitch_based_key_shift;
+
         // Only Channel System is processed for drum channels.
         // Drum channels ignore key shift
         // Testcase: th07_19_user_gm.mid
@@ -983,12 +990,10 @@ impl MidiChannel {
         } else {
             // Global System
             global_system.key_shift
-                // Global MIDI
-                + global_midi.key_shift
+                // Global MIDI + Channel MIDI (unless pitch based)
+                + (if pitch_based { 0.0 } else { midi_key_shift })
                 // Channel System
                 + channel_system.key_shift
-                // Channel MIDI
-                + channel_midi.key_shift
         };
         // Ensure integer
         self.current_key_shift = current_key_shift.trunc() as i32;
@@ -1005,6 +1010,8 @@ impl MidiChannel {
                 + channel_system.fine_tune
                 // Channel MIDI
                 + channel_midi.fine_tune
+                // MIDI key shift as semitone pitch change
+                + (if pitch_based { midi_key_shift * 100.0 } else { 0.0 })
         };
 
         // [-1;1] normalized

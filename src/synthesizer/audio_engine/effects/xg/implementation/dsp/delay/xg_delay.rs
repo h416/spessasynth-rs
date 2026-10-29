@@ -140,8 +140,11 @@ impl XGDelayBase {
             damp_b = b;
             let l = in_l[i] as f64;
             let r = in_r[i] as f64;
-            memory[at!(t_write_a)] = (right_to_a * r + damped_a * a_to_a + damped_b * b_to_a + l) as f32;
+            // The right line is written first, so the left line wins if both inputs share an address.
+            // Below 44.1 kHz the input addresses 1 and 0 both scale to 0, which would silence the left line.
+            // At 44.1 kHz the left line overwrites the same sample one step later, so this matches it.
             memory[at!(t_write_b)] = (right_to_b * r + damped_a * a_to_b + damped_b * b_to_b) as f32;
+            memory[at!(t_write_a)] = (right_to_a * r + damped_a * a_to_a + damped_b * b_to_a + l) as f32;
             output_left[i] =
                 (right_to_l * r + a * a_to_l + tap_c * c_to_l + tap_d * d_to_l + left_to_l * l) as f32;
             output_right[i] =
