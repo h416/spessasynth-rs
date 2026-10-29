@@ -149,16 +149,12 @@ pub struct ChannelModification {
     pub fine_tune: f64,
 }
 
-/// A local reshaping of TS 4.3.0's `InsertionProcessorSnapshot` (`type`/`params`/`channels`),
-/// used only by `modify_midi`/`apply_snapshot`.
+/// TS 4.3.0's `InsertionProcessorSnapshot` (`type`/`params`/`channels`), the shape the 4.3.0
+/// `modifyMIDIInternal` ported here takes for `insertionParams`.
 ///
-/// This intentionally does *not* reuse `synthesizer_snapshot::InsertionSnapshot` (the current
-/// Rust engine-state type, 4.2.0-shaped): that type has no `channels: Vec<bool>` (per-channel
-/// insertion-enabled flags — tracked per-`ChannelSnapshot` instead in the current Rust engine)
-/// and packs only 20 raw parameter bytes, whereas TS 4.3.0's `params` is 23 bytes wide (20
-/// parameters + 3 trailing effect-send slots, indices 20-22). Reconciling the two engine-state
-/// shapes is not done (snapshots are API-only); `apply_snapshot.rs` bridges between them
-/// with a documented, best-effort field mapping.
+/// The synthesizer snapshot now holds the 4.4.1 `GSInsertionProcessorSnapshot`, which has no
+/// `channels` (the per-channel flag is the channel's `efxAssign` MIDI parameter), so
+/// `apply_snapshot.rs` does not pass it on (see its module doc).
 #[derive(Clone, Debug)]
 pub struct InsertionEffectParams {
     /// The EFX type of this processor, stored as `MSB << 8 | LSB`.

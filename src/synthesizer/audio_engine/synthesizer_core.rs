@@ -72,13 +72,13 @@ use crate::synthesizer::audio_engine::channel::render_voice::{
 use crate::synthesizer::audio_engine::effects::gs::implementation::chorus::SpessaSynthChorus;
 use crate::synthesizer::audio_engine::effects::gs::implementation::delay::DefaultGSDelay;
 use crate::synthesizer::audio_engine::effects::gs::implementation::insertion::{
-    self, InsertionProcessor,
+    self, GSInsertionProcessorSnapshot, InsertionProcessor,
     thru::ThruFx,
 };
 use crate::synthesizer::audio_engine::effects::gs::implementation::reverb::SpessaSynthReverb;
 use crate::synthesizer::audio_engine::voice::lowpass_filter::LowpassFilter;
 use crate::synthesizer::audio_engine::parameters::midi::{
-    DEFAULT_GLOBAL_MIDI_PARAMETERS, GlobalMIDIParameter,
+    DEFAULT_GLOBAL_MIDI_PARAMETERS, GLOBAL_MIDI_PARAMETER_COUNT, GlobalMIDIParameter,
 };
 use crate::synthesizer::audio_engine::parameters::system::{
     DEFAULT_GLOBAL_SYSTEM_PARAMETERS, GlobalSystemParameter,
@@ -172,6 +172,11 @@ pub struct SynthesizerCore {
     /// The global MIDI parameters of the synthesizer.
     /// Equivalent to: midiParameters (new in TS 4.3.0)
     pub midi_parameters: GlobalMIDIParameter,
+
+    /// If a Global MIDI parameter is locked (not allowed to change), indexed by
+    /// `GlobalMidiParameterKey`.
+    /// Equivalent to: lockedMIDIParameters
+    pub locked_midi_parameters: [bool; GLOBAL_MIDI_PARAMETER_COUNT],
 
     /// The system parameters of the synthesizer.
     /// Equivalent to: systemParameters (new in TS 4.3.0)
@@ -371,6 +376,7 @@ impl SynthesizerCore {
             max_buffer_size: buf_size,
             tunings,
             midi_parameters: DEFAULT_GLOBAL_MIDI_PARAMETERS,
+            locked_midi_parameters: [false; GLOBAL_MIDI_PARAMETER_COUNT],
             system_parameters,
             current_time: options.initial_time,
             reverb_processor: SpessaSynthReverb::new(sample_rate, buf_size),
@@ -1365,20 +1371,11 @@ impl SynthesizerCore {
         }));
     }
 
-    /// Returns the insertion effect snapshot.
-    /// Equivalent to: getInsertionSnapshot() (protected in TS 4.3.0; the send-level fields
-    /// were folded into params[20..23])
-    pub fn get_insertion_snapshot(
-        &self,
-    ) -> crate::synthesizer::audio_engine::synthesizer_snapshot::InsertionProcessorSnapshot {
-        crate::synthesizer::audio_engine::synthesizer_snapshot::InsertionProcessorSnapshot {
-            efx_type: self.insertion_processor.effect_type(),
+    /// Equivalent to: getGSInsertionSnapshot() (protected)
+    pub fn get_gs_insertion_snapshot(&self) -> GSInsertionProcessorSnapshot {
+        GSInsertionProcessorSnapshot {
+            r#type: self.insertion_processor.effect_type(),
             params: self.insertion_params,
-            channels: self
-                .midi_channels
-                .iter()
-                .map(|c| c.midi_parameters.efx_assign)
-                .collect(),
         }
     }
 

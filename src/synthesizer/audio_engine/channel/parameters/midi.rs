@@ -204,38 +204,48 @@ impl ChannelMidiParameterValue {
     }
 }
 
+impl ChannelMidiParameter {
+    /// All parameters with their values, in the key order of
+    /// `DEFAULT_CHANNEL_MIDI_PARAMETERS`.
+    /// Equivalent to: Object.entries(midiParameters)
+    pub fn entries(&self) -> [ChannelMidiParameterValue; CHANNEL_MIDI_PARAMETER_COUNT] {
+        use ChannelMidiParameterValue as V;
+        [
+            V::Pressure(self.pressure),
+            V::PitchWheel(self.pitch_wheel),
+            V::PitchWheelRange(self.pitch_wheel_range),
+            V::ModulationDepth(self.modulation_depth),
+            V::RxChannel(self.rx_channel),
+            V::PolyMode(self.poly_mode),
+            V::KeyShift(self.key_shift),
+            V::FineTune(self.fine_tune),
+            V::RandomPan(self.random_pan),
+            V::AssignMode(self.assign_mode),
+            V::EfxAssign(self.efx_assign),
+            V::Cc1(self.cc1),
+            V::Cc2(self.cc2),
+            V::DrumMap(self.drum_map),
+            V::VelocitySenseDepth(self.velocity_sense_depth),
+            V::VelocitySenseOffset(self.velocity_sense_offset),
+            V::DryLevel(self.dry_level),
+        ]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_parameter_keys_are_distinct_and_in_range() {
-        let d = &DEFAULT_CHANNEL_MIDI_PARAMETERS;
-        let values = [
-            ChannelMidiParameterValue::Pressure(d.pressure),
-            ChannelMidiParameterValue::PitchWheel(d.pitch_wheel),
-            ChannelMidiParameterValue::PitchWheelRange(d.pitch_wheel_range),
-            ChannelMidiParameterValue::ModulationDepth(d.modulation_depth),
-            ChannelMidiParameterValue::RxChannel(d.rx_channel),
-            ChannelMidiParameterValue::PolyMode(d.poly_mode),
-            ChannelMidiParameterValue::KeyShift(d.key_shift),
-            ChannelMidiParameterValue::FineTune(d.fine_tune),
-            ChannelMidiParameterValue::RandomPan(d.random_pan),
-            ChannelMidiParameterValue::AssignMode(d.assign_mode),
-            ChannelMidiParameterValue::EfxAssign(d.efx_assign),
-            ChannelMidiParameterValue::Cc1(d.cc1),
-            ChannelMidiParameterValue::Cc2(d.cc2),
-            ChannelMidiParameterValue::DrumMap(d.drum_map),
-            ChannelMidiParameterValue::VelocitySenseDepth(d.velocity_sense_depth),
-            ChannelMidiParameterValue::VelocitySenseOffset(d.velocity_sense_offset),
-            ChannelMidiParameterValue::DryLevel(d.dry_level),
-        ];
-        assert_eq!(values.len(), CHANNEL_MIDI_PARAMETER_COUNT);
+        let values = DEFAULT_CHANNEL_MIDI_PARAMETERS.entries();
         let mut seen = [false; CHANNEL_MIDI_PARAMETER_COUNT];
-        for v in &values {
-            let i = v.key() as usize;
-            assert!(!seen[i]);
-            seen[i] = true;
+        for (i, v) in values.iter().enumerate() {
+            let k = v.key() as usize;
+            // Object.entries order matches the key order
+            assert_eq!(k, i);
+            assert!(!seen[k]);
+            seen[k] = true;
         }
     }
 }

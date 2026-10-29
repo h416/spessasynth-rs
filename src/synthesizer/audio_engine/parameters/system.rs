@@ -186,6 +186,45 @@ pub enum GlobalSystemParameterChange {
     CustomVibrato(bool),
 }
 
+impl GlobalSystemParameter {
+    /// All parameters with their values, in the key order of
+    /// `DEFAULT_GLOBAL_SYSTEM_PARAMETERS`.
+    /// Equivalent to: Object.entries(systemParameters)
+    pub fn entries(&self) -> [GlobalSystemParameterChange; 28] {
+        use GlobalSystemParameterChange as C;
+        [
+            C::EffectsEnabled(self.effects_enabled),
+            C::EventsEnabled(self.events_enabled),
+            C::VoiceCap(self.voice_cap),
+            C::AutoAllocateVoices(self.auto_allocate_voices),
+            C::ReverbGain(self.reverb_gain),
+            C::GsReverbLock(self.gs_reverb_lock),
+            C::XgReverbLock(self.xg_reverb_lock),
+            C::ChorusGain(self.chorus_gain),
+            C::GsChorusLock(self.gs_chorus_lock),
+            C::XgChorusLock(self.xg_chorus_lock),
+            C::GsDelayGain(self.gs_delay_gain),
+            C::GsDelayLock(self.gs_delay_lock),
+            C::XgVariationGain(self.xg_variation_gain),
+            C::XgVariationLock(self.xg_variation_lock),
+            C::GsInsertionLock(self.gs_insertion_lock),
+            C::XgInsertionLock(self.xg_insertion_lock),
+            C::DrumLock(self.drum_lock),
+            C::UserDrumLock(self.user_drum_lock),
+            C::BlackMidiMode(self.black_midi_mode),
+            C::DeviceId(self.device_id),
+            C::Gain(self.gain),
+            C::Pan(self.pan),
+            C::KeyShift(self.key_shift),
+            C::FineTune(self.fine_tune),
+            C::InterpolationType(self.interpolation_type),
+            C::NrpnParamLock(self.nrpn_param_lock),
+            C::MonophonicRetrigger(self.monophonic_retrigger),
+            C::CustomVibrato(self.custom_vibrato),
+        ]
+    }
+}
+
 impl SynthesizerCore {
     /// Sets a system parameter of the synthesizer.
     /// Equivalent to: setSystemParameterInternal(parameter, value)

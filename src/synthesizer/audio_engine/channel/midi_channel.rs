@@ -882,6 +882,12 @@ impl MidiChannel {
     // Channel parameter infrastructure (TS 4.3.0)
     // -----------------------------------------------------------------------
 
+    /// Locks or unlocks a given controller.
+    /// Equivalent to: lockController(controller, isLocked)
+    pub fn lock_controller(&mut self, controller: usize, is_locked: bool) {
+        self.locked_controllers[controller] = is_locked;
+    }
+
     /// Locks or unlocks a given Channel MIDI Parameter.
     /// This prevents any changes to it until it's unlocked.
     /// Equivalent to: lockMIDIParameter(parameter, isLocked)

@@ -58,10 +58,58 @@ impl Default for GlobalMIDIParameter {
     }
 }
 
+/// The keys of [`GlobalMIDIParameter`], used to lock a parameter.
+/// Equivalent to: keyof GlobalMIDIParameter
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GlobalMidiParameterKey {
+    Volume,
+    Pan,
+    KeyShift,
+    FineTune,
+    System,
+}
+
+/// The number of [`GlobalMidiParameterKey`]s.
+pub const GLOBAL_MIDI_PARAMETER_COUNT: usize = 5;
+
+impl GlobalMIDIParameterChangeCallback {
+    /// The parameter this value is for.
+    pub fn key(&self) -> GlobalMidiParameterKey {
+        use GlobalMIDIParameterChangeCallback as V;
+        use GlobalMidiParameterKey as K;
+        match self {
+            V::Volume(_) => K::Volume,
+            V::Pan(_) => K::Pan,
+            V::KeyShift(_) => K::KeyShift,
+            V::FineTune(_) => K::FineTune,
+            V::System(_) => K::System,
+        }
+    }
+}
+
+impl GlobalMIDIParameter {
+    /// All parameters with their values, in the key order of
+    /// `DEFAULT_GLOBAL_MIDI_PARAMETERS`.
+    /// Equivalent to: Object.entries(midiParameters)
+    pub fn entries(&self) -> [GlobalMIDIParameterChangeCallback; GLOBAL_MIDI_PARAMETER_COUNT] {
+        use GlobalMIDIParameterChangeCallback as V;
+        [
+            V::Volume(self.volume),
+            V::Pan(self.pan),
+            V::KeyShift(self.key_shift),
+            V::FineTune(self.fine_tune),
+            V::System(self.system),
+        ]
+    }
+}
+
 impl SynthesizerCore {
     /// Sets a global MIDI parameter of the synthesizer.
     /// Equivalent to: setMIDIParameterInternal(parameter, value)
     pub fn set_midi_parameter(&mut self, change: GlobalMIDIParameterChangeCallback) {
+        if self.locked_midi_parameters[change.key() as usize] {
+            return;
+        }
         match change {
             GlobalMIDIParameterChangeCallback::System(system) => {
                 self.midi_parameters.system = system;
@@ -88,6 +136,13 @@ impl SynthesizerCore {
         self.update_channels_internal_params();
 
         self.call_event(SynthProcessorEvent::GlobalParamChange(change));
+    }
+
+    /// Locks or unlocks a given Global MIDI Parameter.
+    /// This prevents any changes to it until it's unlocked.
+    /// Equivalent to: lockMIDIParameterInternal(parameter, isLocked)
+    pub fn lock_midi_parameter(&mut self, parameter: GlobalMidiParameterKey, is_locked: bool) {
+        self.locked_midi_parameters[parameter as usize] = is_locked;
     }
 
     /// Resets all global MIDI parameters to their default values.

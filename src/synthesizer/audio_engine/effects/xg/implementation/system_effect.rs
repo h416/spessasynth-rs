@@ -1,7 +1,7 @@
 //! The default implementation of an XG system effect block.
 //! Ported from: src/synthesizer/audio_engine/effects/xg/implementation/system_effect.ts
 
-use super::effect::DefaultXGEffect;
+use super::effect::{DefaultXGEffect, XGEffectBlockSnapshot};
 use std::sync::LazyLock;
 
 const MIN_PAN: i32 = 1;
@@ -21,6 +21,19 @@ static PAN_TABLES: LazyLock<([f32; 127], [f32; 127])> = LazyLock::new(|| {
     }
     (left, right)
 });
+
+/// A snapshot of an XG system effect block.
+/// Equivalent to: interface XGSystemEffectBlockSnapshot
+/// (extends XGSystemEffectParameter, XGEffectBlockSnapshot)
+#[derive(Clone, Debug, PartialEq)]
+pub struct XGSystemEffectBlockSnapshot {
+    /// Equivalent to: XGEffectBlockSnapshot
+    pub effect: XGEffectBlockSnapshot,
+    /// Equivalent to: return
+    pub r#return: i32,
+    /// Equivalent to: pan
+    pub pan: i32,
+}
 
 /// The default implementation for XGSystemEffectBlock.
 ///
@@ -44,6 +57,20 @@ impl DefaultXGSystemEffect {
         self.effect.reset();
         self.r#return = 64;
         self.pan = 64;
+    }
+
+    pub fn get_snapshot(&self) -> XGSystemEffectBlockSnapshot {
+        XGSystemEffectBlockSnapshot {
+            effect: self.effect.get_snapshot(),
+            r#return: self.r#return,
+            pan: self.pan,
+        }
+    }
+
+    pub fn apply_snapshot(&mut self, snapshot: &XGSystemEffectBlockSnapshot) {
+        self.effect.apply_snapshot(&snapshot.effect);
+        self.r#return = snapshot.r#return;
+        self.pan = snapshot.pan;
     }
 
     /// Mixes the staged wet output into the system effect destination, applying return and pan.

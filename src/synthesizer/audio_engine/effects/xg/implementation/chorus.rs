@@ -8,7 +8,7 @@ use super::dsp::chorus::{
 use super::dsp::effect_processor::DefaultXGEffectProcessor;
 use super::dsp::no_effect::XGNoEffect;
 use super::effect::DefaultXGEffect;
-use super::system_effect::DefaultXGSystemEffect;
+use super::system_effect::{DefaultXGSystemEffect, XGSystemEffectBlockSnapshot};
 
 /// Equivalent to: CHORUS_MAP
 fn chorus_map(sr: f64, buf: usize) -> Vec<(u16, Box<dyn DefaultXGEffectProcessor>)> {
@@ -32,6 +32,17 @@ fn chorus_map(sr: f64, buf: usize) -> Vec<(u16, Box<dyn DefaultXGEffectProcessor
         (0x43_07, Box::new(gm_flanger::new(sr, buf, false))),
         (0x43_08, Box::new(flanger3::new(sr, buf, false))),
     ]
+}
+
+/// A snapshot of the XG chorus block.
+/// Equivalent to: interface XGChorusBlockSnapshot
+/// (extends XGChorusParameter, XGSystemEffectBlockSnapshot)
+#[derive(Clone, Debug, PartialEq)]
+pub struct XGChorusBlockSnapshot {
+    /// Equivalent to: XGSystemEffectBlockSnapshot
+    pub system: XGSystemEffectBlockSnapshot,
+    /// Equivalent to: sendToReverb
+    pub send_to_reverb: i32,
 }
 
 /// The default implementation for XGChorusBlock.
@@ -61,6 +72,18 @@ impl DefaultXGChorus {
     pub fn reset(&mut self) {
         self.system.reset();
         self.send_to_reverb = 0;
+    }
+
+    pub fn get_snapshot(&self) -> XGChorusBlockSnapshot {
+        XGChorusBlockSnapshot {
+            system: self.system.get_snapshot(),
+            send_to_reverb: self.send_to_reverb,
+        }
+    }
+
+    pub fn apply_snapshot(&mut self, snapshot: &XGChorusBlockSnapshot) {
+        self.system.apply_snapshot(&snapshot.system);
+        self.send_to_reverb = snapshot.send_to_reverb;
     }
 
     /// Process the effect and **adds** it to the output.

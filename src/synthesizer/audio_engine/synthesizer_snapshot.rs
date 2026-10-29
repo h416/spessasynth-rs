@@ -1,91 +1,83 @@
-/// synthesizer_snapshot.rs
-/// purpose: Full-synthesizer state snapshot.
-/// Ported from: src/synthesizer/audio_engine/synthesizer_snapshot.ts (spessasynth_core 4.3.0;
-/// moved out of snapshot/ in the upstream 4.3.0 restructuring)
-///
-/// # Changes from 4.2.0 (reviewed against the 4.3.0 diff)
-/// - `SynthesizerSnapshot` is now a plain interface (no class methods): fields renamed
-///   `channelSnapshots` → `midiChannels`, `masterParameters` → the
-///   `systemParameters`/`midiParameters` pair, `reverbSnapshot`/`chorusSnapshot`/
-///   `delaySnapshot`/`insertionSnapshot` → `reverbProcessor`/`chorusProcessor`/
-///   `delayProcessor`/`insertionProcessor`. `create`/`apply`/`copyFrom` became the
-///   free-standing `getSynthesizerSnapshot`/`applySnapshot` (bound to SynthesizerCore);
-///   `copyFrom` was dropped (Rust: `Clone`).
-/// - `InsertionProcessorSnapshot` lost its `sendLevelToReverb/Chorus/Delay` fields — the
-///   sends moved into `params[20..23]` (the parameter cache grew 20 → 23). Its `channels`
-///   flags now read `c.midiParameters.efxAssign`.
-/// - `applySnapshot` restores the insertion effect by *sending GS SysEx* through
-///   `systemExclusive` (via `MIDIUtils.gsData`) instead of the removed
-///   `sendAddress`-on-processor helper, letting the regular Roland EFX handler apply it.
-/// - Upstream self-iteration quirks in `applySnapshot`, ported bug-for-bug (marked below):
-///   chorus/delay processors and the midi/system parameter sets iterate `this.*` (the LIVE
-///   state) instead of `snapshot.*` — so chorus/delay/midi/system values are effectively
-///   NOT restored from the snapshot (the system-parameter loop is a complete no-op thanks
-///   to the equality early-return; the midi-parameter loop re-sets current values, firing
-///   events and channel updates only). Only channels, reverb, and
-///   insertion are actually restored. (4.4.0 removed Key Modifiers and `keyMappings`.)
-///
-/// `midi_channels` still uses the 4.2.0-shaped `ChannelSnapshot` (flat fields), not the
-/// 4.3.0 one with nested midi/system parameter sets. Snapshots are an API feature: the
-/// MIDI-to-WAV render path never takes or applies one, so this is left as is.
-use std::collections::HashMap;
-
+//! synthesizer_snapshot.rs
+//! purpose: Full-synthesizer state snapshot.
+//! Ported from: src/synthesizer/audio_engine/synthesizer_snapshot.ts
+//!
+//! `applySnapshot`/`getSynthesizerSnapshot` are bound to `SpessaSynthProcessor` in TS;
+//! Rust binds them to `SynthesizerCore`, which owns the channels and the effects.
+use crate::midi::drum_parameters::{DrumParameterUtils, UserDrumSetParameter};
 use crate::midi::midi_tools::midi_utils::MidiUtils;
 use crate::synthesizer::audio_engine::channel::channel_snapshot::ChannelSnapshot;
+use crate::synthesizer::audio_engine::channel::midi_channel::DrumLocks;
 use crate::synthesizer::audio_engine::effects::gs::implementation::chorus::ChorusSnapshot;
 use crate::synthesizer::audio_engine::effects::gs::implementation::delay::DelaySnapshot;
+use crate::synthesizer::audio_engine::effects::gs::implementation::insertion::GSInsertionProcessorSnapshot;
 use crate::synthesizer::audio_engine::effects::gs::implementation::reverb::ReverbSnapshot;
-use crate::synthesizer::audio_engine::parameters::midi::GlobalMIDIParameter;
+use crate::synthesizer::audio_engine::effects::xg::implementation::chorus::XGChorusBlockSnapshot;
+use crate::synthesizer::audio_engine::effects::xg::implementation::insertion::XGInsertionBlockSnapshot;
+use crate::synthesizer::audio_engine::effects::xg::implementation::system_effect::XGSystemEffectBlockSnapshot;
+use crate::synthesizer::audio_engine::effects::xg::implementation::variation::XGVariationBlockSnapshot;
+use crate::synthesizer::audio_engine::parameters::midi::{
+    GLOBAL_MIDI_PARAMETER_COUNT, GlobalMIDIParameter,
+};
 use crate::synthesizer::audio_engine::parameters::system::GlobalSystemParameter;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
-use crate::synthesizer::types::GlobalMIDIParameterChangeCallback;
 
-/// Snapshot of the insertion effect processor state.
-/// Equivalent to: InsertionProcessorSnapshot (effects/types.ts, 4.3.0 shape)
-#[derive(Clone, Debug, PartialEq)]
-pub struct InsertionProcessorSnapshot {
-    /// The EFX type of this processor, stored as `MSB << 8 | LSB`.
-    /// Equivalent to: type
-    pub efx_type: u16,
-    /// 20 parameters for the effect (255 = "no change") + 3 effect sends
-    /// (indices 20, 21, 22).
-    /// Equivalent to: params: Uint8Array
-    pub params: [u8; 23],
-    /// A boolean list for channels that have the insertion effect enabled.
-    /// Equivalent to: channels: boolean[]
-    pub channels: Vec<bool>,
-}
-
-/// Snapshot of the complete synthesizer state.
+/// This interface is a snapshot of a `SpessaSynthProcessor`,
+/// capturing its current state, which can be saved and restored.
+///
+/// This can be useful for creating a different processor
+/// (for example, for rendering to an audio file)
+/// and copying the current processor's state.
 /// Equivalent to: interface SynthesizerSnapshot
 #[derive(Clone, Debug)]
 pub struct SynthesizerSnapshot {
-    /// Per-channel state snapshots.
-    /// Equivalent to: midiChannels: ChannelSnapshot[]
+    /// The snapshots of all MIDI channels of the synth.
+    /// Equivalent to: midiChannels
     pub midi_channels: Vec<ChannelSnapshot>,
 
-
-    /// Equivalent to: systemParameters: GlobalSystemParameter
+    /// All Global MIDI Parameters of the synthesizer.
+    /// Equivalent to: midiParameters
+    pub midi_parameters: GlobalMIDIParameter,
+    /// Locks of all Global MIDI Parameters of the synthesizer, indexed by
+    /// `GlobalMidiParameterKey`.
+    /// Equivalent to: lockedMIDIParameters
+    pub locked_midi_parameters: [bool; GLOBAL_MIDI_PARAMETER_COUNT],
+    /// All Global System Parameters of the synthesizer.
+    /// Equivalent to: systemParameters
     pub system_parameters: GlobalSystemParameter,
 
-    /// Equivalent to: midiParameters: GlobalMIDIParameter
-    pub midi_parameters: GlobalMIDIParameter,
+    /// A snapshot of the reverb processor.
+    /// Equivalent to: gsReverbProcessor
+    pub gs_reverb_processor: ReverbSnapshot,
+    /// A snapshot of the chorus processor.
+    /// Equivalent to: gsChorusProcessor
+    pub gs_chorus_processor: ChorusSnapshot,
+    /// A snapshot of the delay processor.
+    /// Equivalent to: gsDelayProcessor
+    pub gs_delay_processor: DelaySnapshot,
+    /// A snapshot of the insertion effect processor.
+    /// Equivalent to: gsInsertionProcessor
+    pub gs_insertion_processor: GSInsertionProcessorSnapshot,
 
-    /// Equivalent to: gsReverbProcessor (4.3.0 `reverbProcessor` shape; API only)
-    pub reverb_processor: ReverbSnapshot,
+    /// A snapshot of the XG reverb block.
+    /// Equivalent to: xgReverbBlock
+    pub xg_reverb_block: XGSystemEffectBlockSnapshot,
+    /// A snapshot of the XG chorus block.
+    /// Equivalent to: xgChorusBlock
+    pub xg_chorus_block: XGChorusBlockSnapshot,
+    /// A snapshot of the XG variation block.
+    /// Equivalent to: xgVariationBlock
+    pub xg_variation_block: XGVariationBlockSnapshot,
+    /// Snapshots of the XG insertion blocks.
+    /// Equivalent to: xgInsertionBlocks
+    pub xg_insertion_blocks: Vec<XGInsertionBlockSnapshot>,
 
-    /// Equivalent to: gsChorusProcessor (4.3.0 `chorusProcessor` shape; API only)
-    pub chorus_processor: ChorusSnapshot,
-
-    /// Equivalent to: gsDelayProcessor (4.3.0 `delayProcessor` shape; API only)
-    pub delay_processor: DelaySnapshot,
-
-    /// Equivalent to: gsInsertionProcessor (4.3.0 `insertionProcessor` shape; API only)
-    pub insertion_processor: InsertionProcessorSnapshot,
+    /// A snapshot of the User Drum Set parameters.
+    /// Equivalent to: userDrumSets
+    pub user_drum_sets: Vec<Vec<UserDrumSetParameter>>,
 }
 
-/// Applies the snapshot to the synthesizer.
-/// Equivalent to: applySnapshot(this: SynthesizerCore, snapshot)
+/// Equivalent to: applySnapshot(snapshot)
 pub fn apply_snapshot(core: &mut SynthesizerCore, snapshot: &SynthesizerSnapshot) {
     // Add channels if more needed
     while core.midi_channels.len() < snapshot.midi_channels.len() {
@@ -93,307 +85,233 @@ pub fn apply_snapshot(core: &mut SynthesizerCore, snapshot: &SynthesizerSnapshot
     }
 
     // Restore channels
-    for (i, ch_snap) in snapshot.midi_channels.iter().enumerate() {
-        // TS 4.3.0 is `this.midiChannels[i].applySnapshot(...)`; the 4.2.0-shaped
-        // ChannelSnapshot::apply targets the channel by its stored channel number.
-        let _ = i;
-        ch_snap.apply(core);
+    for i in 0..snapshot.midi_channels.len() {
+        let current_system = core.midi_parameters.system;
+        let locks = DrumLocks::of(&core.system_parameters);
+        let enable_event_system = core.system_parameters.events_enabled;
+        let current_time = core.current_time;
+        let events = core.midi_channels[i].apply_snapshot(
+            &snapshot.midi_channels[i],
+            &mut core.voices,
+            &core.sound_bank_manager,
+            current_system,
+            locks,
+            enable_event_system,
+            current_time,
+        );
+        for ev in events {
+            core.call_event(ev);
+        }
     }
+    // Activate the restored receive channel routing
+    core.custom_channel_numbers = core
+        .midi_channels
+        .iter()
+        .any(|c| c.midi_parameters.rx_channel != c.channel as i32);
 
     // Restore effect processors
-    // Reverb is restored from the snapshot...
-    let rev = &snapshot.reverb_processor;
-    core.reverb_processor.set_character(rev.character);
-    core.reverb_processor.set_pre_lowpass(rev.pre_lowpass);
+    // (Object.entries follows the key order of each processor's getSnapshot)
+    let rev = &snapshot.gs_reverb_processor;
     core.reverb_processor.set_level(rev.level);
+    core.reverb_processor.set_pre_lowpass(rev.pre_lowpass);
+    core.reverb_processor.set_character(rev.character);
     core.reverb_processor.set_time(rev.time);
     core.reverb_processor.set_delay_feedback(rev.delay_feedback);
     core.reverb_processor.set_pre_delay_time(rev.pre_delay_time);
+    let cho = &snapshot.gs_chorus_processor;
+    core.chorus_processor.set_pre_lowpass(cho.pre_lowpass);
+    core.chorus_processor.set_depth(cho.depth);
+    core.chorus_processor.set_delay(cho.delay);
+    core.chorus_processor.set_send_level_to_delay(cho.send_level_to_delay);
+    core.chorus_processor.set_send_level_to_reverb(cho.send_level_to_reverb);
+    core.chorus_processor.set_rate(cho.rate);
+    core.chorus_processor.set_feedback(cho.feedback);
+    core.chorus_processor.set_level(cho.level);
+    let dly = &snapshot.gs_delay_processor;
+    core.delay_processor.set_level(dly.level);
+    core.delay_processor.set_pre_lowpass(dly.pre_lowpass);
+    core.delay_processor.set_time_center(dly.time_center);
+    core.delay_processor.set_time_ratio_right(dly.time_ratio_right);
+    core.delay_processor.set_time_ratio_left(dly.time_ratio_left);
+    core.delay_processor.set_level_center(dly.level_center);
+    core.delay_processor.set_level_left(dly.level_left);
+    core.delay_processor.set_level_right(dly.level_right);
+    core.delay_processor.set_feedback(dly.feedback);
+    core.delay_processor.set_send_level_to_reverb(dly.send_level_to_reverb);
 
-    // ...but TS 4.3.0 iterates `Object.entries(this.chorusProcessor)` /
-    // `Object.entries(this.delayProcessor)` — the LIVE processors, not the snapshot — so the
-    // chorus and delay assignments are self-assignments (no-ops). Ported bug-for-bug: the
-    // chorus/delay snapshots are NOT restored.
-
-    // Restore insertion (via GS SysEx, letting the Roland EFX handler apply it)
-    let is = &snapshot.insertion_processor;
-    let syx = MidiUtils::gs_data(
-        0x40,
-        0x03,
-        0x00,
-        &[(is.efx_type >> 8) as u8, (is.efx_type & 0x7f) as u8],
+    // Restore insertion
+    // Call the handler directly so the device ID filter and the port offset do not apply
+    let is = &snapshot.gs_insertion_processor;
+    core.handle_gs(
+        &MidiUtils::gs_data(0x40, 0x03, 0x00, &[(is.r#type >> 8) as u8, (is.r#type & 0x7f) as u8]),
+        0,
     );
-    core.system_exclusive(&syx, 0);
 
     for i in 0..is.params.len() {
         if is.params[i] != 255 {
-            let syx = MidiUtils::gs_data(0x40, 0x03, (3 + i) as u8, &[is.params[i]]);
-            core.system_exclusive(&syx, 0);
+            core.handle_gs(&MidiUtils::gs_data(0x40, 0x03, (3 + i) as u8, &[is.params[i]]), 0);
         }
     }
 
-    for channel in 0..is.channels.len() {
-        let syx = MidiUtils::gs_data(
-            0x40,
-            0x40 | MidiUtils::channel_to_syx(channel as u8),
-            0x22,
-            &[if is.channels[channel] { 1 } else { 0 }],
-        );
-        core.system_exclusive(&syx, 0);
+    // Restore XG effects
+    core.xg_reverb_block.apply_snapshot(&snapshot.xg_reverb_block);
+    core.xg_chorus_block.apply_snapshot(&snapshot.xg_chorus_block);
+    core.xg_variation_block.apply_snapshot(&snapshot.xg_variation_block);
+    for i in 0..core.xg_insertion_blocks.len() {
+        let insertion = &mut core.xg_insertion_blocks[i];
+        insertion.apply_snapshot(&snapshot.xg_insertion_blocks[i]);
+    }
+
+    // Restore user drum sets
+    for (drum_set, user_drum_set) in snapshot.user_drum_sets.iter().enumerate() {
+        for (midi_note, param) in user_drum_set.iter().enumerate() {
+            DrumParameterUtils::copy_into_user(
+                param,
+                &mut core.sound_bank_manager.user_drum_sets[drum_set].key_params[midi_note],
+            );
+        }
     }
 
     // Restore MIDI parameters
-    // TS 4.3.0 iterates `Object.entries(this.midiParameters)` — the LIVE values, not the
-    // snapshot — so this re-sets every MIDI parameter to its current value (firing
-    // globalParamChange events and updating the channels) without restoring anything
-    // from the snapshot. Ported bug-for-bug, including the iteration order: `Object.entries`
-    // follows the key insertion order of `DEFAULT_GLOBAL_MIDI_PARAMETERS`
-    // (volume, pan, keyShift, fineTune, system).
-    let mp = core.midi_parameters;
-    core.set_midi_parameter(GlobalMIDIParameterChangeCallback::Volume(mp.volume));
-    core.set_midi_parameter(GlobalMIDIParameterChangeCallback::Pan(mp.pan));
-    core.set_midi_parameter(GlobalMIDIParameterChangeCallback::KeyShift(mp.key_shift));
-    core.set_midi_parameter(GlobalMIDIParameterChangeCallback::FineTune(mp.fine_tune));
-    core.set_midi_parameter(GlobalMIDIParameterChangeCallback::System(mp.system));
+    // Unlock them first
+    core.locked_midi_parameters = [false; GLOBAL_MIDI_PARAMETER_COUNT];
+
+    // Then set
+    for value in snapshot.midi_parameters.entries() {
+        core.set_midi_parameter(value);
+    }
+
+    // Then re-lock!
+    core.locked_midi_parameters = snapshot.locked_midi_parameters;
 
     // Restore system parameters last
-    // TS 4.3.0 likewise iterates `Object.entries(this.systemParameters)` (the LIVE values);
-    // since setSystemParameterInternal early-returns when the value is unchanged, this loop
-    // is a complete no-op. Ported bug-for-bug (as a no-op).
+    for value in snapshot.system_parameters.entries() {
+        core.set_system_parameter(value);
+    }
 
-    // Then update active effects (new in 4.3.16)
+    // Then update active effects
     core.update_active_gs_effects();
 }
 
-/// Creates a snapshot of the current synthesizer state.
-/// Equivalent to: getSynthesizerSnapshot(this: SynthesizerCore)
+/// Equivalent to: getSynthesizerSnapshot()
 pub fn get_synthesizer_snapshot(core: &SynthesizerCore) -> SynthesizerSnapshot {
     SynthesizerSnapshot {
         midi_parameters: core.midi_parameters,
+        locked_midi_parameters: core.locked_midi_parameters,
         system_parameters: core.system_parameters.clone(),
-        midi_channels: (0..core.midi_channels.len())
-            .map(|i| ChannelSnapshot::create(core, i))
+        midi_channels: core.midi_channels.iter().map(|c| c.get_snapshot()).collect(),
+        gs_reverb_processor: core.reverb_processor.get_snapshot(),
+        gs_chorus_processor: core.chorus_processor.get_snapshot(),
+        gs_delay_processor: core.delay_processor.get_snapshot(),
+        gs_insertion_processor: core.get_gs_insertion_snapshot(),
+        xg_reverb_block: core.xg_reverb_block.get_snapshot(),
+        xg_chorus_block: core.xg_chorus_block.get_snapshot(),
+        xg_variation_block: core.xg_variation_block.get_snapshot(),
+        xg_insertion_blocks: core.xg_insertion_blocks.iter().map(|i| i.get_snapshot()).collect(),
+        user_drum_sets: core
+            .sound_bank_manager
+            .user_drum_sets
+            .iter()
+            .map(|d| d.get_snapshot())
             .collect(),
-        reverb_processor: core.reverb_processor.get_snapshot(),
-        chorus_processor: core.chorus_processor.get_snapshot(),
-        delay_processor: core.delay_processor.get_snapshot(),
-        insertion_processor: core.get_insertion_snapshot(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-        use crate::synthesizer::audio_engine::parameters::system::GlobalSystemParameterChange;
-    use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
-    use crate::synthesizer::types::{SynthProcessorEvent, SynthProcessorOptions};
-    use std::sync::{Arc, Mutex};
+    use crate::synthesizer::audio_engine::channel::parameters::midi::ChannelMidiParameterValue;
+    use crate::synthesizer::audio_engine::parameters::midi::GlobalMidiParameterKey;
+    use crate::synthesizer::audio_engine::parameters::system::GlobalSystemParameterChange;
+    use crate::synthesizer::types::{GlobalMIDIParameterChangeCallback, SynthProcessorOptions};
 
-    // -----------------------------------------------------------------------
-    // Helpers
-    // -----------------------------------------------------------------------
-
-    fn make_core() -> (SynthesizerCore, Arc<Mutex<Vec<SynthProcessorEvent>>>) {
-        let events: Arc<Mutex<Vec<SynthProcessorEvent>>> = Arc::new(Mutex::new(Vec::new()));
-        let ev_clone = Arc::clone(&events);
-        let core = SynthesizerCore::new(
-            move |ev| {
-                ev_clone.lock().unwrap().push(ev);
-            },
-            44100.0,
-            SynthProcessorOptions::default(),
-        );
-        (core, events)
-    }
-
-    fn make_core_with_channels(n: usize) -> (SynthesizerCore, Arc<Mutex<Vec<SynthProcessorEvent>>>) {
-        let (mut core, events) = make_core();
+    fn make_core_with_channels(n: usize) -> SynthesizerCore {
+        let mut core = SynthesizerCore::new(|_| {}, 44100.0, SynthProcessorOptions::default());
         for _ in 0..n {
             core.create_midi_channel(false);
         }
-        (core, events)
+        core
     }
 
-    // -----------------------------------------------------------------------
-    // get_synthesizer_snapshot — reads from SynthesizerCore
-    // -----------------------------------------------------------------------
-
     #[test]
-    fn test_create_captures_channel_count() {
-        let (mut core, _) = make_core();
-        core.create_midi_channel(false);
-        core.create_midi_channel(false);
-        core.create_midi_channel(false);
+    fn test_get_captures_channels_and_blocks() {
+        let core = make_core_with_channels(3);
         let snap = get_synthesizer_snapshot(&core);
         assert_eq!(snap.midi_channels.len(), 3);
+        assert_eq!(snap.xg_insertion_blocks.len(), core.xg_insertion_blocks.len());
+        assert_eq!(snap.user_drum_sets.len(), 2);
+        // Default sends after resetGSInsertionParams: reverb 40, chorus 0, delay 0
+        assert_eq!(snap.gs_insertion_processor.params[20], 40);
+        assert_eq!(snap.gs_insertion_processor.params[21], 0);
+        assert_eq!(snap.gs_insertion_processor.params[22], 0);
     }
 
     #[test]
-    fn test_create_captures_system_gain() {
-        let (mut core, _) = make_core();
-        core.set_system_parameter(GlobalSystemParameterChange::Gain(2.0));
-        let snap = get_synthesizer_snapshot(&core);
-        assert!((snap.system_parameters.gain - 2.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn test_create_captures_voice_cap() {
-        let (mut core, _) = make_core();
-        core.set_system_parameter(GlobalSystemParameterChange::VoiceCap(200));
-        let snap = get_synthesizer_snapshot(&core);
-        assert_eq!(snap.system_parameters.voice_cap, 200);
-    }
-
-    #[test]
-    fn test_create_captures_device_id() {
-        let (mut core, _) = make_core();
-        core.set_system_parameter(GlobalSystemParameterChange::DeviceId(5));
-        let snap = get_synthesizer_snapshot(&core);
-        assert_eq!(snap.system_parameters.device_id, 5);
-    }
-
-    #[test]
-    fn test_create_captures_black_midi_mode() {
-        let (mut core, _) = make_core();
-        core.set_system_parameter(GlobalSystemParameterChange::BlackMidiMode(true));
-        let snap = get_synthesizer_snapshot(&core);
-        assert!(snap.system_parameters.black_midi_mode);
-    }
-
-    #[test]
-    fn test_create_captures_midi_parameters() {
-        let (mut core, _) = make_core();
-        core.set_midi_parameter(GlobalMIDIParameterChangeCallback::Volume(0.4));
-        let snap = get_synthesizer_snapshot(&core);
-        assert!((snap.midi_parameters.volume - 0.4).abs() < 1e-9);
-    }
-
-    #[test]
-    fn test_create_captures_insertion_snapshot_shape() {
-        let (core, _) = make_core_with_channels(4);
-        let snap = get_synthesizer_snapshot(&core);
-        assert_eq!(snap.insertion_processor.channels.len(), 4);
-        assert_eq!(snap.insertion_processor.params.len(), 23);
-        // Default sends after resetInsertionParams: reverb 40, chorus 0, delay 0
-        assert_eq!(snap.insertion_processor.params[20], 40);
-        assert_eq!(snap.insertion_processor.params[21], 0);
-        assert_eq!(snap.insertion_processor.params[22], 0);
-    }
-
-    #[test]
-    fn test_create_zero_channels_gives_empty_snapshots() {
-        let (core, _) = make_core();
-        let snap = get_synthesizer_snapshot(&core);
-        assert!(snap.midi_channels.is_empty());
-    }
-
-    // -----------------------------------------------------------------------
-    // apply_snapshot — writes back to SynthesizerCore
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_apply_adds_missing_channels() {
-        let (mut core, _) = make_core();
-        // Snapshot has 3 channel snapshots, core has 0 channels
-        let (core2, _) = make_core_with_channels(3);
-        let snap = get_synthesizer_snapshot(&core2);
-        assert_eq!(snap.midi_channels.len(), 3);
-
+    fn test_apply_adds_missing_channels_and_keeps_extra_ones() {
+        let snap = get_synthesizer_snapshot(&make_core_with_channels(3));
+        let mut core = make_core_with_channels(0);
         apply_snapshot(&mut core, &snap);
         assert_eq!(core.midi_channels.len(), 3);
-    }
-
-    #[test]
-    fn test_apply_does_not_remove_extra_channels() {
-        // If the core has more channels than the snapshot, extra channels are kept
-        let (mut core, _) = make_core_with_channels(5);
-        let (core2, _) = make_core_with_channels(3);
-        let snap = get_synthesizer_snapshot(&core2);
+        let mut core = make_core_with_channels(5);
         apply_snapshot(&mut core, &snap);
-        // 5 channels remain; apply only adds, never removes
         assert_eq!(core.midi_channels.len(), 5);
     }
 
-    #[test]
-    fn test_apply_restores_channel_mute_via_snapshot() {
-        let (mut core, _) = make_core_with_channels(1);
-        core.midi_channels[0].system_parameters.is_muted = true;
-        let snap = get_synthesizer_snapshot(&core);
-
-        // Clear state then restore
-        core.midi_channels[0].system_parameters.is_muted = false;
-        apply_snapshot(&mut core, &snap);
-
-        assert!(core.midi_channels[0].system_parameters.is_muted);
+    /// Loads the type defaults: the processors' parameters stay zero until the first type
+    /// change (TS and Rust alike), and applying zeros clamps them to the parameter minimums.
+    fn reset_xg_blocks(core: &mut SynthesizerCore) {
+        core.xg_reverb_block.reset();
+        core.xg_chorus_block.reset();
+        core.xg_variation_block.reset();
     }
 
     #[test]
-    fn test_apply_restores_reverb_from_snapshot() {
-        let (mut core, _) = make_core();
-        core.set_reverb_macro(6); // Delay macro: time 32, feedback 40
+    fn test_apply_restores_effects() {
+        let mut core = make_core_with_channels(1);
+        reset_xg_blocks(&mut core);
+        core.set_reverb_macro(6);
+        core.set_chorus_macro(5);
+        core.xg_chorus_block.send_to_reverb = 33;
+        core.xg_variation_block.part_number = 4;
+        core.xg_reverb_block.system.r#return = 50;
         let snap = get_synthesizer_snapshot(&core);
 
-        core.set_reverb_macro(4); // back to Hall2
-        apply_snapshot(&mut core, &snap);
-
-        let restored = core.reverb_processor.get_snapshot();
-        assert_eq!(restored.time, snap.reverb_processor.time);
-        assert_eq!(restored.delay_feedback, snap.reverb_processor.delay_feedback);
+        let mut other = make_core_with_channels(1);
+        reset_xg_blocks(&mut other);
+        apply_snapshot(&mut other, &snap);
+        assert_eq!(other.reverb_processor.get_snapshot().time, snap.gs_reverb_processor.time);
+        assert_eq!(other.chorus_processor.get_snapshot(), snap.gs_chorus_processor);
+        assert_eq!(other.xg_chorus_block.get_snapshot(), snap.xg_chorus_block);
+        assert_eq!(other.xg_variation_block.get_snapshot(), snap.xg_variation_block);
+        assert_eq!(other.xg_reverb_block.get_snapshot(), snap.xg_reverb_block);
     }
 
     #[test]
-    fn test_apply_does_not_restore_chorus_upstream_quirk() {
-        // TS 4.3.0 iterates the LIVE chorus processor instead of the snapshot — the chorus
-        // snapshot is NOT restored (ported bug-for-bug).
-        let (mut core, _) = make_core();
-        core.set_chorus_macro(5); // Flanger
-        let snap = get_synthesizer_snapshot(&core);
-
-        core.set_chorus_macro(2); // Chorus3 (the reset default)
-        let live_before = core.chorus_processor.get_snapshot();
-        apply_snapshot(&mut core, &snap);
-
-        let live_after = core.chorus_processor.get_snapshot();
-        assert_eq!(live_after, live_before, "chorus must remain unchanged");
-    }
-
-    #[test]
-    fn test_apply_does_not_restore_system_parameters_upstream_quirk() {
-        // TS 4.3.0 iterates the LIVE system parameters (self-set + equality early-return
-        // → complete no-op): the snapshot's system parameters are NOT restored.
-        let (mut core, _) = make_core();
-        core.set_system_parameter(GlobalSystemParameterChange::Gain(0.25));
-        let snap = get_synthesizer_snapshot(&core);
-
-        core.set_system_parameter(GlobalSystemParameterChange::Gain(1.0));
-        apply_snapshot(&mut core, &snap);
-
-        assert!((core.system_parameters.gain - 1.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn test_apply_does_not_restore_midi_parameters_upstream_quirk() {
-        // Same upstream quirk for the MIDI parameters (re-set to current values).
-        let (mut core, _) = make_core();
+    fn test_apply_restores_global_parameters_and_locks() {
+        let mut core = make_core_with_channels(1);
         core.set_midi_parameter(GlobalMIDIParameterChangeCallback::Volume(0.25));
+        core.lock_midi_parameter(GlobalMidiParameterKey::Volume, true);
+        core.set_system_parameter(GlobalSystemParameterChange::Gain(0.5));
         let snap = get_synthesizer_snapshot(&core);
 
-        core.set_midi_parameter(GlobalMIDIParameterChangeCallback::Volume(1.0));
-        apply_snapshot(&mut core, &snap);
-
-        assert!((core.midi_parameters.volume - 1.0).abs() < 1e-9);
+        let mut other = make_core_with_channels(1);
+        other.lock_midi_parameter(GlobalMidiParameterKey::Pan, true);
+        apply_snapshot(&mut other, &snap);
+        assert_eq!(other.midi_parameters.volume, 0.25);
+        assert_eq!(other.system_parameters.gain, 0.5);
+        assert_eq!(other.locked_midi_parameters, snap.locked_midi_parameters);
+        // A locked parameter ignores changes
+        other.set_midi_parameter(GlobalMIDIParameterChangeCallback::Volume(1.0));
+        assert_eq!(other.midi_parameters.volume, 0.25);
     }
 
-    // -----------------------------------------------------------------------
-    // Clone independence (replaces the removed copyFrom)
-    // -----------------------------------------------------------------------
-
     #[test]
-    fn test_clone_is_independent() {
-        let (core, _) = make_core();
+    fn test_apply_restores_receive_channel_routing() {
+        let mut core = make_core_with_channels(2);
+        core.midi_channels[1].set_midi_parameter(ChannelMidiParameterValue::RxChannel(0));
         let snap = get_synthesizer_snapshot(&core);
-        let mut copy = snap.clone();
-        copy.system_parameters.gain = 0.123;
-        assert!((snap.system_parameters.gain - 1.0).abs() < 1e-9);
+        let mut other = make_core_with_channels(2);
+        apply_snapshot(&mut other, &snap);
+        assert!(other.custom_channel_numbers);
     }
 }

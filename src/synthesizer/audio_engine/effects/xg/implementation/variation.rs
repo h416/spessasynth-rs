@@ -21,7 +21,7 @@ use super::dsp::symphonic::symphonic::XGSymphonic;
 use super::dsp::thru::XGThru;
 use super::dsp::tremolo::{auto_pan, tremolo};
 use super::effect::DefaultXGEffect;
-use super::system_effect::DefaultXGSystemEffect;
+use super::system_effect::{DefaultXGSystemEffect, XGSystemEffectBlockSnapshot};
 
 /// Equivalent to: VARIATION_MAP
 fn variation_map(sr: f64, buf: usize) -> Vec<(u16, Box<dyn DefaultXGEffectProcessor>)> {
@@ -73,6 +73,23 @@ fn variation_map(sr: f64, buf: usize) -> Vec<(u16, Box<dyn DefaultXGEffectProces
     ]
 }
 
+/// A snapshot of the XG variation block.
+/// Equivalent to: interface XGVariationBlockSnapshot
+/// (extends XGVariationParameter, XGSystemEffectBlockSnapshot, XGInsertionBlockSnapshot)
+#[derive(Clone, Debug, PartialEq)]
+pub struct XGVariationBlockSnapshot {
+    /// Equivalent to: XGSystemEffectBlockSnapshot
+    pub system: XGSystemEffectBlockSnapshot,
+    /// Equivalent to: insertionMode
+    pub insertion_mode: bool,
+    /// Equivalent to: partNumber
+    pub part_number: i32,
+    /// Equivalent to: sendToReverb
+    pub send_to_reverb: i32,
+    /// Equivalent to: sendToChorus
+    pub send_to_chorus: i32,
+}
+
 /// The default implementation for XGVariationBlock.
 /// Equivalent to: class DefaultXGVariation
 pub struct DefaultXGVariation {
@@ -115,6 +132,24 @@ impl DefaultXGVariation {
         self.part_number = 127;
         self.send_to_reverb = 0;
         self.send_to_chorus = 0;
+    }
+
+    pub fn get_snapshot(&self) -> XGVariationBlockSnapshot {
+        XGVariationBlockSnapshot {
+            system: self.system.get_snapshot(),
+            insertion_mode: self.insertion_mode,
+            part_number: self.part_number,
+            send_to_reverb: self.send_to_reverb,
+            send_to_chorus: self.send_to_chorus,
+        }
+    }
+
+    pub fn apply_snapshot(&mut self, snapshot: &XGVariationBlockSnapshot) {
+        self.system.apply_snapshot(&snapshot.system);
+        self.insertion_mode = snapshot.insertion_mode;
+        self.part_number = snapshot.part_number;
+        self.send_to_reverb = snapshot.send_to_reverb;
+        self.send_to_chorus = snapshot.send_to_chorus;
     }
 
     /// Process the effect in _system_ mode and **adds** it to the output.

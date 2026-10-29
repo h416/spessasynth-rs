@@ -18,7 +18,7 @@ use super::dsp::reverb::{hall1, hall2, plate, room1, room2, room3, stage1, stage
 use super::dsp::symphonic::symphonic::XGSymphonic;
 use super::dsp::thru::XGThru;
 use super::dsp::tremolo::{auto_pan, tremolo};
-use super::effect::DefaultXGEffect;
+use super::effect::{DefaultXGEffect, XGEffectBlockSnapshot};
 
 /// Equivalent to: INSERTION_MAP
 fn insertion_map(sr: f64, buf: usize) -> Vec<(u16, Box<dyn DefaultXGEffectProcessor>)> {
@@ -66,6 +66,17 @@ fn insertion_map(sr: f64, buf: usize) -> Vec<(u16, Box<dyn DefaultXGEffectProces
     ]
 }
 
+/// A snapshot of an XG insertion block.
+/// Equivalent to: interface XGInsertionBlockSnapshot
+/// (extends XGInsertionParameter, XGEffectBlockSnapshot)
+#[derive(Clone, Debug, PartialEq)]
+pub struct XGInsertionBlockSnapshot {
+    /// Equivalent to: XGEffectBlockSnapshot
+    pub effect: XGEffectBlockSnapshot,
+    /// Equivalent to: partNumber
+    pub part_number: i32,
+}
+
 /// The default implementation for XGInsertionBlock.
 /// Equivalent to: class DefaultXGInsertion
 pub struct DefaultXGInsertion {
@@ -93,6 +104,18 @@ impl DefaultXGInsertion {
     pub fn reset(&mut self) {
         self.effect.reset();
         self.part_number = 127;
+    }
+
+    pub fn get_snapshot(&self) -> XGInsertionBlockSnapshot {
+        XGInsertionBlockSnapshot {
+            effect: self.effect.get_snapshot(),
+            part_number: self.part_number,
+        }
+    }
+
+    pub fn apply_snapshot(&mut self, snapshot: &XGInsertionBlockSnapshot) {
+        self.effect.apply_snapshot(&snapshot.effect);
+        self.part_number = snapshot.part_number;
     }
 
     /// Process the effect in insertion mode and **overwrites** it to the input.

@@ -447,7 +447,7 @@ impl SpessaSynthProcessor {
     pub fn apply_snapshot(&mut self, snapshot: SynthesizerSnapshot) {
         self.saved_snapshot = Some(snapshot.clone());
         apply_snapshot(&mut self.synth_core, &snapshot);
-        self.reset();
+        // Don't reset here, I don't know why I put a reset here previously.
     }
 
     /// Gets a synthesizer snapshot from this processor instance.

@@ -21,6 +21,20 @@ use self::stereo_eq::StereoEqFx;
 use self::thru::ThruFx;
 use self::tremolo::TremoloFx;
 
+/// A snapshot of the GS insertion effect processor.
+/// Equivalent to: interface GSInsertionProcessorSnapshot
+#[derive(Clone, Debug, PartialEq)]
+pub struct GSInsertionProcessorSnapshot {
+    /// The EFX type of this processor, stored as `MSB << 8 | LSB`.
+    /// For example `0x30`, `0x10` is `0x3010`.
+    /// Equivalent to: type
+    pub r#type: u16,
+    /// 20 parameters for the effect. These depend on effect type.
+    /// After that 3 effect sends follow (index 20, 21, 22). 255 means "no change".
+    /// Equivalent to: params
+    pub params: [u8; 23],
+}
+
 /// Trait for insertion effect processors.
 /// Equivalent to: InsertionProcessor interface in types.ts
 pub trait InsertionProcessor {

@@ -8,7 +8,7 @@ use super::dsp::reverb::{
     room_s, stage1, stage2, tunnel, white_room,
 };
 use super::effect::DefaultXGEffect;
-use super::system_effect::DefaultXGSystemEffect;
+use super::system_effect::{DefaultXGSystemEffect, XGSystemEffectBlockSnapshot};
 
 /// Equivalent to: REVERB_MAP
 fn reverb_map(sr: f64, buf: usize) -> Vec<(u16, Box<dyn DefaultXGEffectProcessor>)> {
@@ -56,6 +56,14 @@ impl DefaultXGReverb {
 
     pub fn reset(&mut self) {
         self.system.reset();
+    }
+
+    pub fn get_snapshot(&self) -> XGSystemEffectBlockSnapshot {
+        self.system.get_snapshot()
+    }
+
+    pub fn apply_snapshot(&mut self, snapshot: &XGSystemEffectBlockSnapshot) {
+        self.system.apply_snapshot(snapshot);
     }
 
     /// Process the effect and **adds** it to the output.
