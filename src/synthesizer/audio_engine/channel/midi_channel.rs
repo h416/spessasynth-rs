@@ -562,17 +562,6 @@ impl MidiChannel {
         })]
     }
 
-    /// Sets the GM/GS drum flag (updates patch.is_gm_gs_drum).
-    /// Equivalent to: setGSDrums(drums)
-    pub fn set_gs_drums(&mut self, drums: bool) {
-        if drums == self.patch.is_gm_gs_drum {
-            return;
-        }
-        self.set_bank_lsb(0);
-        self.set_bank_msb(0);
-        self.patch.is_gm_gs_drum = drums;
-    }
-
     /// Equivalent to: resetVibratoParams()
     pub(crate) fn reset_vibrato_params(&mut self) {
         if !self.synth_system.custom_vibrato {

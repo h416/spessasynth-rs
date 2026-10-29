@@ -507,9 +507,9 @@ impl SpessaSynthProcessor {
     }
 
     /// Stops all notes on all channels.
-    /// Equivalent to: stopAllChannels(force = false)
-    pub fn stop_all_channels(&mut self, force: bool) {
-        self.synth_core.stop_all_channels(force);
+    /// Equivalent to: stopAll(force = false)
+    pub fn stop_all(&mut self, force: bool) {
+        self.synth_core.stop_all(force);
     }
 
     /// Destroys the synthesizer, releasing all resources.
@@ -814,14 +814,14 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // stop_all_channels
+    // stop_all
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_stop_all_channels_fires_stop_events() {
+    fn test_stop_all_fires_stop_events() {
         let (mut proc, events) = make_processor();
         let before = event_count(&events);
-        proc.stop_all_channels(false);
+        proc.stop_all(false);
         let evs = events.lock().unwrap();
         // Should have emitted at least one StopAll per channel
         assert!(evs.len() > before);

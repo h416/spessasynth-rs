@@ -296,9 +296,9 @@ impl SynthesizerCore {
                     return;
                 }
                 self.system_parameters.key_shift = v;
-                // TS: if (prev !== value) this.stopAllChannels(true);
+                // TS: if (prev !== value) this.stopAll(true);
                 // (the early return above already guarantees the value changed)
-                self.stop_all_channels(true);
+                self.stop_all(true);
             }
         }
 

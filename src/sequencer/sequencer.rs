@@ -414,7 +414,7 @@ impl SpessaSynthSequencer {
             self.synth
                 .controller_change(i, midi_controllers::SUSTAIN_PEDAL, 0);
         }
-        self.synth.stop_all_channels(false);
+        self.synth.stop_all(false);
     }
 
     /// Resets all controllers.

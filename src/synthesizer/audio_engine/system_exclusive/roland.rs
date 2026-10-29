@@ -22,7 +22,7 @@ use crate::midi::drum_parameters::UserDrumSetParameterChange;
 
 impl SynthesizerCore {
     /// Handles a GS system exclusive message.
-    /// Equivalent to: handleGS(syx, channelOffset)
+    /// Equivalent to: rolandSystemExclusive(syx, channelOffset)
     pub fn handle_gs(&mut self, syx: &[u8], channel_offset: usize) {
         // Mutable copy: a1 === 0x50 (BLOCK B) adds 16 to reach the second bank of channels.
         let mut channel_offset = channel_offset;

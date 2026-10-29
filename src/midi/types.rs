@@ -95,7 +95,7 @@ pub struct TempoChange {
 /// - `Soft`: Immediately jumps the playback position to the loop start point (Touhou / GameMaker style).
 /// - `Hard`: Reprocesses messages up to the loop start to restore the synth state (default).
 ///
-/// Equivalent to: MIDILoopType ("soft" | "hard")
+/// Equivalent to: MIDILoop.type ("soft" | "hard"; the `MIDILoopType` alias was inlined in 4.4.0)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum MidiLoopType {
     Soft,

@@ -155,7 +155,7 @@ pub struct ChannelPropertyChangeCallback {
 }
 
 /// The payload of an `effectChange` event.
-/// Equivalent to: SynthProcessorEventData["effectChange"] (partial — the TS payload also
+/// Equivalent to: EffectChangeEvent (partial — the TS payload also
 /// distinguishes the effect kind via a string union)
 #[derive(Clone, Copy, Debug)]
 pub struct EffectChangeCallback {

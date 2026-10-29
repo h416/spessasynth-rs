@@ -49,7 +49,8 @@ pub fn load_sound_bank(data: Vec<u8>) -> BasicSoundBank {
 /// # Panics
 /// Panics if `DownloadableSounds::read` returns an error.
 ///
-/// Equivalent to: private static loadDLS(buffer: ArrayBuffer)
+/// Equivalent to: the `dls ` branch of fromArrayBuffer (`DownloadableSounds.read(buffer).toSF()`;
+/// the former `loadDLS` helper was inlined in 4.4.0)
 fn load_dls(data: &[u8]) -> BasicSoundBank {
     let dls = DownloadableSounds::read(data).expect("Failed to parse DLS sound bank");
     dls.to_sf()

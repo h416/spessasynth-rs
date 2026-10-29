@@ -142,7 +142,9 @@ enum XGInsertionTarget {
 }
 
 /// The core synthesis engine which interacts with channels and holds all synth parameters.
-/// Equivalent to: class SynthesizerCore
+/// Equivalent to: the engine state of SpessaSynthProcessor (TS 4.4.0 merged the former
+/// `SynthesizerCore` class into the processor; Rust keeps the split so the channels, voices
+/// and effects can be borrowed separately)
 pub struct SynthesizerCore {
     /// Voice pool. All voices are pre-allocated.
     /// Equivalent to: voices: Voice[]
@@ -334,7 +336,7 @@ pub struct SynthesizerCore {
     /// 20 parameters (0-19) + 3 sends (indices 20-22).
     /// Index to GS is Addr3 - 3 (for example EFX PARAMETER 1 is 0x03 and here it's 0).
     /// Note: 255 means "no change".
-    /// Equivalent to: insertionParams: Uint8Array(23) (was 20 in 4.2.0)
+    /// Equivalent to: gsInsertionParams: Uint8Array(23) (was 20 in 4.2.0)
     pub insertion_params: [u8; 23],
 }
 
@@ -514,8 +516,8 @@ impl SynthesizerCore {
     }
 
     /// Stops all notes on all channels.
-    /// Equivalent to: stopAllChannels(force)
-    pub fn stop_all_channels(&mut self, force: bool) {
+    /// Equivalent to: stopAll(force)
+    pub fn stop_all(&mut self, force: bool) {
         SpessaLog::info("Stop all received!");
         let current_time = self.current_time;
         let voices = &mut self.voices;
@@ -604,7 +606,7 @@ impl SynthesizerCore {
         // Call here because there are returns in this function.
         self.call_event(SynthProcessorEvent::Reset(system));
         // 4.4.0: a reset also stops all notes (gracefully)
-        self.stop_all_channels(false);
+        self.stop_all(false);
         self.reset_midi_parameters(system);
         // Reset private props
         self.tunings.fill(-1.0);

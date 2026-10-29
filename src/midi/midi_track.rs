@@ -64,7 +64,7 @@ impl MidiTrack {
     }
 
     /// Appends an event to the end of the track.
-    /// Equivalent to: pushEvent(event)
+    /// Equivalent to: pushEvents(...events) (one event)
     pub fn push_event(&mut self, event: MidiMessage) {
         self.events.push(event);
     }
