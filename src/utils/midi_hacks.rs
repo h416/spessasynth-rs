@@ -1,10 +1,7 @@
-/// midi_hacks.rs
-/// purpose: Bank select hacks for GS, XG, GM2 patch selection compatibility.
-/// Ported from: src/utils/midi_hacks.ts (spessasynth_core 4.3.0)
-///
-/// Note: TS 4.3.0 renamed the `SynthSystem` type to `MIDISystem` and relocated it from
-/// `synthesizer/types.ts` to `soundbank/types.ts`; the Rust definition now lives in
-/// `crate::soundbank::types::MIDISystem` accordingly.
+//! midi_hacks.rs
+//! purpose: Bank select hacks for GS, XG, GM2 patch selection compatibility.
+//! Ported from: src/utils/midi_hacks.ts
+
 use crate::soundbank::types::MIDISystem;
 
 /// XG SFX Voice bank MSB.
@@ -45,7 +42,7 @@ impl BankSelectHacks {
     }
 
     /// Returns `true` if `bank_msb` corresponds to an XG drum bank (120 or 127).
-    /// Equivalent to: BankSelectHacks.isXGDrum (renamed from isXGDrums in 4.3.0)
+    /// Equivalent to: BankSelectHacks.isXGDrum
     pub fn is_xg_drum(bank_msb: u8) -> bool {
         bank_msb == 120 || bank_msb == 127
     }
@@ -76,7 +73,7 @@ impl BankSelectHacks {
 
     /// Subtracts `bank_offset` from `bank_msb`, clamped to 0.
     /// When `is_xg` is `true`, XG drum banks (120, 127) are returned unchanged.
-    /// Equivalent to: BankSelectHacks.subtractBankOffset (4.3.0 fixed the "subtrack" typo)
+    /// Equivalent to: BankSelectHacks.subtractBankOffset
     pub fn subtract_bank_offset(bank_msb: u8, bank_offset: u8, is_xg: bool) -> u8 {
         // Do not change XG drums (120, 127)
         if is_xg && Self::is_xg_drum(bank_msb) {

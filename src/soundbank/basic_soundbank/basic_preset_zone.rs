@@ -1,19 +1,20 @@
-/// basic_preset_zone.rs
-/// purpose: Zone within a preset, referencing a specific instrument.
-/// Ported from: src/soundbank/basic_soundbank/basic_preset_zone.ts
-///
-/// # TypeScript vs Rust design differences
-///
-/// The TypeScript version holds direct object references to `BasicPreset` and `BasicInstrument`,
-/// and manages cross-references via `instrument.linkTo(preset)` / `instrument.unlinkFrom(preset)`.
-///
-/// The Rust version uses indices to avoid circular ownership:
-/// - `parent_preset_idx`  : index into `BasicSoundBank::presets`
-/// - `instrument_idx`     : index into `BasicSoundBank::instruments`
-///
-/// Reverse-reference tracking via `linkTo` / `unlinkFrom` will be implemented when porting `BasicPreset` / `BasicInstrument`.
-/// `getWriteGenerators` uses `instrument_idx` directly instead of
-/// `bank.instruments.indexOf(this.instrument)`.
+//! basic_preset_zone.rs
+//! purpose: Zone within a preset, referencing a specific instrument.
+//! Ported from: src/soundbank/basic_soundbank/basic_preset_zone.ts
+//!
+//! # TypeScript vs Rust design differences
+//!
+//! The TypeScript version holds direct object references to `BasicPreset` and `BasicInstrument`,
+//! and manages cross-references via `instrument.linkTo(preset)` / `instrument.unlinkFrom(preset)`.
+//!
+//! The Rust version uses indices to avoid circular ownership:
+//! - `parent_preset_idx`  : index into `BasicSoundBank::presets`
+//! - `instrument_idx`     : index into `BasicSoundBank::instruments`
+//!
+//! Reverse-reference tracking via `linkTo` / `unlinkFrom` will be implemented when porting `BasicPreset` / `BasicInstrument`.
+//! `getWriteGenerators` uses `instrument_idx` directly instead of
+//! `bank.instruments.indexOf(this.instrument)`.
+
 use crate::soundbank::basic_soundbank::basic_zone::BasicZone;
 use crate::soundbank::basic_soundbank::generator::Generator;
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;

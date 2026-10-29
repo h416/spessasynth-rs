@@ -1,19 +1,20 @@
-/// downloadable_sounds.rs
-/// purpose: Top-level DLS file container with read/write and SF2 conversion.
-/// Ported from: src/soundbank/downloadable_sounds/downloadable_sounds.ts
-///
-/// # TypeScript vs Rust design differences
-///
-/// - `DownloadableSounds extends DLSVerifier` → free functions from `dls_verifier.rs` called directly.
-/// - `static read(buffer: ArrayBuffer)` → `DownloadableSounds::read(data: &[u8])`.
-/// - `async write(options)` → synchronous `write(&self) -> Vec<u8>`.
-///   The `progressFunction` callback is not supported (MIDI→WAV scope only).
-/// - `Date` for `creationDate` → `String` (matches `SoundBankInfoData.creation_date`).
-///   The raw ICRD text is stored as-is and written back verbatim.
-/// - `fromSFPreset(preset, samples)` in TypeScript receives only `preset` and `samples`;
-///   in Rust `BasicPreset` has no back-reference to the sound bank, so `instruments` is
-///   also passed explicitly – handled inside `DownloadableSoundsInstrument::from_sf_preset`.
-/// - `soundBank.flush()` is called in `to_sf` to sort presets.
+//! downloadable_sounds.rs
+//! purpose: Top-level DLS file container with read/write and SF2 conversion.
+//! Ported from: src/soundbank/downloadable_sounds/downloadable_sounds.ts
+//!
+//! # TypeScript vs Rust design differences
+//!
+//! - `DownloadableSounds extends DLSVerifier` → free functions from `dls_verifier.rs` called directly.
+//! - `static read(buffer: ArrayBuffer)` → `DownloadableSounds::read(data: &[u8])`.
+//! - `async write(options)` → synchronous `write(&self) -> Vec<u8>`.
+//!   The `progressFunction` callback is not supported (MIDI→WAV scope only).
+//! - `Date` for `creationDate` → `String` (matches `SoundBankInfoData.creation_date`).
+//!   The raw ICRD text is stored as-is and written back verbatim.
+//! - `fromSFPreset(preset, samples)` in TypeScript receives only `preset` and `samples`;
+//!   in Rust `BasicPreset` has no back-reference to the sound bank, so `instruments` is
+//!   also passed explicitly – handled inside `DownloadableSoundsInstrument::from_sf_preset`.
+//! - `soundBank.flush()` is called in `to_sf` to sort presets.
+
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::soundbank::downloadable_sounds::dls_verifier::{
     parsing_error, verify_and_read_list, verify_header, verify_text,
@@ -619,15 +620,13 @@ mod tests {
 
     #[test]
     fn test_new_default_name() {
-        // TS 4.3.0 changed the default bank name from "Unnamed" to "Unnamed DLS sound bank".
         let dls = DownloadableSounds::new();
         assert_eq!(dls.sound_bank_info.name, "Unnamed DLS sound bank");
     }
 
     #[test]
     fn test_new_default_product() {
-        // TS 4.3.0 moved this default from a read()-time override into the class field
-        // initializer itself.
+        // The default comes from the class field initializer, not a read()-time override.
         let dls = DownloadableSounds::new();
         assert_eq!(
             dls.sound_bank_info.product.as_deref(),
@@ -637,7 +636,6 @@ mod tests {
 
     #[test]
     fn test_new_default_comment_is_none() {
-        // TS 4.3.0 no longer defaults comment to "(no description)".
         let dls = DownloadableSounds::new();
         assert!(dls.sound_bank_info.comment.is_none());
     }
@@ -742,8 +740,8 @@ mod tests {
 
     #[test]
     fn test_read_sets_default_name() {
-        // TS 4.3.0 no longer overrides the name in read(); it uses the class default
-        // "Unnamed DLS sound bank" directly when no INAM chunk is present.
+        // read() does not override the name; the class default "Unnamed DLS sound bank" is
+        // used when no INAM chunk is present.
         let data = make_minimal_dls(0, &[]);
         let dls = DownloadableSounds::read(&data).unwrap();
         assert_eq!(dls.sound_bank_info.name, "Unnamed DLS sound bank");
@@ -998,7 +996,7 @@ mod tests {
 
     #[test]
     fn test_to_sf_comment_not_modified() {
-        // TS 4.3.0 no longer appends a "Converted from DLS to SF2..." note to the comment.
+        // No "Converted from DLS to SF2..." note is appended to the comment.
         let mut dls = DownloadableSounds::new();
         dls.sound_bank_info.comment = Some("Original".to_string());
         let bank = dls.to_sf();
@@ -1051,7 +1049,7 @@ mod tests {
 
     #[test]
     fn test_from_sf_comment_not_modified() {
-        // TS 4.3.0 no longer appends a "Converted from SF2 to DLS..." note to the comment.
+        // No "Converted from SF2 to DLS..." note is appended to the comment.
         let mut bank = BasicSoundBank::new();
         bank.sound_bank_info.comment = Some("Original SF2".to_string());
         let dls = DownloadableSounds::from_sf(&mut bank);

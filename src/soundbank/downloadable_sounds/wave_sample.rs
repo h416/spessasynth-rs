@@ -1,6 +1,7 @@
-/// wave_sample.rs
-/// purpose: DLS WaveSample (wsmp chunk) read/write and SF2 zone conversion.
-/// Ported from: src/soundbank/downloadable_sounds/wave_sample.ts
+//! wave_sample.rs
+//! purpose: DLS WaveSample (wsmp chunk) read/write and SF2 zone conversion.
+//! Ported from: src/soundbank/downloadable_sounds/wave_sample.ts
+
 use crate::soundbank::basic_soundbank::basic_instrument_zone::BasicInstrumentZone;
 use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
 use crate::soundbank::basic_soundbank::basic_zone::BasicZone;
@@ -121,8 +122,6 @@ impl WaveSample {
         if loops_amount > 0 {
             let loop_cb_size = read_little_endian_indexed(&mut chunk.data, 4);
             if loop_cb_size != WSMP_LOOP_SIZE as u32 {
-                // TS 4.3.0 fixed this warning message to report WSMP_LOOP_SIZE (16) as the
-                // expected value, instead of the incorrect WSMP_SIZE (20) used in 4.2.0.
                 SpessaLog::warn(&format!(
                     "CbSize for loop in wsmp mismatch. Expected {}, got {}.",
                     WSMP_LOOP_SIZE, loop_cb_size

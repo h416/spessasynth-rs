@@ -1,12 +1,13 @@
-/// midi_channel.rs
-/// purpose: MidiChannel struct — a single MIDI channel within the synthesizer.
-/// Ported from: src/synthesizer/audio_engine/engine_components/midi_channel.ts
-///
-/// # Design note
-/// TypeScript's MIDIChannel holds a back-reference `synthCore: SynthesizerCore`, which would
-/// require a Rust ownership cycle (SynthesizerCore owns MidiChannel[] too). To avoid this,
-/// MidiChannel does not store a reference to SynthesizerCore; methods that previously accessed
-/// `this.synthCore` now receive the needed data as function parameters instead.
+//! midi_channel.rs
+//! purpose: MidiChannel struct — a single MIDI channel within the synthesizer.
+//! Ported from: src/synthesizer/audio_engine/channel/midi_channel.ts
+//!
+//! # Design note
+//! TypeScript's MIDIChannel holds a back-reference `synthCore: SynthesizerCore`, which would
+//! require a Rust ownership cycle (SynthesizerCore owns MidiChannel[] too). To avoid this,
+//! MidiChannel does not store a reference to SynthesizerCore; methods that previously accessed
+//! `this.synthCore` now receive the needed data as function parameters instead.
+
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::generator_types::{
     GENERATOR_LIMITS, GENERATORS_AMOUNT, GeneratorType,
@@ -160,7 +161,7 @@ pub struct MidiChannel {
 
     /// An array of poly pressure values for the channel.
     /// Poly pressure persists across notes, much like per-note pitch wheels.
-    /// Equivalent to: polyPressures (new in 4.4.0)
+    /// Equivalent to: polyPressures
     pub poly_pressures: [u8; 128],
 
     /// Per-drum-note parameters (128 entries, one per MIDI note).
@@ -183,14 +184,14 @@ pub struct MidiChannel {
     pub system_parameters: ChannelSystemParameter,
 
     /// If the last selected parameter was Registered (RPN). If false, the last
-    /// parameter was Non-Registered (NRPN). Replaces the pre-4.3.0 `dataEntryState`.
+    /// parameter was Non-Registered (NRPN).
     /// Equivalent to: lastParameterIsRegistered
     pub last_parameter_is_registered: bool,
 
     /// The last pressed note on this channel, for portamento tracking. -1 means none.
     /// Strictly internal (not a MIDI parameter); set by Portamento Control CC
     /// and by the sequencer for accurate portamento recreation.
-    /// Equivalent to: lastPortamentoNote (renamed from `lastNote` in 4.3.14)
+    /// Equivalent to: lastPortamentoNote
     pub last_portamento_note: i32,
 
     /// If the portamento should be executed once regardless of Portamento on/off.
@@ -418,8 +419,8 @@ impl MidiChannel {
 
     /// Sends the channel property as an event.
     /// Returns Some(event) if the event system is enabled.
-    /// Not in TS 4.3.0+ (the `channelPropertyChange` event was removed; API only, no effect
-    /// on the MIDI-to-WAV output). Kept for the Rust event consumers.
+    /// Not in TS (it has no `channelPropertyChange` event; API only, no effect on the
+    /// MIDI-to-WAV output). Kept for the Rust event consumers.
     pub fn build_channel_property_event(
         &self,
         enable_event_system: bool,
@@ -790,7 +791,7 @@ impl MidiChannel {
     }
 
     /// Sets the GM/GS drum flag of the patch, unless the preset is locked.
-    /// Equivalent to: setIsGMGSDrum(isGMGSDrum) (protected, new in 4.4.0)
+    /// Equivalent to: setIsGMGSDrum(isGMGSDrum) (protected)
     pub fn set_is_gm_gs_drum(&mut self, is_gm_gs_drum: bool) {
         if self.system_parameters.preset_lock {
             return;
@@ -799,7 +800,7 @@ impl MidiChannel {
     }
 
     /// Sets drums on channel.
-    /// 4.4.0: no longer requires a preset, emits no event, and refreshes the cached
+    /// Does not require a preset, emits no event, and refreshes the cached
     /// internal parameters (drum channels ignore the key shift and tuning).
     /// Equivalent to: setDrumFlag(isDrum) (protected)
     pub fn set_drum_flag(&mut self, is_drum: bool) {
@@ -871,7 +872,7 @@ impl MidiChannel {
     }
 
     // -----------------------------------------------------------------------
-    // Channel parameter infrastructure (TS 4.3.0)
+    // Channel parameter infrastructure
     // -----------------------------------------------------------------------
 
     /// Locks or unlocks a given controller.

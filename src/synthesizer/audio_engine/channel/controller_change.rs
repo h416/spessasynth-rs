@@ -1,6 +1,7 @@
-/// controller_change.rs
-/// purpose: MIDI controller change handler for MidiChannel.
-/// Ported from: src/synthesizer/audio_engine/engine_methods/controller_control/controller_change.ts
+//! controller_change.rs
+//! purpose: MIDI controller change handler for MidiChannel.
+//! Ported from: src/synthesizer/audio_engine/channel/controller_change.ts
+
 use crate::midi::enums::midi_controllers;
 use crate::synthesizer::audio_engine::synth_constants::{
     MIDI_DRUM_CHANNEL, MIN_NOTE_LENGTH,

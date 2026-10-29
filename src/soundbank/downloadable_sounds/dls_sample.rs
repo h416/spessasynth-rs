@@ -1,15 +1,16 @@
-/// dls_sample.rs
-/// purpose: DLS audio sample with on-demand PCM/A-law decoding.
-/// Ported from: src/soundbank/downloadable_sounds/dls_sample.ts
-///
-/// # TypeScript vs Rust design differences
-///
-/// TypeScript uses `class DLSSample extends BasicSample`.
-/// Rust uses composition: `DlsSample` contains a `BasicSample` (`sample` field) plus
-/// the DLS-specific fields (`w_format_tag`, `bytes_per_sample`, `raw_data`).
-///
-/// Callers that need `BasicSample` access use `dls_sample.sample`.
-/// The overridden `getAudioData` / `getRawData` methods are exposed on `DlsSample`.
+//! dls_sample.rs
+//! purpose: DLS audio sample with on-demand PCM/A-law decoding.
+//! Ported from: src/soundbank/downloadable_sounds/dls_sample.ts
+//!
+//! # TypeScript vs Rust design differences
+//!
+//! TypeScript uses `class DLSSample extends BasicSample`.
+//! Rust uses composition: `DlsSample` contains a `BasicSample` (`sample` field) plus
+//! the DLS-specific fields (`w_format_tag`, `bytes_per_sample`, `raw_data`).
+//!
+//! Callers that need `BasicSample` access use `dls_sample.sample`.
+//! The overridden `getAudioData` / `getRawData` methods are exposed on `DlsSample`.
+
 use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
 use crate::soundbank::enums::sample_types;
 use crate::utils::loggin::SpessaLog;
@@ -77,8 +78,7 @@ fn read_pcm(data: &[u8], bytes_per_sample: usize) -> Vec<f32> {
 /// See: https://en.wikipedia.org/wiki/G.711#A-law
 /// Equivalent to: readALAW(data, bytesPerSample)
 ///
-/// Note: TS 4.2.0 divided by `32_678` (a typo for `32_768`). TS 4.3.0 fixed this typo, so
-/// the divisor below is `32_768.0` to match the corrected upstream behavior.
+/// The divisor is `32_768.0`, like TS (older TS had a `32_678` typo).
 fn read_alaw(data: &[u8], bytes_per_sample: usize) -> Vec<f32> {
     let sample_length = data.len() / bytes_per_sample;
     let mut sample_data = Vec::with_capacity(sample_length);
@@ -463,7 +463,7 @@ mod tests {
 
     #[test]
     fn test_read_alaw_uses_32768_divisor() {
-        // TS 4.3.0 fixed the 32_678 typo to 32_768; verify the corrected divisor is used.
+        // Verify the divisor is 32_768 (not the old TS 32_678 typo).
         // For input = 0xD5 (213): xor 0x55 = 0x80, &0x7f = 0, exp=0, man=0
         // man = (0<<4)+8 = 8, exp not > 1
         // s16 = 8 (positive since 213 > 127)

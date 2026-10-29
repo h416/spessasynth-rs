@@ -1,24 +1,17 @@
-/// write.rs
-/// purpose: Write a BasicSoundBank as an SF2 binary file.
-/// Ported from: src/soundbank/soundfont/write/write.ts (spessasynth_core 4.3.0)
-///
-/// # Differences from TypeScript
-/// - Async is removed: the function is synchronous (TS 4.3.0 made the same change upstream,
-///   since Vorbis compression -- the only source of `await` here -- was removed; see below).
-/// - `compress` / `compressionFunction` are omitted (Vorbis encoding is outside the MIDI→WAV
-///   scope of this port; TS 4.3.0 itself dropped these from `writeSF2Internal`/`SoundFont2WriteOptions`
-///   entirely, moving compression to a separate opt-in step on `BasicSoundBank` that is not ported).
-/// - `progressFunction` is omitted (no async progress callbacks in Rust).
-/// - TS 4.3.0 removed the `decompress`-driven version bump (`major=3`/`minor=0` for compressed
-///   samples, `major=2`/`minor=4` for `decompress`) from this function entirely: `bank.soundBankInfo`
-///   is no longer mutated here at all, and its `version` is written as-is. This port follows suit:
-///   the `decompress` option and the version-mutation logic have both been removed.
-/// - TS 4.3.0 added a `software` write option (`SoundBankWriteOptions.software`, default
-///   `"SpessaSynth"`) used for the `ISFT` chunk; `bank.soundBankInfo.software` is no longer read or
-///   mutated by this function. This port adds the equivalent `SoundFont2WriteOptions::software` field.
-/// - TypeScript's `for (const [t, d] of Object.entries(bank.soundBankInfo))` loop
-///   is replaced with explicit per-field handling (Rust structs are not iterable).
-/// - `creationDate` is stored as a `String` (not a `Date`); no `toISODateString()` call.
+//! write.rs
+//! purpose: Write a BasicSoundBank as an SF2 binary file.
+//! Ported from: src/soundbank/soundfont/write/write.ts
+//!
+//! # Differences from TypeScript
+//! - The function is synchronous, like TS (Vorbis compression is a separate step on
+//!   `BasicSoundBank` in TS, outside the MIDI→WAV scope of this port, and not ported).
+//! - `progressFunction` is omitted (no async progress callbacks in Rust).
+//! - `bank.soundBankInfo` is not mutated: its `version` is written as-is, and the `ISFT`
+//!   chunk comes from the `software` write option (`SoundFont2WriteOptions::software`).
+//! - TypeScript's `for (const [t, d] of Object.entries(bank.soundBankInfo))` loop
+//!   is replaced with explicit per-field handling (Rust structs are not iterable).
+//! - `creationDate` is stored as a `String` (not a `Date`); no `toISODateString()` call.
+
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::soundbank::basic_soundbank::modulator::{
     MOD_BYTE_SIZE, Modulator, SPESSASYNTH_DEFAULT_MODULATORS,
@@ -38,16 +31,14 @@ use crate::utils::byte_functions::string::get_string_bytes;
 
 /// Options for writing a sound bank as an SF2 file.
 ///
-/// Compression-related options (`compress`, `compressionFunction`, `progressFunction`)
-/// are omitted because Vorbis encoding is outside the MIDI→WAV scope of this port.
-/// `decompress` is omitted too: TS 4.3.0 removed it from `SoundFont2WriteOptions` entirely.
+/// `progressFunction` is omitted (no async progress callbacks in Rust).
 ///
 /// Equivalent to: `SoundFont2WriteOptions` (partial) in TypeScript.
 #[derive(Debug, Clone)]
 pub struct SoundFont2WriteOptions {
     /// The `ISFT` field to write. Indicates the last software that edited this sound bank.
     /// If empty, `ISFT` is not written. Defaults to `"SpessaSynth"`.
-    /// Equivalent to: `SoundBankWriteOptions.software` (new in TS 4.3.0)
+    /// Equivalent to: `SoundBankWriteOptions.software`
     pub software: String,
     /// When `true`, write the `DMOD` chunk if the bank has custom default modulators.
     /// Equivalent to: `writeDefaultModulators`
@@ -90,10 +81,8 @@ fn make_info_chunk(fourcc: &str, data: &str) -> Option<IndexedByteArray> {
 
 /// Writes the sound bank as an SF2 binary file and returns the raw bytes.
 ///
-/// TS 4.3.0 no longer mutates `bank.soundBankInfo` at all (previously it forced the
-/// software tag and bumped the version for compressed/decompressed banks); the bank's
-/// `version` is written exactly as stored, and the `ISFT` tag comes from `options.software`
-/// instead. This port takes `bank` as `&mut` only because [`get_sdta`] needs mutable sample
+/// `bank.soundBankInfo` is not mutated: the bank's `version` is written exactly as stored,
+/// and the `ISFT` tag comes from `options.software`. This port takes `bank` as `&mut` only because [`get_sdta`] needs mutable sample
 /// access to lazily decode/cache Vorbis audio -- `write_sf2_internal` itself no longer mutates
 /// any field of `bank.sound_bank_info`.
 ///
@@ -123,7 +112,7 @@ pub fn write_sf2_internal(bank: &mut BasicSoundBank, options: &SoundFont2WriteOp
     // Merge comment + subject.
     // Equivalent to: const commentText = info?.subject ? (info?.comment ? info.comment + "\n" : "") + info.subject : info?.comment
     // Note: the "\n" separator is only inserted when the comment is non-empty; a bank with
-    // subject only (no comment) yields just the subject with no leading newline (TS 4.3.0).
+    // subject only (no comment) yields just the subject with no leading newline.
     let comment_text = {
         let comment = bank.sound_bank_info.comment.as_deref().unwrap_or("");
         match bank.sound_bank_info.subject.as_deref() {
@@ -138,7 +127,7 @@ pub fn write_sf2_internal(bank: &mut BasicSoundBank, options: &SoundFont2WriteOp
         }
     };
 
-    // Per-field INFO chunk writes, following the SF2 spec order used by TS 4.3.0's
+    // Per-field INFO chunk writes, following the SF2 spec order used by TS
     // `writeSF2Internal` (isng, INAM, irom, iver, ICRD, IENG, IPRD, ICOP, ICMT, ISFT).
     // `make_info_chunk` itself skips (returns `None`) when the value is empty, mirroring
     // `writeSF2Info`'s `if (!data) return;`.
@@ -488,11 +477,9 @@ mod tests {
 
     #[test]
     fn test_version_unchanged_for_compressed_bank() {
-        // TS 4.3.0 behavior change: writeSF2Internal no longer bumps bank.soundBankInfo.version
-        // to 3.0 for compressed samples (that logic moved to a separate opt-in step on
-        // BasicSoundBank that is out of MIDI→WAV scope and not ported). The version is now
-        // written exactly as stored on the bank -- it stays at the default 2.4 here even
-        // though the bank has a compressed sample.
+        // writeSF2Internal does not bump bank.soundBankInfo.version to 3.0 for compressed
+        // samples: the version is written exactly as stored on the bank -- it stays at the
+        // default 2.4 here even though the bank has a compressed sample.
         let mut bank = BasicSoundBank::default();
         bank.samples.push(make_compressed_sample("V"));
         let out = write_sf2_internal(&mut bank, &default_opts());
@@ -532,8 +519,8 @@ mod tests {
 
     #[test]
     fn test_isft_follows_options_software_not_bank_field() {
-        // TS 4.3.0 behavior change: ISFT comes from `options.software`, not from
-        // `bank.sound_bank_info.software` (which is no longer read by this function at all).
+        // ISFT comes from `options.software`, not from `bank.sound_bank_info.software`
+        // (which this function does not read).
         let mut bank = BasicSoundBank::default();
         bank.sound_bank_info.software = Some("NotUsed".to_string());
         let opts = SoundFont2WriteOptions {
@@ -625,7 +612,7 @@ mod tests {
 
     #[test]
     fn test_icmt_merged_text_is_comment_newline_subject() {
-        // Exact merged form when both are present: "comment\nsubject" (TS 4.3.0 formula).
+        // Exact merged form when both are present: "comment\nsubject" (TS formula).
         let mut bank = BasicSoundBank::default();
         bank.sound_bank_info.comment = Some("MyComment".to_string());
         bank.sound_bank_info.subject = Some("MySubject".to_string());
@@ -641,7 +628,7 @@ mod tests {
 
     #[test]
     fn test_icmt_subject_only_has_no_leading_newline() {
-        // TS 4.3.0 formula: info?.subject ? (info?.comment ? info.comment + "\n" : "") + info.subject : info?.comment
+        // TS formula: info?.subject ? (info?.comment ? info.comment + "\n" : "") + info.subject : info?.comment
         // With subject only (no comment), the "\n" separator must NOT be inserted:
         // the ICMT text is exactly "MySubject", not "\nMySubject".
         let mut bank = BasicSoundBank::default();

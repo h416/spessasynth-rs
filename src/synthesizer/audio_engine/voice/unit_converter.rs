@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn test_timecents_out_of_range_uses_pow() {
-        // 4.4.0: key scaling can push the value outside the table, computed directly.
+        // Key scaling can push the value outside the table: computed directly.
         assert_eq!(timecents_to_seconds(-15_001), 2f64.powf(-15_001.0 / 1200.0));
         assert_eq!(timecents_to_seconds(15_001), 2f64.powf(15_001.0 / 1200.0));
     }

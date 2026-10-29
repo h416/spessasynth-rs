@@ -1,13 +1,14 @@
-/// helpers.rs
-/// purpose: Helper functions for SysEx log output.
-/// Ported from: src/synthesizer/audio_engine/engine_methods/system_exclusive/helpers.ts
+//! system_exclusive.rs
+//! purpose: Helper functions for SysEx log output.
+//! Rust-only: TS logs inline in roland.ts / yamaha.ts / universal.ts (the helpers come from an
+//! older TS `engine_methods/system_exclusive/helpers.ts`). Logging only.
+
 use crate::utils::loggin::spessa_synth_info;
 use crate::utils::other::array_to_hex_string;
 
 /// Outputs an informational log for a SysEx operation.
 /// TypeScript's `SysExAcceptedArray` is a union of various typed arrays,
 /// but in Rust it is unified as raw bytes `&[u8]`.
-/// Rust-only helper (4.2.0 `sysExLogging`; TS 4.3.0+ logs inline). Logging only.
 pub fn sys_ex_logging(
     syx: &[u8],
     channel: u8,
@@ -26,7 +27,6 @@ pub fn sys_ex_logging(
 }
 
 /// Outputs an informational log for an unrecognized SysEx message.
-/// Rust-only helper (4.2.0 `sysExNotRecognized`; TS 4.3.0+ logs inline). Logging only.
 pub fn sys_ex_not_recognized(syx: &[u8], what: &str) {
     spessa_synth_info(&format!(
         "Unrecognized {} SysEx: {}",

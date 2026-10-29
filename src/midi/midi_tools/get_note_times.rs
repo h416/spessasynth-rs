@@ -1,13 +1,8 @@
-/// get_note_times.rs
-/// purpose: Compute the absolute start time and duration (in seconds) for every
-///          note in a BasicMidi, taking tempo changes into account.
-/// Ported from: src/midi/midi_tools/get_note_times.ts (spessasynth_core 4.3.0)
-///
-/// TS 4.3.0 dropped the function-local "flatten all track events and sort by tick" step in
-/// favor of iterating `midi.timeline` (a flattened, time-sorted `{tr, ev}` index list computed
-/// once by `BasicMIDI.flush()`). This Rust file follows suit: `event_index`
-/// walks `midi.timeline` and dereferences `midi.tracks[e.tr].events[e.ev]` instead of maintaining
-/// its own locally-sorted `Vec<&MidiMessage>`.
+//! get_note_times.rs
+//! purpose: Compute the absolute start time and duration (in seconds) for every
+//!          note in a BasicMidi, taking tempo changes into account.
+//! Ported from: src/midi/midi_tools/get_note_times.ts
+
 use crate::midi::basic_midi::BasicMidi;
 use crate::midi::types::NoteTime;
 use crate::synthesizer::audio_engine::synth_constants::MIDI_DRUM_CHANNEL;

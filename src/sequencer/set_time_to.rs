@@ -1,6 +1,6 @@
 //! set_time_to.rs
 //! purpose: Seek (set time to) implementation for the sequencer.
-//! Ported from: src/sequencer/set_time_to.ts (spessasynth_core 4.4.1)
+//! Ported from: src/sequencer/set_time_to.ts
 //!
 //! Controllers, pitch wheels and the last portamento note are accumulated per channel in a local
 //! `ChannelStatus` while the events before the target are skipped, then sent once at the end.
@@ -494,8 +494,8 @@ mod tests {
 
     #[test]
     fn test_default_midi_controllers_nrpn_is_null() {
-        // TS 4.4.0 `DEFAULT_MIDI_CONTROLLERS` resets NRPN MSB/LSB to `DEFAULT_NRPN` (127,
-        // the null parameter; it was 0 in 4.3.x).
+        // TS `DEFAULT_MIDI_CONTROLLERS` resets NRPN MSB/LSB to `DEFAULT_NRPN` (127,
+        // the null parameter).
         assert_eq!(
             DEFAULT_MIDI_CONTROLLERS[midi_controllers::NON_REGISTERED_PARAMETER_MSB as usize],
             127 << 7
@@ -625,7 +625,7 @@ mod tests {
             channels[0].controllers[midi_controllers::SUSTAIN_PEDAL as usize],
             DEFAULT_MIDI_CONTROLLERS[midi_controllers::SUSTAIN_PEDAL as usize]
         );
-        // ...but NOT main volume (unlike the old 4.2.0 broad reset).
+        // ...but NOT main volume.
         assert_eq!(
             channels[0].controllers[midi_controllers::MAIN_VOLUME as usize],
             42 << 7

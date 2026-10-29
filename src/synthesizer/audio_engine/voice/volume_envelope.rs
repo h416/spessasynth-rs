@@ -1,18 +1,17 @@
-/// volume_envelope.rs
-/// purpose: applies a volume envelope for a given voice
-/// Ported from: src/synthesizer/audio_engine/voice/volume_envelope.ts (spessasynth_core 4.3.0)
-///
-/// For performance reasons, cbAttenuationToGain is inlined here (via the shared
-/// CENTIBEL_LOOKUP_TABLE exposed by `unit_converter::cb_attenuation_to_gain_f64`).
-///
-/// # 4.3.0 rewrite
-/// The volume envelope no longer processes the audio buffer sample-by-sample.
-/// Instead, `process` advances the envelope by an entire render quantum and writes the
-/// gain value for the LAST sample of the block into `output_gain`, returning the block's
-/// activity. The caller (`render_voice`) then linearly interpolates from the previous
-/// `output_gain` to the new one across the block. The per-sample gain smoothing and the
-/// `centibel_offset` argument were removed; the centibel excursion (mod LFO to volume,
-/// resonance) is now folded into `gain_target` by the caller before calling `process`.
+//! volume_envelope.rs
+//! purpose: applies a volume envelope for a given voice
+//! Ported from: src/synthesizer/audio_engine/voice/volume_envelope.ts
+//!
+//! For performance reasons, cbAttenuationToGain is inlined here (via the shared
+//! CENTIBEL_LOOKUP_TABLE exposed by `unit_converter::cb_attenuation_to_gain_f64`).
+//!
+//! The envelope does not process the audio buffer sample-by-sample: `process` advances it
+//! by an entire render quantum and writes the gain value for the LAST sample of the block
+//! into `output_gain`, returning the block's activity. The caller (`render_voice`) then
+//! linearly interpolates from the previous `output_gain` to the new one across the block.
+//! The centibel excursion (mod LFO to volume, resonance) is folded into `gain_target` by the
+//! caller before calling `process`.
+
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 use crate::synthesizer::audio_engine::synth_constants::SPESSA_BUFSIZE;
 use crate::synthesizer::audio_engine::voice::unit_converter::{
@@ -483,7 +482,7 @@ mod tests {
 
     #[test]
     fn test_init_resets_release_leftovers_from_previous_note() {
-        // 4.3.18: voices are recycled, so init() must clear whatever the previous
+        // Voices are recycled, so init() must clear whatever the previous
         // note left behind instead of inheriting it.
         let mut env = new_env();
         env.attenuation_cb = 123.0;

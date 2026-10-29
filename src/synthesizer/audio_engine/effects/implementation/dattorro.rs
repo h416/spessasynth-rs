@@ -4,8 +4,8 @@
 //! Adapted for spessasynth by spessasus.
 //! Ported from: src/synthesizer/audio_engine/effects/implementation/dattorro.ts
 //!
-//! 4.4.0 flattened the delay lines (every delay is read before it is written in the same
-//! sample) and computes the excursion LFOs by rotating phasors. The order of reads and
+//! The delay lines are flat (every delay is read before it is written in the same sample),
+//! and the reverb computes the excursion LFOs by rotating phasors. The order of reads and
 //! writes below follows the TS line by line; changing it changes the output.
 
 /// Delay lengths as fractions of sample rate.

@@ -1,6 +1,7 @@
-/// default_dls_modulators.rs
-/// purpose: Default DLS modulator constants used when loading DLS soundbanks.
-/// Ported from: src/soundbank/downloadable_sounds/default_dls_modulators.ts
+//! default_dls_modulators.rs
+//! purpose: Default DLS modulator constants used when loading DLS soundbanks.
+//! Ported from: src/soundbank/downloadable_sounds/default_dls_modulators.ts
+
 use crate::soundbank::basic_soundbank::generator_types::generator_types;
 use crate::soundbank::basic_soundbank::modulator::DecodedModulator;
 

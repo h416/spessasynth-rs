@@ -1,23 +1,24 @@
-/// basic_sample.rs
-/// purpose: Representation of a single audio sample within a sound bank.
-/// Ported from: src/soundbank/basic_soundbank/basic_sample.ts
-///
-/// # TypeScript vs Rust design differences
-///
-/// In TypeScript, `linkedTo: BasicInstrument[]` holds direct object references and
-/// `linkedSample?: BasicSample` represents the stereo link.
-///
-/// In Rust, to avoid circular ownership:
-/// - `linked_to: Vec<usize>`           : indices into `BasicSoundBank::instruments`
-/// - `linked_sample_idx: Option<usize>` : index into `BasicSoundBank::samples`
-///
-/// TypeScript's `setLinkedSample()` mutates two samples simultaneously, which cannot
-/// be expressed with a single `&mut self`. Implemented at the `BasicSoundBank` level.
-///
-/// Vorbis compression (`compressSample`) is for SF3 writing and not needed for
-/// midi-to-wav, so it is omitted.
-/// Vorbis decoding (`decode_vorbis_into_audio_data`) is only needed for SF3, which is
-/// outside the scope of this port; it fills the sample with silence.
+//! basic_sample.rs
+//! purpose: Representation of a single audio sample within a sound bank.
+//! Ported from: src/soundbank/basic_soundbank/basic_sample.ts
+//!
+//! # TypeScript vs Rust design differences
+//!
+//! In TypeScript, `linkedTo: BasicInstrument[]` holds direct object references and
+//! `linkedSample?: BasicSample` represents the stereo link.
+//!
+//! In Rust, to avoid circular ownership:
+//! - `linked_to: Vec<usize>`           : indices into `BasicSoundBank::instruments`
+//! - `linked_sample_idx: Option<usize>` : index into `BasicSoundBank::samples`
+//!
+//! TypeScript's `setLinkedSample()` mutates two samples simultaneously, which cannot
+//! be expressed with a single `&mut self`. Implemented at the `BasicSoundBank` level.
+//!
+//! Vorbis compression (`compressSample`) is for SF3 writing and not needed for
+//! midi-to-wav, so it is omitted.
+//! Vorbis decoding (`decode_vorbis_into_audio_data`) is only needed for SF3, which is
+//! outside the scope of this port; it fills the sample with silence.
+
 use crate::soundbank::enums::{SampleType, sample_types};
 use crate::utils::loggin::SpessaLog;
 

@@ -1,21 +1,7 @@
-/// load_new_sequence.rs
-/// purpose: MIDI port assignment and sequence loading.
-/// Ported from: src/sequencer/load_new_sequence.ts (spessasynth_core 4.3.0; renamed from
-/// `src/sequencer/song_control.ts` in the upstream 4.3.0 restructuring — see `mod.rs`/phase-1
-/// notes).
-///
-/// Changes from 4.2.0's `song_control.ts` (reviewed against the 4.3.0 diff):
-/// - `assignMIDIPortInternal` is byte-for-byte identical (aside from the `formatTime`/
-///   `ConsoleColors` import casing, which doesn't touch this function). No functional edits
-///   needed.
-/// - `loadNewSequenceInternal`: only parameter rename (`parsedMidi` → `parsedMIDI`, a JS-only
-///   identifier rename with no Rust-side equivalent) and `SpessaSynthInfo`/`SpessaSynthWarn` →
-///   `SpessaLog.info`/`SpessaLog.warn` (behavior-identical thin wrappers, see
-///   `utils/loggin.rs`). No other logic changes.
-/// - `this.synth.clearEmbeddedBank()` → `this.synth.clearEmbeddedSoundBank()` (pure rename on
-///   `SpessaSynthProcessor`, out of scope: `processor.rs` is not part of this task's file list).
-///   This Rust file keeps calling the existing `SpessaSynthProcessor::clear_embedded_bank()`,
-///   which is unchanged in behavior.
+//! load_new_sequence.rs
+//! purpose: MIDI port assignment and sequence loading.
+//! Ported from: src/sequencer/load_new_sequence.ts
+
 use crate::sequencer::sequencer::SpessaSynthSequencer;
 use crate::sequencer::types::{SequencerEvent, SongChangeEventData};
 use crate::utils::loggin::SpessaLog;

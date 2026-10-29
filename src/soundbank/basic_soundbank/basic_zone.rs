@@ -1,6 +1,7 @@
-/// basic_zone.rs
-/// purpose: Base zone struct shared by preset zones and instrument zones.
-/// Ported from: src/soundbank/basic_soundbank/basic_zone.ts
+//! basic_zone.rs
+//! purpose: Base zone struct shared by preset zones and instrument zones.
+//! Ported from: src/soundbank/basic_soundbank/basic_zone.ts
+
 use crate::soundbank::basic_soundbank::generator::Generator;
 use crate::soundbank::basic_soundbank::generator_types::{
     GENERATOR_LIMITS, GeneratorType, generator_types as gt,

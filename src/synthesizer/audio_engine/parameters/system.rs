@@ -1,29 +1,15 @@
-/// system.rs (parameters)
-/// purpose: Global system parameters of the synthesizer (editable only via the API):
-/// struct, defaults, and the set handler for SynthesizerCore.
-/// Ported from: src/synthesizer/audio_engine/parameters/system.ts (spessasynth_core 4.4.2)
-///
-/// New in TS 4.3.0: the single `MasterParameterType` (4.2.0
-/// `engine_components/master_parameters.ts` + `engine_methods/controller_control/
-/// master_parameters.ts`) was split into `GlobalSystemParameter` (this file) and
-/// `GlobalMIDIParameter` (`parameters/midi.rs`). Field mapping from 4.2.0:
-/// - masterGain → gain, masterPan → pan (API side)
-/// - midiSystem → GlobalMIDIParameter::system
-/// - monophonicRetriggerMode → monophonicRetrigger
-/// - transposition (semitones, decimal) → keyShift (semitones) + fineTune (cents), on BOTH
-///   parameter sets (MIDI-set and API-set are now tracked separately)
-/// - enableEffects/enableEventSystem (plain core fields in 4.2.0) → effectsEnabled/eventsEnabled
-/// - nprnParamLock → nrpnParamLock (typo fixed upstream); customVibratoLock was dropped
-/// - the reverb/chorus/delay/insertion/drum lock fields (absent from the phase-1 Rust
-///   `MasterParameterType`) are now present
-///
-/// Unlike 4.2.0's `setMasterParameterInternal`, TS 4.3.0's `setSystemParameterInternal`
-/// fires NO event (only the MIDI-parameter setter fires `globalParamChange`) and
-/// early-returns when the value is unchanged. Both are ported.
-///
-/// TS calls `ch.updateInternalParams()` on every channel right after storing the value
-/// (before the per-parameter handling); the order does not matter for `voiceCap`/`keyShift`,
-/// so the Rust version runs it after the `match`.
+//! system.rs (parameters)
+//! purpose: Global system parameters of the synthesizer (editable only via the API):
+//! struct, defaults, and the set handler for SynthesizerCore.
+//! Ported from: src/synthesizer/audio_engine/parameters/system.ts
+//!
+//! `setSystemParameterInternal` fires no event (only the MIDI-parameter setter fires
+//! `globalParamChange`) and early-returns when the value is unchanged.
+//!
+//! TS calls `ch.updateInternalParams()` on every channel right after storing the value
+//! (before the per-parameter handling); the order does not matter for `voiceCap`/`keyShift`/
+//! `pitchBasedKeyShift`, so the Rust version runs it after the `match`.
+
 use crate::synthesizer::audio_engine::synth_constants::VOICE_CAP;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::audio_engine::voice::voice::Voice;
@@ -438,8 +424,7 @@ mod tests {
 
     #[test]
     fn test_set_fires_no_event() {
-        // TS 4.3.0's setSystemParameterInternal does not fire any event (unlike 4.2.0's
-        // masterParameterChange).
+        // TS setSystemParameterInternal does not fire any event.
         let (mut core, events) = make_core();
         let before = events.lock().unwrap().len();
         core.set_system_parameter(GlobalSystemParameterChange::Gain(0.5));
@@ -545,7 +530,7 @@ mod tests {
 
     #[test]
     fn test_system_lives_in_midi_parameters_not_here() {
-        // The MIDI system moved to GlobalMIDIParameter in 4.3.0.
+        // The MIDI system lives in GlobalMIDIParameter.
         let (core, _) = make_core();
         assert_eq!(core.midi_parameters.system, MIDISystem::Gs);
     }

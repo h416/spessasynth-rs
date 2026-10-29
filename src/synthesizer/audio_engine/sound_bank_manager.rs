@@ -1,20 +1,21 @@
-/// sound_bank_manager.rs
-/// purpose: SoundBankManager - manages a priority-ordered stack of BasicSoundBank instances,
-///          providing a unified preset list and preset selection.
-/// Ported from: src/synthesizer/audio_engine/engine_components/sound_bank_manager.ts
-///
-/// # TypeScript vs Rust design differences
-///
-/// - `SoundBankManagerPreset extends BasicPreset` (private TS class) is replaced by cloning
-///   the BasicPreset and adjusting bank_msb in-place inside `generate_preset_list`.
-///
-/// - TypeScript's `getPreset` returns `BasicPreset | undefined` (a selectable preset with adjusted
-///   bankMSB).  Callers that need `instruments` from the source bank would have to look it up
-///   separately.  In Rust, `get_preset_and_bank` returns `Option<(&BasicPreset, &BasicSoundBank)>`
-///   so callers can resolve instruments directly.
-///
-/// - Parallel arrays `selectable_preset_list` / `selectable_bank_idxs` are used instead of
-///   object references to track which BasicSoundBank owns each selectable preset.
+//! sound_bank_manager.rs
+//! purpose: SoundBankManager - manages a priority-ordered stack of BasicSoundBank instances,
+//!          providing a unified preset list and preset selection.
+//! Ported from: src/synthesizer/audio_engine/sound_bank_manager.ts
+//!
+//! # TypeScript vs Rust design differences
+//!
+//! - `SoundBankManagerPreset extends BasicPreset` (private TS class) is replaced by cloning
+//!   the BasicPreset and adjusting bank_msb in-place inside `generate_preset_list`.
+//!
+//! - TypeScript's `getPreset` returns `BasicPreset | undefined` (a selectable preset with adjusted
+//!   bankMSB).  Callers that need `instruments` from the source bank would have to look it up
+//!   separately.  In Rust, `get_preset_and_bank` returns `Option<(&BasicPreset, &BasicSoundBank)>`
+//!   so callers can resolve instruments directly.
+//!
+//! - Parallel arrays `selectable_preset_list` / `selectable_bank_idxs` are used instead of
+//!   object references to track which BasicSoundBank owns each selectable preset.
+
 use std::collections::HashSet;
 
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
@@ -495,7 +496,7 @@ mod tests {
 
     #[test]
     fn test_bank_offset_leaves_xg_drum_banks_unchanged() {
-        // TS 4.3.0 SoundBankManagerPreset: addBankOffset(p.bankMSB, offset, true)
+        // TS SoundBankManagerPreset: addBankOffset(p.bankMSB, offset, true)
         // → XG drum bank MSBs (120/126/127) are never offset.
         let (mut mgr, _) = make_manager();
         let bank = make_bank(vec![melodic_preset(0, 120)]);

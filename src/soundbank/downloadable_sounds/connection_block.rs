@@ -1,6 +1,7 @@
-/// connection_block.rs
-/// purpose: DLS connection block (single DLS articulator) with SF2 ↔ DLS conversion.
-/// Ported from: src/soundbank/downloadable_sounds/connection_block.ts
+//! connection_block.rs
+//! purpose: DLS connection block (single DLS articulator) with SF2 ↔ DLS conversion.
+//! Ported from: src/soundbank/downloadable_sounds/connection_block.ts
+
 use std::fmt;
 
 use crate::soundbank::basic_soundbank::basic_zone::BasicZone;

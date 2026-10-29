@@ -1,22 +1,17 @@
-/// loggin.rs
-/// purpose: Configurable logging output (info, warn, group) plus GM/GS/XG log helpers.
-/// Ported from: src/utils/loggin.ts (spessasynth_core 4.3.0)
-///
-/// TS 4.3.0 turned the free functions `SpessaSynthLogging` / `SpessaSynthInfo` /
-/// `SpessaSynthWarn` / `SpessaSynthGroup` / `SpessaSynthGroupCollapsed` /
-/// `SpessaSynthGroupEnd` into static members of a `SpessaLog` class, and added several new
-/// helper methods (`unsupported`, `gmInfo`/`gmFail`, `gsInfo`/`gsFail`, `xgInfo`/`xgFail`,
-/// `coolInfo`) used to report GM/GS/XG-related SysEx handling. `SpessaLog` is ported below as
-/// a zero-sized struct with associated functions (matching the existing `BankSelectHacks`
-/// pattern used elsewhere in this crate for TS static classes).
-///
-/// Note: TS's `%c`-prefixed `ConsoleColors` styling is a browser DevTools feature with no
-/// terminal equivalent; as with the pre-4.3.0 logging functions, colors are dropped and only
-/// the plain message text is printed to stderr.
-///
-/// The original free functions (`spessa_synth_logging`, `spessa_synth_info`,
-/// `spessa_synth_warn`, `spessa_synth_group`, `spessa_synth_group_collapsed`,
-/// `spessa_synth_group_end`) are kept as thin wrappers; many call sites still use them.
+//! loggin.rs
+//! purpose: Configurable logging output (info, warn, group) plus GM/GS/XG log helpers.
+//! Ported from: src/utils/loggin.ts
+//!
+//! The TS `SpessaLog` static class is a zero-sized struct with associated functions (matching the
+//! `BankSelectHacks` pattern used elsewhere in this crate for TS static classes).
+//!
+//! Note: TS's `%c`-prefixed `ConsoleColors` styling is a browser DevTools feature with no
+//! terminal equivalent; colors are dropped and only the plain message text is printed to stderr.
+//!
+//! The free functions `spessa_synth_logging`, `spessa_synth_info`, `spessa_synth_warn`,
+//! `spessa_synth_group`, `spessa_synth_group_collapsed` and `spessa_synth_group_end` (an older TS
+//! API shape, not in current TS) are kept as thin wrappers; many call sites still use them.
+
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::utils::other::array_to_hex_string;
@@ -156,7 +151,7 @@ impl SpessaLog {
 }
 
 // -----------------------------------------------------------------------------------------
-// Backward-compatible free-function wrappers (pre-4.3.0 API shape).
+// Free-function wrappers (an older TS API shape).
 // See the module doc comment above for why these are kept.
 // -----------------------------------------------------------------------------------------
 
@@ -242,7 +237,7 @@ mod tests {
         assert!(!SpessaLog::group_enabled());
     }
 
-    // --- set_log_level (new 4.3.0 name) ---
+    // --- set_log_level ---
 
     #[test]
     fn test_set_log_level_matches_legacy_setter() {
@@ -287,7 +282,7 @@ mod tests {
         spessa_synth_group_end();
     }
 
-    // --- new 4.3.0 GM/GS/XG helper methods: no-panic sanity checks ---
+    // --- GM/GS/XG helper methods: no-panic sanity checks ---
 
     #[test]
     fn test_unsupported_no_panic_enabled() {

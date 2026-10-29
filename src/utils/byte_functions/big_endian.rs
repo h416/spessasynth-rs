@@ -1,6 +1,7 @@
-/// big_endian.rs
-/// purpose: Big-endian byte read/write utilities.
-/// Ported from: src/utils/byte_functions/big_endian.ts
+//! big_endian.rs
+//! purpose: Big-endian byte read/write utilities.
+//! Ported from: src/utils/byte_functions/big_endian.ts
+
 use crate::utils::indexed_array::IndexedByteArray;
 
 /// Reads `bytes_amount` bytes as a big-endian unsigned integer from `data` at `offset`.

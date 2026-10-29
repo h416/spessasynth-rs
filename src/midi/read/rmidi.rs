@@ -1,21 +1,11 @@
-/// rmidi.rs
-/// purpose: RIFF MIDI (RMIDI) container parser.
-/// Ported from: src/midi/read/rmidi.ts (spessasynth_core 4.3.0)
-///
-/// TS 4.3.0 split the monolithic `midi_loader.ts` (4.2.0) into `read/midi.ts` (plain SMF
-/// parsing), `read/rmidi.ts` (this file, RIFF/RMIDI container parsing), and `read/xmf.ts` (XMF,
-/// not ported — out of scope). `parseRMIDIInternal` (this file's `parse_rmidi_internal`) is
-/// called directly by `BasicMIDI.fromArrayBuffer` (see `basic_midi.rs`) when the input starts
-/// with the "RIFF" FourCC, and at the very end of its own parsing calls `parseSMFInternal`
-/// (`read/midi.rs`'s `parse_smf_internal`) to parse the embedded SMF bytes it just extracted
-/// from the RIFF `data` chunk — the reverse of this Rust port's previous (phase-1) structure,
-/// where `read/midi.rs` was the dispatcher and called into this file; that direction is
-/// corrected here to match the real TS 4.3.0 call graph.
-///
-/// Besides the restructuring, this file's actual RMIDI-chunk-scanning logic is unchanged from
-/// 4.2.0: only the utility APIs it calls were renamed in 4.3.0 — `readRIFFChunk` became
-/// `RIFFChunk.read` (migrated below) and the free logging functions became `SpessaLog::` static
-/// methods (migrated below).
+//! rmidi.rs
+//! purpose: RIFF MIDI (RMIDI) container parser.
+//! Ported from: src/midi/read/rmidi.ts
+//!
+//! `parse_rmidi_internal` is called by `BasicMIDI.fromArrayBuffer` (see `basic_midi.rs`) when the
+//! input starts with the "RIFF" FourCC, and at the end of its own parsing calls
+//! `parse_smf_internal` (`read/midi.rs`) on the SMF bytes of the RIFF `data` chunk.
+
 use crate::midi::basic_midi::BasicMidi;
 use crate::midi::read::midi::parse_smf_internal;
 use crate::midi::types::RMIDInfoFourCC;

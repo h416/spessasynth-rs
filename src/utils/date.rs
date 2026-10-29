@@ -1,8 +1,8 @@
-/// date.rs
-/// Purpose: Parse a date string from various formats into a NaiveDateTime, and format a
-/// NaiveDateTime back into an ISO 8601 string.
-/// Ported from: src/utils/date.ts (spessasynth_core 4.3.0; file renamed from load_date.ts,
-/// which added `toISODateString` and switched to `SpessaLog.warn`)
+//! date.rs
+//! Purpose: Parse a date string from various formats into a NaiveDateTime, and format a
+//! NaiveDateTime back into an ISO 8601 string.
+//! Ported from: src/utils/date.ts
+
 use chrono::{Local, NaiveDate, NaiveDateTime};
 use regex::Regex;
 
@@ -198,7 +198,7 @@ mod tests {
             .unwrap()
     }
 
-    // --- to_iso_date_string (new in 4.3.0) ---
+    // --- to_iso_date_string ---
 
     #[test]
     fn test_to_iso_date_string_basic() {

@@ -42,7 +42,7 @@ pub struct VoiceModInputs {
     /// MIDI note number (0–127) — the raw pressed key.
     pub midi_note: u8,
     /// Effective key after key shift / keyNum override (`voice.targetKey`).
-    /// TS 4.3.0's `noteOnKeyNum` modulator source reads this, not the raw note.
+    /// TS's `noteOnKeyNum` modulator source reads this, not the raw note.
     pub target_key: i16,
     /// Note-on velocity (0–127).
     pub velocity: u8,
@@ -53,7 +53,6 @@ pub struct VoiceModInputs {
 // ---------------------------------------------------------------------------
 // Precomputed transform table
 // Equivalent to: const MODULATOR_TRANSFORMS = new Float32Array(...)
-// (TS 4.2.0 name: precomputedTransforms)
 //
 // Layout:
 //   table[MODULATOR_RESOLUTION * (curve_type * MOD_CURVE_TYPES_AMOUNT + transform_type) + raw_value]
@@ -185,7 +184,7 @@ impl ModulatorSource {
             channel.midi_controllers[self.index as usize].max(0) as usize
         } else {
             match self.index {
-                // TS 4.3.0: voice.targetKey << 7 (effective key, not the raw pressed note).
+                // TS: voice.targetKey << 7 (effective key, not the raw pressed note).
                 modulator_sources::NOTE_ON_KEY_NUM => (voice.target_key.max(0) as usize) << 7,
                 modulator_sources::NOTE_ON_VELOCITY => (voice.velocity as usize) << 7,
                 modulator_sources::POLY_PRESSURE => (voice.pressure as usize) << 7,

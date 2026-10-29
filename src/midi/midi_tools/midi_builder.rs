@@ -1,16 +1,7 @@
-/// midi_builder.rs
-/// purpose: Convenience builder for constructing a standard MIDI file from scratch.
-/// Ported from: src/midi/midi_tools/midi_builder.ts (spessasynth_core 4.3.0)
-///
-/// TS 4.3.0 renamed most methods to drop the redundant "add" prefix (`addNewTrack` ->
-/// `addTrack`, `addSetTempo` -> `setTempo`, `addNoteOn` -> `noteOn`, `addNoteOff` -> `noteOff`,
-/// `addProgramChange` -> `programChange`, `addControllerChange` -> `controllerChange`), merged
-/// `addPitchWheel(ticks, track, channel, MSB, LSB)` into a single 14-bit
-/// `pitchWheel(ticks, track, channel, pitch)`, and added three new methods: `systemExclusive`,
-/// `registeredParameter` (RPN MSB/LSB + Data Entry MSB/LSB in one call), and
-/// `nonRegisteredParameter` (same, for NRPN). `addEvent`'s `eventData` parameter widened from
-/// `Uint8Array | Iterable<number>` to `ArrayLike<number>` (both map to Rust's `Vec<u8>`/`&[u8]`,
-/// no functional change).
+//! midi_builder.rs
+//! purpose: Convenience builder for constructing a standard MIDI file from scratch.
+//! Ported from: src/midi/midi_tools/midi_builder.ts
+
 use crate::midi::basic_midi::BasicMidi;
 use crate::midi::enums::{midi_controllers, midi_message_types, MidiMessageType};
 use crate::midi::midi_message::MidiMessage;

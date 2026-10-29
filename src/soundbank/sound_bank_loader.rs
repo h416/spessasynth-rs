@@ -1,7 +1,8 @@
-/// sound_bank_loader.rs
-/// purpose: Detects the sound bank format (SF2 or DLS) from the file header
-///          and parses it into a BasicSoundBank.
-/// Ported from: src/soundbank/sound_bank_loader.ts
+//! sound_bank_loader.rs
+//! purpose: Detects the sound bank format (SF2 or DLS) from the file header
+//!          and parses it into a BasicSoundBank.
+//! Ported from: src/soundbank/sound_bank_loader.ts
+
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::soundbank::downloadable_sounds::downloadable_sounds::DownloadableSounds;
 use crate::soundbank::soundfont::read::soundfont::parse_sound_font2;
@@ -49,8 +50,7 @@ pub fn load_sound_bank(data: Vec<u8>) -> BasicSoundBank {
 /// # Panics
 /// Panics if `DownloadableSounds::read` returns an error.
 ///
-/// Equivalent to: the `dls ` branch of fromArrayBuffer (`DownloadableSounds.read(buffer).toSF()`;
-/// the former `loadDLS` helper was inlined in 4.4.0)
+/// Equivalent to: the `dls ` branch of fromArrayBuffer (`DownloadableSounds.read(buffer).toSF()`)
 fn load_dls(data: &[u8]) -> BasicSoundBank {
     let dls = DownloadableSounds::read(data).expect("Failed to parse DLS sound bank");
     dls.to_sf()

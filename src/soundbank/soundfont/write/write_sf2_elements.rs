@@ -1,6 +1,7 @@
-/// write_sf2_elements.rs
-/// purpose: Build SF2 pgen/pmod/pbag/phdr (or igen/imod/ibag/inst) chunks from a BasicSoundBank.
-/// Ported from: src/soundbank/soundfont/write/write_sf2_elements.ts (spessasynth_core 4.3.0)
+//! write_sf2_elements.rs
+//! purpose: Build SF2 pgen/pmod/pbag/phdr (or igen/imod/ibag/inst) chunks from a BasicSoundBank.
+//! Ported from: src/soundbank/soundfont/write/write_sf2_elements.ts
+
 use crate::soundbank::basic_soundbank::basic_instrument::INST_BYTE_SIZE;
 use crate::soundbank::basic_soundbank::basic_preset::PHDR_BYTE_SIZE;
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;

@@ -1,6 +1,7 @@
-/// voice_cache.rs
-/// purpose: Cached voice data for the synthesizer.
-/// Ported from: src/synthesizer/audio_engine/engine_components/voice_cache.ts
+//! voice_cache.rs
+//! purpose: Cached voice data for the synthesizer.
+//! Ported from: src/synthesizer/audio_engine/voice/voice_cache.ts
+
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 use crate::soundbank::basic_soundbank::generator_types::GENERATORS_AMOUNT;
 pub use crate::soundbank::basic_soundbank::modulator::Modulator;

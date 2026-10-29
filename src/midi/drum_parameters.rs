@@ -1,9 +1,8 @@
 //! Per-key drum parameters (GS NRPN / XG drum setup / GS drum setup SysEx).
-//! Ported from: src/midi/drum_parameters.ts (new in 4.4.0, replaces
-//! synthesizer/audio_engine/channel/drum_parameters.ts)
+//! Ported from: src/midi/drum_parameters.ts
 //!
-//! 4.4.0 stores the raw MIDI values (level, sends 0-127, coarse/fine pitch) and converts
-//! them in note_on, instead of the pre-converted gains of 4.3.x.
+//! The raw MIDI values (level, sends 0-127, coarse/fine pitch) are stored and converted in
+//! note_on.
 
 /// Default drum reverb send: 127 for every key, except the kicks (35, 36) which have none.
 /// Equivalent to: DEFAULT_DRUM_REVERB (synthesizer/audio_engine/channel/reset.ts)

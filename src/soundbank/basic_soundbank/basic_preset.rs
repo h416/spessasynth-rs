@@ -1,19 +1,20 @@
-/// basic_preset.rs
-/// purpose: BasicPreset struct - an SF2 preset with zones, a global zone,
-///          bank/program assignment, and voice parameter computation.
-/// Ported from: src/soundbank/basic_soundbank/basic_preset.ts
-///
-/// # TypeScript vs Rust design differences
-///
-/// In TypeScript, `parentSoundBank: BasicSoundBank` is held as a field and
-/// referenced inside `isDrum` / `getVoiceParameters`.
-///
-/// In Rust, to avoid circular ownership, `parentSoundBank` is not stored as a field.
-/// Instead, the necessary information is passed as method arguments:
-///
-/// - `is_drum(is_xg_bank: bool)` — receives `parentSoundBank.isXGBank` as a parameter
-/// - `get_voice_parameters(midi_note, velocity, instruments, default_modulators)`
-///   — receives `parentSoundBank.defaultModulators` and `instruments` as parameters
+//! basic_preset.rs
+//! purpose: BasicPreset struct - an SF2 preset with zones, a global zone,
+//!          bank/program assignment, and voice parameter computation.
+//! Ported from: src/soundbank/basic_soundbank/basic_preset.ts
+//!
+//! # TypeScript vs Rust design differences
+//!
+//! In TypeScript, `parentSoundBank: BasicSoundBank` is held as a field and
+//! referenced inside `isDrum` / `getVoiceParameters`.
+//!
+//! In Rust, to avoid circular ownership, `parentSoundBank` is not stored as a field.
+//! Instead, the necessary information is passed as method arguments:
+//!
+//! - `is_drum(is_xg_bank: bool)` — receives `parentSoundBank.isXGBank` as a parameter
+//! - `get_voice_parameters(midi_note, velocity, instruments, default_modulators)`
+//!   — receives `parentSoundBank.defaultModulators` and `instruments` as parameters
+
 use std::fmt;
 
 use crate::soundbank::basic_soundbank::basic_instrument::BasicInstrument;
@@ -165,8 +166,7 @@ impl BasicPreset {
     // Note: a getter and not a constant value for editing purposes.
     /// Checks if this preset is a drum preset (GM/GS or GM2/XG).
     /// `is_xg_bank` corresponds to `parentSoundBank.isXGBank` in TypeScript.
-    /// Equivalent to: public get isDrum() (TS 4.2.0 name: isAnyDrums;
-    /// the separate isXGDrums getter was removed in 4.3.0)
+    /// Equivalent to: public get isDrum()
     pub fn is_drum(&self, is_xg_bank: bool) -> bool {
         self.is_gm_gs_drum || (is_xg_bank && BankSelectHacks::is_xg_drum(self.bank_msb))
     }
@@ -296,7 +296,7 @@ impl BasicPreset {
             // ── Preset generators (offsets) ───────────────────────────────
             // First global, then local (local overrides).
             let mut preset_generators = [0i16; GENERATORS_AMOUNT];
-            // Instrument-only generators are ignored at the preset level (4.4.0)
+            // Instrument-only generators are ignored at the preset level
             for gn in &self.global_zone.generators {
                 if is_instrument_only_generator(gn.generator_type) {
                     continue;

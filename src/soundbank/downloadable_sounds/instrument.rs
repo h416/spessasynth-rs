@@ -1,6 +1,7 @@
-/// instrument.rs
-/// purpose: DLS Instrument (ins chunk) with read/write and SF2 preset/instrument conversion.
-/// Ported from: src/soundbank/downloadable_sounds/instrument.ts
+//! instrument.rs
+//! purpose: DLS Instrument (ins chunk) with read/write and SF2 preset/instrument conversion.
+//! Ported from: src/soundbank/downloadable_sounds/instrument.ts
+
 use crate::soundbank::basic_soundbank::basic_instrument::BasicInstrument;
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::basic_preset_zone::BasicPresetZone;

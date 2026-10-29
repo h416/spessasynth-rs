@@ -1,6 +1,7 @@
-/// wave_link.rs
-/// purpose: DLS WaveLink (wlnk chunk) read/write and SF2 zone conversion.
-/// Ported from: src/soundbank/downloadable_sounds/wave_link.ts
+//! wave_link.rs
+//! purpose: DLS WaveLink (wlnk chunk) read/write and SF2 zone conversion.
+//! Ported from: src/soundbank/downloadable_sounds/wave_link.ts
+
 use crate::soundbank::basic_soundbank::basic_instrument_zone::BasicInstrumentZone;
 use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
 use crate::soundbank::enums::sample_types;

@@ -1,8 +1,7 @@
 //! Renders a single voice into the channel's voice send buffers.
 //! Ported from: src/synthesizer/audio_engine/channel/render_voice.ts
 //!
-//! TS 4.4.0 restructured the mix: voices no longer write to the master output.
-//! Each voice is summed into a mono f64 `VoiceSendBuffer` shared by the voices of the
+//! Voices do not write to the master output. Each voice is summed into a mono f64 `VoiceSendBuffer` shared by the voices of the
 //! channel with the same pan index and send levels; `mix_voice_send_buffer` then pans it
 //! into the channel output (`output_left/right`, f64) and the effect sends once per block.
 //! The processor mixes the channel outputs into the master output.

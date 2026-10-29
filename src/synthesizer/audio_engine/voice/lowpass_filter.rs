@@ -9,11 +9,11 @@
 //! The filtering loop itself is inlined in `render_voice` (as in the TS), so this file only
 //! holds the filter state and the coefficient calculation.
 //!
-//! Coefficient cache: TS 4.4.0 keys it by sample rate, then resonance, then cutoff cents
-//! (chunked typed arrays). Up to 4.3.22 the key was `resonanceCb + cutoffCents * 961`,
-//! which collides once the resonance reaches 961 cB. The coefficients are a pure function
-//! of (sample rate, resonance, cutoff), so any collision-free cache is observably the same;
-//! Rust keys a map by the full triple.
+//! Coefficient cache: TS keys it by sample rate, then resonance, then cutoff cents
+//! (chunked typed arrays). The coefficients are a pure function of (sample rate, resonance,
+//! cutoff), so any collision-free cache is observably the same; Rust keys a map by the full
+//! triple. (An additive key such as `resonanceCb + cutoffCents * 961` would collide once the
+//! resonance reaches 961 cB.)
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
@@ -267,7 +267,7 @@ mod tests {
 
     #[test]
     fn test_no_collision_between_resonances() {
-        // The 4.3.22 key `q + fc * 961` mapped (q=961, fc=0) and (q=0, fc=1) together.
+        // An additive key `q + fc * 961` would map (q=961, fc=0) and (q=0, fc=1) together.
         let mut a = LowpassFilter::new(44_100.0);
         a.resonance_cb = 961;
         a.calculate_coefficients(0.0);

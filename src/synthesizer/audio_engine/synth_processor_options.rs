@@ -1,13 +1,7 @@
-/// synth_processor_options.rs
-/// purpose: Default synthesizer processor options constant.
-/// Ported from: src/synthesizer/audio_engine/synth_processor_options.ts (spessasynth_core
-/// 4.3.0; moved out of engine_components/ in the upstream 4.3.0 restructuring)
-///
-/// Changes from 4.2.0 (reviewed against the 4.3.0 diff): `getDefaultSynthOptions(sampleRate)`
-/// (which constructed default reverb/chorus/delay processors) was removed — the processors
-/// became optional in `SynthProcessorOptions` and the core constructs the defaults itself.
-/// `DEFAULT_SYNTH_OPTIONS` is now exported directly with the reshaped fields
-/// (`effectsEnabled`/`eventsEnabled`/`maxBufferSize`/`initialTime`).
+//! synth_processor_options.rs
+//! purpose: Default synthesizer processor options constant.
+//! Ported from: src/synthesizer/audio_engine/synth_processor_options.ts
+
 use crate::synthesizer::audio_engine::synth_constants::SPESSA_BUFSIZE;
 use crate::synthesizer::types::SynthProcessorOptions;
 

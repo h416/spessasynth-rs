@@ -1,27 +1,13 @@
-/// types.rs
-/// purpose: Common data types for the synthesizer.
-/// Ported from: src/synthesizer/types.ts (spessasynth_core 4.3.0)
-///
-/// Changes from 4.2.0 (reviewed against the 4.3.0 diff):
-/// - `SynthSystem` moved to soundbank/types.ts as `MIDISystem` (Rust:
-///   `crate::soundbank::types`).
-/// - `MasterParameterType` was removed, split into `GlobalMIDIParameter`
-///   (`audio_engine/parameters/midi.rs`) and `GlobalSystemParameter`
-///   (`audio_engine/parameters/system.rs`).
-/// - `SynthProcessorOptions` was reshaped: `enableEventSystem` → `eventsEnabled`,
-///   `enableEffects` → `effectsEnabled`, new `maxBufferSize`; the reverb/chorus/delay
-///   processor fields became optional (the core constructs the defaults itself — the Rust
-///   port always constructs the defaults internally, unchanged).
-/// - Event renames in `SynthProcessorEventData`: `newChannel` → `channelAdded`,
-///   `allControllerReset` → `reset` (now carrying the `MIDISystem`), `synthDisplay` →
-///   `displayMessage`, `masterParameterChange` → `globalParamChange` (now only for the
-///   global *MIDI* parameters; system-parameter changes fire no event).
-/// - Not ported (event API, outside the MIDI-to-WAV scope): TS 4.3.0 moved the per-channel
-///   callback payload types (`NoteOnCallback`, `NoteOffCallback`, `ControllerChangeCallback`,
-///   `ProgramChangeCallback`, `PolyPressureCallback`, `StopAllCallback`, ...) to
-///   `audio_engine/channel/types.ts` and replaced `channelPropertyChange`/`ChannelProperty`
-///   with `channelParamChange`/`ChannelMIDIParameterChange`. The Rust equivalents stay here
-///   with the 4.2.0 payload shapes. Events do not affect the rendered audio.
+//! types.rs
+//! purpose: Common data types for the synthesizer.
+//! Ported from: src/synthesizer/types.ts
+//!
+//! Not ported (event API, outside the MIDI-to-WAV scope): the per-channel callback payload
+//! types (`NoteOnCallback`, `NoteOffCallback`, `ControllerChangeCallback`, ...) live in TS
+//! `audio_engine/channel/types.ts`, and TS reports channel parameter changes as
+//! `channelParamChange`/`ChannelMIDIParameterChange`. The Rust equivalents stay here with an
+//! older payload shape (`ChannelProperty`). Events do not affect the rendered audio.
+
 use crate::midi::enums::MidiController;
 use crate::soundbank::basic_soundbank::midi_patch::{MidiPatch, MidiPatchFull};
 use crate::soundbank::types::MIDISystem;
@@ -41,7 +27,7 @@ pub struct NoteOffCallback {
     pub channel: u8,
 }
 
-/// Not in TS 4.4.0+ (API event only, no effect on the MIDI-to-WAV output).
+/// Not in TS (API event only, no effect on the MIDI-to-WAV output).
 #[derive(Clone, Copy, Debug)]
 pub struct DrumChangeCallback {
     pub channel: u8,
@@ -63,15 +49,14 @@ pub struct ControllerChangeCallback {
     pub controller_value: u8,
 }
 
-/// Not in TS 4.4.0+ (API event only, no effect on the MIDI-to-WAV output).
+/// Not in TS (API event only, no effect on the MIDI-to-WAV output).
 #[derive(Clone, Copy, Debug)]
 pub struct MuteChannelCallback {
     pub channel: u8,
     pub is_muted: bool,
 }
 
-/// A preset list entry. TS 4.3.0 exposes the preset list as `MIDIPatchFull[]`
-/// (the separate PresetListEntry interface with `isAnyDrums` was removed).
+/// A preset list entry (TS exposes the preset list as `MIDIPatchFull[]`).
 /// Equivalent to: MIDIPatchFull
 pub type PresetListEntry = MidiPatchFull;
 
@@ -82,7 +67,7 @@ pub type PresetList = Vec<PresetListEntry>;
 /// Equivalent to: SynthDisplayCallback
 pub type SynthDisplayCallback = Vec<u8>;
 
-/// Not in TS 4.4.0+ (API event only; TS reports it as `channelParamChange`).
+/// Not in TS (API event only; TS reports it as `channelParamChange`).
 #[derive(Clone, Copy, Debug)]
 pub struct PitchWheelCallback {
     pub channel: u8,
@@ -92,7 +77,7 @@ pub struct PitchWheelCallback {
     pub midi_note: i32,
 }
 
-/// Not in TS 4.4.0+ (API event only; TS reports it as `channelParamChange`).
+/// Not in TS (API event only; TS reports it as `channelParamChange`).
 #[derive(Clone, Copy, Debug)]
 pub struct ChannelPressureCallback {
     pub channel: u8,
@@ -118,7 +103,7 @@ pub struct StopAllCallback {
 }
 
 /// A single global MIDI parameter change (parameter + new value).
-/// TS 4.3.0's `globalParamChange` event payload is `{ parameter, value }` over the
+/// TS's `globalParamChange` event payload is `{ parameter, value }` over the
 /// `GlobalMIDIParameter` keys; Rust uses a discriminated union.
 /// Equivalent to: GlobalMIDIParameterChangeEvent
 #[derive(Clone, Copy, Debug)]
@@ -126,14 +111,14 @@ pub enum GlobalMIDIParameterChangeCallback {
     System(MIDISystem),
     KeyShift(f64),
     FineTune(f64),
-    /// Equivalent to: GlobalMIDIParameter.volume (renamed from `gain` in 4.3.14)
+    /// Equivalent to: GlobalMIDIParameter.volume
     Volume(f64),
     Pan(f64),
 }
 
 /// Channel property snapshot.
-/// Equivalent to: ChannelProperty (removed in TS 4.3.0 — replaced by the channel MIDI
-/// parameter set; the 4.2.0 event payload is kept, see module doc)
+/// Not in TS (it reports the channel MIDI parameter set instead); event payload only, see
+/// module doc.
 #[derive(Clone, Copy, Debug)]
 pub struct ChannelProperty {
     pub voices_amount: u32,
@@ -146,8 +131,7 @@ pub struct ChannelProperty {
     pub transposition: f64,
 }
 
-/// Equivalent to: ChannelPropertyChangeCallback (removed in TS 4.3.0 — replaced by
-/// `channelParamChange`/`ChannelMIDIParameterChange`; kept, see module doc)
+/// Not in TS (it uses `channelParamChange`/`ChannelMIDIParameterChange`); see module doc.
 #[derive(Clone, Copy, Debug)]
 pub struct ChannelPropertyChangeCallback {
     pub channel: u8,
@@ -189,22 +173,21 @@ pub enum SynthProcessorEvent {
     PolyPressure(PolyPressureCallback),
     DrumChange(DrumChangeCallback),
     StopAll(StopAllCallback),
-    /// Equivalent to: channelAdded (renamed from newChannel in TS 4.3.0)
+    /// Equivalent to: channelAdded
     ChannelAdded,
     MuteChannel(MuteChannelCallback),
     PresetListChange(PresetList),
-    /// Equivalent to: reset (renamed from allControllerReset in TS 4.3.0; now carries the
-    /// MIDI system the synthesizer was reset to)
+    /// Equivalent to: reset (carries the MIDI system the synthesizer was reset to)
     Reset(MIDISystem),
     SoundBankError(SoundBankErrorCallback),
-    /// Equivalent to: displayMessage (renamed from synthDisplay in TS 4.3.0)
+    /// Equivalent to: displayMessage
     DisplayMessage(SynthDisplayCallback),
-    /// Equivalent to: globalParamChange (replaces masterParameterChange in TS 4.3.0; fired
-    /// only for global MIDI parameters — system-parameter changes fire no event)
+    /// Equivalent to: globalParamChange (fired only for global MIDI parameters —
+    /// system-parameter changes fire no event)
     GlobalParamChange(GlobalMIDIParameterChangeCallback),
     /// Equivalent to: effectChange
     EffectChange(EffectChangeCallback),
-    /// Kept from 4.2.0 (TS 4.3.0: channelParamChange) — see module doc.
+    /// Not in TS (it uses channelParamChange) — see module doc.
     ChannelPropertyChange(ChannelPropertyChangeCallback),
 }
 
@@ -228,11 +211,6 @@ pub type CachedVoiceList =
 
 /// Synthesizer processor options.
 /// Equivalent to: SynthProcessorOptions
-///
-/// Note: TS 4.3.0's optional `reverbProcessor`/`chorusProcessor`/`delayProcessor` fields are
-/// not ported — the Rust core always constructs the default effect processors internally
-/// (equivalent to TS's `options.reverbProcessor ?? new SpessaSynthReverb(...)` with the
-/// option always absent).
 #[derive(Clone, Debug)]
 pub struct SynthProcessorOptions {
     /// The maximum buffer size the synthesizer can render at once.
@@ -241,10 +219,10 @@ pub struct SynthProcessorOptions {
     /// Equivalent to: maxBufferSize
     pub max_buffer_size: usize,
     /// If the synthesizer processes the audio effects. This can be changed later.
-    /// Equivalent to: effectsEnabled (renamed from enableEffects in TS 4.3.0)
+    /// Equivalent to: effectsEnabled
     pub effects_enabled: bool,
     /// If the event system is enabled. This can be changed later.
-    /// Equivalent to: eventsEnabled (renamed from enableEventSystem in TS 4.3.0)
+    /// Equivalent to: eventsEnabled
     pub events_enabled: bool,
     /// The initial time of the synth, in seconds.
     /// Equivalent to: initialTime

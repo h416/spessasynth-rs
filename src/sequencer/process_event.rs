@@ -1,28 +1,9 @@
-/// process_event.rs
-/// purpose: Processes a single MIDI event from the sequencer.
-/// Ported from: src/sequencer/process_event.ts (spessasynth_core 4.3.0)
-///
-/// Changes from 4.2.0 (reviewed against the 4.3.0 diff):
-/// - `getEvent(event.statusByte)` (the free function from `midi_message.ts`, removed in 4.3.0) is
-///   replaced by inlining the same channel/status split directly in this function, matching TS.
-///   `get_event`/`get_channel`/`data_bytes_amount`/`MidiEventInfo` were removed from
-///   `midi/midi_message.rs` in this same task (this function was their last caller).
-/// - `noteOn`/`noteOff` update `this.playingNotes[channel]` (now a `Map<number, number>`) via
-///   `.set`/`.delete` instead of a flat array `push`/`findIndex`+`splice`. Ported here via
-///   `playing_notes_set`/`playing_notes_delete` on the sequencer (see `sequencer.rs`).
-/// - `midiMessageTypes.reset` case: `this.synth.resetAllControllers()` → `this.synth.reset()`
-///   (pure rename with an identical default system parameter — see `sequencer.rs`'s module doc
-///   comment for details). This Rust file keeps calling the existing
-///   `reset_all_controllers(DEFAULT_SYNTH_MODE)` (out of scope: `processor.rs`).
-/// - `SpessaSynthInfo` → `SpessaLog::info` (behavior-identical).
-/// - The 4.3.0 top-of-function `if (this.externalMIDIPlayback && event.statusByte >= 0x80) { ...
-///   return; }` early-out is not reachable in this port: `externalMIDIPlayback` is out of scope
-///   for this offline-WAV-rendering project and was never implemented (see `sequencer.rs`'s
-///   module doc comment), so it is intentionally omitted here, matching the pre-existing Rust
-///   convention.
-/// - Cosmetic-only: `midiMessageTypes`/`midiControllers` → `MIDIMessageTypes`/`MIDIController`
-///   (TS casing convention change only; Rust's `midi_message_types` module already uses
-///   SCREAMING_SNAKE_CASE consts and needs no change).
+//! process_event.rs
+//! purpose: Processes a single MIDI event from the sequencer.
+//! Ported from: src/sequencer/process_event.ts
+//!
+//! Not ported: the `externalMIDIPlayback` early-out (see `sequencer.rs`'s module doc).
+
 use crate::midi::enums::midi_message_types;
 use crate::midi::midi_message::MidiMessage;
 use crate::sequencer::sequencer::SpessaSynthSequencer;
@@ -128,7 +109,7 @@ impl SpessaSynthSequencer {
             }
 
             midi_message_types::RESET => {
-                // 4.4.0 dropped the separate stopAllChannels(); reset() stops all notes itself.
+                // reset() stops all notes itself.
                 self.synth.reset();
             }
 

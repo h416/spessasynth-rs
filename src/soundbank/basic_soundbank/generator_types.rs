@@ -1,19 +1,16 @@
-/// generator_types.rs
-/// purpose: SoundFont2 Generator type constants and limit/default tables.
-/// Ported from: src/soundbank/basic_soundbank/generator_types.ts
-///
-/// Note: TS 4.3.0 renamed `generatorTypes` → `GeneratorTypes` and `generatorLimits` →
-/// `GeneratorLimits` (naming-only). Rust keeps the idiomatic `generator_types` module and
-/// `GENERATOR_LIMITS` constant names.
-///
-/// TS 4.3.0 also moved `defaultGeneratorValues` into `basic_preset.ts` (module-private).
-/// Rust keeps `DEFAULT_GENERATOR_VALUES` here because it is also used by several
-/// engine-side tests; the values are identical.
+//! generator_types.rs
+//! purpose: SoundFont2 Generator type constants and limit/default tables.
+//! Ported from: src/soundbank/basic_soundbank/generator_types.ts
+//!
+//! TS keeps `defaultGeneratorValues` in `basic_preset.ts` (module-private). Rust keeps
+//! `DEFAULT_GENERATOR_VALUES` here because it is also used by several engine-side tests;
+//! the values are identical.
+
 /// All SoundFont2 Generator enumerations.
 /// Equivalent to: GeneratorTypes
 #[allow(clippy::module_inception)]
 pub mod generator_types {
-    // Equivalent to: invalid (TS 4.3.0 renamed INVALID → invalid; Rust keeps INVALID)
+    // Equivalent to: invalid
     pub const INVALID: i16 = -1;
     pub const START_ADDRS_OFFSET: i16 = 0;
     pub const END_ADDR_OFFSET: i16 = 1;
@@ -29,11 +26,11 @@ pub mod generator_types {
     pub const MOD_ENV_TO_FILTER_FC: i16 = 11;
     pub const END_ADDRS_COARSE_OFFSET: i16 = 12;
     pub const MOD_LFO_TO_VOLUME: i16 = 13;
-    // Unused1 (14) removed in TS 4.3.0
+    // Unused1 (14)
     pub const CHORUS_EFFECTS_SEND: i16 = 15;
     pub const REVERB_EFFECTS_SEND: i16 = 16;
     pub const PAN: i16 = 17;
-    // Unused2 (18), Unused3 (19), Unused4 (20) removed in TS 4.3.0
+    // Unused2 (18), Unused3 (19), Unused4 (20)
     pub const DELAY_MOD_LFO: i16 = 21;
     pub const FREQ_MOD_LFO: i16 = 22;
     pub const DELAY_VIB_LFO: i16 = 23;
@@ -55,24 +52,24 @@ pub mod generator_types {
     pub const KEY_NUM_TO_VOL_ENV_HOLD: i16 = 39;
     pub const KEY_NUM_TO_VOL_ENV_DECAY: i16 = 40;
     pub const INSTRUMENT: i16 = 41;
-    // Reserved1 (42) removed in TS 4.3.0
+    // Reserved1 (42)
     pub const KEY_RANGE: i16 = 43;
     pub const VEL_RANGE: i16 = 44;
     pub const STARTLOOP_ADDRS_COARSE_OFFSET: i16 = 45;
     pub const KEY_NUM: i16 = 46;
     pub const VELOCITY: i16 = 47;
     pub const INITIAL_ATTENUATION: i16 = 48;
-    // Reserved2 (49) removed in TS 4.3.0
+    // Reserved2 (49)
     pub const ENDLOOP_ADDRS_COARSE_OFFSET: i16 = 50;
     pub const COARSE_TUNE: i16 = 51;
     pub const FINE_TUNE: i16 = 52;
     pub const SAMPLE_ID: i16 = 53;
     pub const SAMPLE_MODES: i16 = 54;
-    // Reserved3 (55) removed in TS 4.3.0
+    // Reserved3 (55)
     pub const SCALE_TUNING: i16 = 56;
     pub const EXCLUSIVE_CLASS: i16 = 57;
     pub const OVERRIDING_ROOT_KEY: i16 = 58;
-    // Unused5 (59) removed in TS 4.3.0
+    // Unused5 (59)
     pub const END_OPER: i16 = 60;
 
     // Additional generators that are used in system exclusives and will not be saved
@@ -86,7 +83,7 @@ pub mod generator_types {
     pub const VIB_LFO_AMPLITUDE_DEPTH: i16 = 63;
     // Like modLfoToFilterFc
     pub const VIB_LFO_TO_FILTER_FC: i16 = 64;
-    // Like modLfoToVolume (new in 4.4.0, shifts the two below by one)
+    // Like modLfoToVolume (shifts the two below by one)
     pub const VIB_LFO_TO_VOLUME: i16 = 65;
     // [-1000;1000] -> Hz/100
     pub const MOD_LFO_RATE: i16 = 66;
@@ -106,7 +103,7 @@ pub const MAX_GENERATOR: i16 = 67;
 pub const GENERATORS_AMOUNT: usize = MAX_GENERATOR as usize + 1;
 
 /// Generators that are only valid at the instrument level.
-/// Equivalent to: INSTRUMENT_ONLY_GENERATORS (new in 4.4.0)
+/// Equivalent to: INSTRUMENT_ONLY_GENERATORS
 pub const INSTRUMENT_ONLY_GENERATORS: [GeneratorType; 13] = [
     generator_types::START_ADDRS_OFFSET,
     generator_types::END_ADDR_OFFSET,
@@ -160,7 +157,7 @@ pub const INVALID_GENERATOR_LIMIT: GeneratorLimit = GeneratorLimit::new(0, 0, 0,
 
 /// Generator limits indexed by generator index 0-67 (68 entries).
 /// None means no limit is defined for that generator
-/// (indices removed from the TS 4.3.0 `GeneratorLimits` record: 14, 18-20, 42, 49, 55, 59).
+/// (indices absent from the TS `GeneratorLimits` record: 14, 18-20, 42, 49, 55, 59).
 /// The `invalid` (-1) entry of the TS record is [`INVALID_GENERATOR_LIMIT`].
 /// Equivalent to: GeneratorLimits
 pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; GENERATORS_AMOUNT] = [
@@ -316,7 +313,7 @@ const fn compute_default_values() -> [i16; GENERATORS_AMOUNT] {
 
 /// Default generator values as a 68-element i16 array.
 /// Equivalent to: defaultGeneratorValues (Int16Array of size GENERATORS_AMOUNT;
-/// moved into basic_preset.ts as a module-private constant in TS 4.3.0)
+/// a module-private constant of basic_preset.ts in TS)
 pub const DEFAULT_GENERATOR_VALUES: [i16; GENERATORS_AMOUNT] = compute_default_values();
 
 #[cfg(test)]
@@ -448,7 +445,7 @@ mod tests {
 
     #[test]
     fn test_limits_instrument_is_zero_limit() {
-        // TS 4.3.0 defines non-value generators with { min: 0, max: 0, def: 0, nrpn: 0 }
+        // TS defines non-value generators with { min: 0, max: 0, def: 0, nrpn: 0 }
         let lim = GENERATOR_LIMITS[41].unwrap();
         assert_eq!(lim, GeneratorLimit::new(0, 0, 0, 0));
     }

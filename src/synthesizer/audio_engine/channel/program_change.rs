@@ -1,6 +1,7 @@
-/// program_change.rs
-/// purpose: MIDI program change handler for MidiChannel.
-/// Ported from: src/synthesizer/audio_engine/engine_methods/program_change.ts
+//! program_change.rs
+//! purpose: MIDI program change handler for MidiChannel.
+//! Ported from: src/synthesizer/audio_engine/channel/program_change.ts
+
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::synthesizer::audio_engine::sound_bank_manager::SoundBankManager;
 use crate::synthesizer::audio_engine::channel::midi_channel::{DrumLocks, MidiChannel};

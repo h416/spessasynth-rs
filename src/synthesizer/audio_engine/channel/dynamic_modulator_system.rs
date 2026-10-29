@@ -1,6 +1,7 @@
-/// dynamic_modulator_system.rs
-/// purpose: DynamicModulatorSystem - Runtime dynamic modulator management for complex messages such as SysEx.
-/// Ported from: src/synthesizer/audio_engine/engine_components/dynamic_modulator_system.ts
+//! dynamic_modulator_system.rs
+//! purpose: DynamicModulatorSystem - Runtime dynamic modulator management for complex messages such as SysEx.
+//! Ported from: src/synthesizer/audio_engine/channel/dynamic_modulator_system.ts
+
 use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::{GeneratorType, generator_types};
 use crate::soundbank::basic_soundbank::modulator::{Modulator, get_mod_source_enum};
@@ -265,7 +266,7 @@ impl DynamicModulatorSystem {
         match addr3 & 0x0f {
             0x00 => {
                 // Pitch Control.
-                // Clamp to [-24; 24] semitones: TS 4.3.14 caps the centered value before
+                // Clamp to [-24; 24] semitones: TS caps the centered value before
                 // using it, to avoid absurd pitch offsets from malformed/extreme SysEx data.
                 let v = centered_value.clamp(-24.0, 24.0);
                 self.set_modulator(

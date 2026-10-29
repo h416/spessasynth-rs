@@ -1,13 +1,8 @@
+//! write_wav.rs
+//! purpose: Writes audio data to WAV file format (RIFF/PCM).
+//! Ported from: src/utils/write_wav.ts
+
 use crate::utils::{WaveMetadata, WaveWriteOptions};
-/// write_wav.rs
-/// purpose: Writes audio data to WAV file format (RIFF/PCM).
-/// Ported from: src/utils/write_wav.ts (spessasynth_core 4.3.0)
-///
-/// Note: `DEFAULT_WAV_WRITE_OPTIONS` moved here from `exports.ts` in 4.3.0 (it is no longer
-/// part of the package's public API); the Rust constant moved out of `utils/mod.rs`
-/// accordingly. `RIFFChunk.write`/`RIFFChunk.writeParts` (formerly free functions
-/// `writeRIFFChunkRaw`/`writeRIFFChunkParts`) are called via the new `RIFFChunk::` associated
-/// functions to match the 4.3.0 call sites exactly.
 use crate::utils::fill_with_defaults::fill_with_defaults;
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::write_little_endian_indexed;
@@ -16,8 +11,7 @@ use crate::utils::byte_functions::string::write_binary_string_indexed;
 use std::ops::Deref;
 
 /// Default WAV write options.
-/// Equivalent to: `DEFAULT_WAV_WRITE_OPTIONS` in write_wav.ts (moved here from exports.ts in
-/// 4.3.0)
+/// Equivalent to: `DEFAULT_WAV_WRITE_OPTIONS` in write_wav.ts
 pub const DEFAULT_WAV_WRITE_OPTIONS: WaveWriteOptions = WaveWriteOptions {
     normalize_audio: true,
     loop_points: None,

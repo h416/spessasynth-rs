@@ -1,6 +1,7 @@
-/// string.rs
-/// purpose: ASCII binary string read/write utilities for byte arrays.
-/// Ported from: src/utils/byte_functions/string.ts
+//! string.rs
+//! purpose: ASCII binary string read/write utilities for byte arrays.
+//! Ported from: src/utils/byte_functions/string.ts
+
 use crate::utils::indexed_array::IndexedByteArray;
 
 /// Reads `bytes` bytes starting at `offset` as an ASCII string.

@@ -1,9 +1,7 @@
-/// enums.rs
-/// purpose: DLS enumeration constants (moved out of soundbank/enums.ts in TS 4.3.0).
-/// Ported from: src/soundbank/downloadable_sounds/enums.ts
-///
-/// Note: TS 4.3.0 renamed `dlsSources` → `DLSSources` and `dlsDestinations` →
-/// `DLSDestinations` (naming-only). Rust keeps the idiomatic snake_case module names.
+//! enums.rs
+//! purpose: DLS enumeration constants.
+//! Ported from: src/soundbank/downloadable_sounds/enums.ts
+
 use crate::soundbank::enums::ModulatorCurveType;
 
 /// Source curve type maps to a soundfont curve type (section 2.10, table 9).

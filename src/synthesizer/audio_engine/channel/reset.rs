@@ -51,7 +51,7 @@ const fn build_default_midi_controllers() -> [i16; CONTROLLER_TABLE_SIZE] {
 /// Equivalent to: DEFAULT_MIDI_CONTROLLERS
 pub const DEFAULT_MIDI_CONTROLLERS: [i16; CONTROLLER_TABLE_SIZE] = build_default_midi_controllers();
 
-/// The CCs reset by the RP-15 Recommended Practice (4.4.0 added the NRPN pair).
+/// The CCs reset by the RP-15 Recommended Practice.
 /// Equivalent to: RP_15_RESET_CC_NUMS
 pub const RP_15_RESET_CC_NUMS: [MidiController; 10] = [
     midi_controllers::MODULATION_WHEEL,
@@ -73,7 +73,6 @@ impl MidiChannel {
     /// is set to none (-1), so no portamento happens on the first note-on.
     ///
     /// Equivalent to: the inline `lastPortamentoNote` reset in `resetChannelInternal()`
-    /// (4.3.0: standalone `resetPortamento()`, inlined upstream in 4.3.14).
     fn reset_portamento(&mut self, current_system: MIDISystem) {
         let ch_system = self.channel_system(current_system);
         self.last_portamento_note = if ch_system == MIDISystem::Xg { 60 } else { -1 };
@@ -159,17 +158,14 @@ impl MidiChannel {
         self.set_midi_parameter(ChannelMidiParameterValue::RandomPan(false));
 
         // Clear the insertion effect assignment (TS: setMIDIParameter("efxAssign", false)).
-        // Previously compensated for in `SynthesizerCore::reset_insertion`; since 4.3.16
-        // derives `insertionActive` from this flag, it has to be reset here like in TS.
+        // `update_active_gs_effects` derives `gs_insertion_active` from this flag.
         self.set_midi_parameter(ChannelMidiParameterValue::EfxAssign(false));
 
-        // Restore poly mode.
-        // TS 4.3.0 guarded this with the lockedControllers[monoModeOn/polyModeOn] check;
-        // since 4.3.14 the lock is `lockedMIDIParameters.polyMode`, checked in
-        // `set_midi_parameter`.
+        // Restore poly mode (the lock is `lockedMIDIParameters.polyMode`, checked in
+        // `set_midi_parameter`).
         self.set_midi_parameter(ChannelMidiParameterValue::PolyMode(true));
 
-        // Reset velocity sense (new in 4.3.14): identity depth/offset of 64/64.
+        // Reset velocity sense: identity depth/offset of 64/64.
         self.set_midi_parameter(ChannelMidiParameterValue::VelocitySenseOffset(64));
         self.set_midi_parameter(ChannelMidiParameterValue::VelocitySenseDepth(64));
         // TS: resetMIDIParameter("pitchWheelRange")
@@ -201,7 +197,7 @@ impl MidiChannel {
         ));
         self.reset_parameters();
 
-        // Reset note-tracking state (new in 4.3.14: this.playingNotes.fill(false)).
+        // Reset note-tracking state (TS: this.playingNotes.fill(false)).
         self.playing_notes.fill(false);
 
         // Reset drum parameters (SC-88 standard reverb values, etc.)
@@ -294,7 +290,7 @@ impl MidiChannel {
     /// Equivalent to: resetParameters()
     pub fn reset_parameters(&mut self) {
         self.last_parameter_is_registered = true;
-        // TS 4.4.0 defaults: RPN = DEFAULT_RPN = 0x7F (null), NRPN = DEFAULT_NRPN = 0x7F (null).
+        // TS defaults: RPN = DEFAULT_RPN = 0x7F (null), NRPN = DEFAULT_NRPN = 0x7F (null).
         self.midi_controllers[midi_controllers::NON_REGISTERED_PARAMETER_LSB as usize] =
             (DEFAULT_NRPN as i16) << 7;
         self.midi_controllers[midi_controllers::NON_REGISTERED_PARAMETER_MSB as usize] =

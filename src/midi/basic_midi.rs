@@ -1,31 +1,11 @@
-/// basic_midi.rs
-/// purpose: Central MIDI data structure with parse, iterate, and tick-to-seconds utilities.
-/// Ported from: src/midi/basic_midi.ts (spessasynth_core 4.3.0)
-///
-/// Key 4.3.0 changes ported here:
-/// - `BasicMIDI.fromArrayBuffer` now performs the RIFF ("RMID") / "XMF_" / plain-SMF format
-///   dispatch itself (calling `parseRMIDIInternal`/`loadXMF`/`parseSMFInternal` directly) instead
-///   of delegating to a single `loadMIDIFromArrayBufferInternal` — the dispatch used to live in
-///   `read/midi.ts` (4.2.0's `midi_loader.ts`). This Rust port's previous (phase-1) structure had
-///   the dispatch in `read/midi.rs`; it is moved here to `from_array_buffer` to match.
-/// - `timeDivision`'s default changed from 0 to 480.
-/// - A new `timeline: readonly Readonly<TimelineEvent>[]` field: a flattened, time-sorted list
-///   of all events (as `{tr: trackNum, ev: eventIndexInTrack}` pairs), rebuilt at the end of
-///   `parseInternal` via `iterate`. `iterate`'s callback signature grew a third `eventIndexes`
-///   parameter to support this (and to let callers like `write/rmidi.ts` replace events in-place
-///   by index).
-/// - Touhou loop false-positive fix ("Touhou loop 誤検出の修正" in the 4.3.0 release notes): CC2
-///   (Touhou)/CC111 (RPG Maker) loop-start markers, and CC4 (Touhou) loop-end markers, now
-///   additionally require the CC value to be 0 (CC116/CC117, the dedicated EMIDI/XMI loop
-///   markers, remain unconditional). A duplicate CC4/CC117 loop-end marker now also resets
-///   `loopType` back to "hard" (previously only `loopEnd` was reset to 0, leaving a stale "soft"
-///   loop type from the first, now-invalidated, hit).
-/// - `getUsedProgramsAndKeys`'s return type changed shape (`Map<preset, Set<"key-velocity">>` →
-///   `Map<preset, Map<midiNote, Set<velocity>>>`) and `modify()`/`applySnapshot()`/
-///   `preloadSynth()` were also touched — none of these BasicMIDI *methods* are wired up in this
-///   Rust port yet (pre-existing gap predating 4.3.0, unrelated to this diff; the underlying
-///   `midi_tools` functions exist but are not exposed as `BasicMidi` methods), so they are not
-///   addressed here.
+//! basic_midi.rs
+//! purpose: Central MIDI data structure with parse, iterate, and tick-to-seconds utilities.
+//! Ported from: src/midi/basic_midi.ts
+//!
+//! `getUsedProgramsAndKeys`, `modify()`, `applySnapshot()` and `preloadSynth()` are not
+//! `BasicMidi` methods in this port (outside the MIDI-to-WAV scope; the underlying
+//! `midi_tools` functions exist).
+
 use std::collections::{HashMap, HashSet};
 
 use crate::midi::enums::midi_message_types;
@@ -87,7 +67,7 @@ pub struct BasicMidi {
     ///
     /// Do not mutate this outside of `parse_internal` (TS: `readonly Readonly<TimelineEvent>[]`;
     /// Rust has no equivalent compile-time enforcement for a `Vec` field).
-    /// Equivalent to: BasicMIDI.timeline (TS 4.3.0)
+    /// Equivalent to: BasicMIDI.timeline
     pub timeline: Vec<TimelineEvent>,
     /// MIDI ticks per beat (time division).
     pub time_division: u32,
@@ -143,7 +123,6 @@ impl BasicMidi {
         Self {
             tracks: Vec::new(),
             timeline: Vec::new(),
-            // TS 4.3.0 changed the default from 0 to 480.
             time_division: 480,
             duration: 0.0,
             tempo_changes: vec![TempoChange {
@@ -513,8 +492,8 @@ impl BasicMidi {
             }
 
             // Track name: set after inner loop.
-            // 4.4.0 names the first track too (the port detection reads it); only its
-            // metadata handling still skips it.
+            // The first track is named too (the port detection reads it); only its
+            // metadata handling skips it.
             self.tracks[track_idx].name = String::new();
             if let Some(name_msg) = events
                 .iter()
@@ -785,7 +764,6 @@ mod tests {
     fn test_new_default_fields() {
         let m = BasicMidi::new();
         assert_eq!(m.tracks.len(), 0);
-        // TS 4.3.0 changed the default from 0 to 480.
         assert_eq!(m.time_division, 480);
         assert_eq!(m.duration, 0.0);
         assert!(m.timeline.is_empty());
@@ -1024,17 +1002,17 @@ mod tests {
         m.flush(false);
         assert_eq!(m.midi_loop.start, 100);
         assert_eq!(m.midi_loop.end, 400);
-        // 4.4.0: EMIDI/XMI loop ends (CC117/CC119) are hard loops.
+        // EMIDI/XMI loop ends (CC117/CC119) are hard loops.
         assert_eq!(m.midi_loop.loop_type, MidiLoopType::Hard);
     }
 
-    // ── Touhou loop false-positive fix (4.3.0) ─────────────────────────
+    // ── Touhou loop false-positive check ──────────────────────────────
 
     #[test]
     fn test_flush_touhou_cc4_nonzero_value_is_not_a_loop_end() {
         // CC4 (Touhou loop end marker) with a NONZERO value must NOT be treated as a loop
-        // end (this is the 4.3.0 false-positive fix — CC4 is also the legitimate "Foot
-        // Controller" controller, so a real foot-controller CC4 must not be misdetected).
+        // end (CC4 is also the legitimate "Foot Controller" controller, so a real
+        // foot-controller CC4 must not be misdetected).
         let mut m = BasicMidi::new();
         m.time_division = 480;
         let mut t = MidiTrack::new();
@@ -1103,14 +1081,14 @@ mod tests {
         m.tracks.push(t);
         m.flush(false);
         assert_eq!(m.midi_loop.end, 300);
-        // 4.4.0: EMIDI/XMI loop ends (CC117/CC119) are hard loops.
+        // EMIDI/XMI loop ends (CC117/CC119) are hard loops.
         assert_eq!(m.midi_loop.loop_type, MidiLoopType::Hard);
     }
 
     #[test]
     fn test_flush_duplicate_loop_end_resets_loop_type_to_hard() {
-        // A second loop-end marker resets loopType back to Hard (4.3.0 fix — previously
-        // only loopEnd was reset to 0, leaving a stale "soft" loop type).
+        // A second loop-end marker resets loopType back to Hard (not only loopEnd, which
+        // would leave a stale "soft" loop type).
         let mut m = BasicMidi::new();
         m.time_division = 480;
         let mut t = MidiTrack::new();
@@ -1123,7 +1101,7 @@ mod tests {
         assert_eq!(m.midi_loop.loop_type, MidiLoopType::Hard);
     }
 
-    // ── EMIDI global loop markers (4.3.18) ─────────────────────────────
+    // ── EMIDI global loop markers ─────────────────────────────────────
 
     #[test]
     fn test_flush_cc118_global_loop_start_unconditional_on_value() {
@@ -1151,7 +1129,7 @@ mod tests {
         m.tracks.push(t);
         m.flush(false);
         assert_eq!(m.midi_loop.end, 300);
-        // 4.4.0: EMIDI/XMI loop ends (CC117/CC119) are hard loops.
+        // EMIDI/XMI loop ends (CC117/CC119) are hard loops.
         assert_eq!(m.midi_loop.loop_type, MidiLoopType::Hard);
     }
 
@@ -1168,7 +1146,7 @@ mod tests {
         m.flush(false);
         assert_eq!(m.midi_loop.start, 100);
         assert_eq!(m.midi_loop.end, 400);
-        // 4.4.0: EMIDI/XMI loop ends (CC117/CC119) are hard loops.
+        // EMIDI/XMI loop ends (CC117/CC119) are hard loops.
         assert_eq!(m.midi_loop.loop_type, MidiLoopType::Hard);
     }
 
@@ -1187,7 +1165,7 @@ mod tests {
         assert_eq!(m.midi_loop.loop_type, MidiLoopType::Hard);
     }
 
-    // ── timeline (4.3.0) ────────────────────────────────────────────────
+    // ── timeline ────────────────────────────────────────────────────────
 
     #[test]
     fn test_flush_builds_timeline() {

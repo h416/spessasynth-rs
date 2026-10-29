@@ -1,16 +1,17 @@
-/// basic_instrument.rs
-/// purpose: BasicInstrument struct - an SF2 instrument with zones, a global zone,
-///          and back-references to presets.
-/// Ported from: src/soundbank/basic_soundbank/basic_instrument.ts
-///
-/// # TypeScript vs Rust design differences
-///
-/// The TypeScript version stores actual object references to `BasicPreset[]` in `linkedTo`, but
-/// the Rust version uses `Vec<usize>` (indices into `BasicSoundBank::presets`) to avoid circular ownership.
-///
-/// - `linkedTo: BasicPreset[]`  → `linked_to: Vec<usize>`  (preset index)
-/// - `createZone(sample: BasicSample)` `sample` argument → `sample_idx: usize` + `samples: &mut Vec<BasicSample>`
-/// - `deleteUnusedZones` / `delete` / `deleteZone` take `instrument_idx` and `samples`
+//! basic_instrument.rs
+//! purpose: BasicInstrument struct - an SF2 instrument with zones, a global zone,
+//!          and back-references to presets.
+//! Ported from: src/soundbank/basic_soundbank/basic_instrument.ts
+//!
+//! # TypeScript vs Rust design differences
+//!
+//! The TypeScript version stores actual object references to `BasicPreset[]` in `linkedTo`, but
+//! the Rust version uses `Vec<usize>` (indices into `BasicSoundBank::presets`) to avoid circular ownership.
+//!
+//! - `linkedTo: BasicPreset[]`  → `linked_to: Vec<usize>`  (preset index)
+//! - `createZone(sample: BasicSample)` `sample` argument → `sample_idx: usize` + `samples: &mut Vec<BasicSample>`
+//! - `deleteUnusedZones` / `delete` / `deleteZone` take `instrument_idx` and `samples`
+
 use std::collections::HashMap;
 
 use crate::soundbank::basic_soundbank::basic_instrument_zone::BasicInstrumentZone;
@@ -94,7 +95,6 @@ pub struct BasicInstrument {
 
     /// Global zone (generators/modulators applied to all zones).
     /// Equivalent to: public readonly globalZone = new BasicZone()
-    /// (TS 4.3.0 removed the BasicGlobalZone subclass)
     pub global_zone: BasicZone,
 
     /// Preset indices that use this instrument (back-references).

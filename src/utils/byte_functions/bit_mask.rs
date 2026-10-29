@@ -1,6 +1,7 @@
-/// bit_mask.rs
-/// purpose: Bit manipulation utilities.
-/// Ported from: src/utils/byte_functions/bit_mask.ts
+//! bit_mask.rs
+//! purpose: Bit manipulation utilities.
+//! Ported from: src/utils/byte_functions/bit_mask.ts
+
 /// Converts a given bit position to bool.
 /// Equivalent to: bitMaskToBool(num, bit)
 pub fn bit_mask_to_bool(num: u32, bit: u32) -> bool {

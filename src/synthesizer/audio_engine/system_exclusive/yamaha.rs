@@ -1,7 +1,8 @@
-/// yamaha.rs
-/// purpose: Handles Yamaha XG system exclusive messages.
-/// Ported from: src/synthesizer/audio_engine/system_exclusive/yamaha.ts
-/// Reference: http://www.studio4all.de/htmle/main91.html
+//! yamaha.rs
+//! purpose: Handles Yamaha XG system exclusive messages.
+//! Ported from: src/synthesizer/audio_engine/system_exclusive/yamaha.ts
+//! Reference: <http://www.studio4all.de/htmle/main91.html>
+
 use crate::midi::enums::midi_controllers;
 use crate::midi::midi_tools::sysex_data::{DEFAULT_XG_DRUM_MAP, MELODIC_MAP};
 use crate::soundbank::enums::modulator_sources;

@@ -1,18 +1,19 @@
+//! types.rs
+//! purpose: Core types and interfaces for the SoundBank module.
+//! Ported from: src/soundbank/types.ts
+//!
+//! Skipped (out of MIDI→WAV scope or unported dependencies):
+//!   - SoundBankManagerListEntry  (defined in `synthesizer/audio_engine/sound_bank_manager.rs`)
+//!   - SampleEncodingFunction     (write-only async fn)
+//!   - ProgressFunction           (write-only)
+//!   - SoundFont2WriteOptions / DLSWriteOptions / SoundBankWriteOptions (write-only)
+//!   - SetSampleFormatOptions     (SF3/Vorbis, out of scope)
+//!   - SF2Channel                 (defined in `basic_soundbank/modulator_source.rs`)
+//!
+//! `PresetsWithKeyCombinations`: see the type below for the Rust-specific identity
+//! scheme used in place of TS's `Map<BasicPreset, ...>`.
+
 use crate::soundbank::basic_soundbank::generator_types::GENERATORS_AMOUNT;
-/// types.rs
-/// purpose: Core types and interfaces for the SoundBank module.
-/// Ported from: src/soundbank/types.ts
-///
-/// Skipped (out of MIDI→WAV scope or unported dependencies):
-///   - SoundBankManagerListEntry  (defined in `synthesizer/audio_engine/sound_bank_manager.rs`)
-///   - SampleEncodingFunction     (write-only async fn)
-///   - ProgressFunction           (write-only)
-///   - SoundFont2WriteOptions / DLSWriteOptions / SoundBankWriteOptions (write-only)
-///   - SetSampleFormatOptions     (SF3/Vorbis, out of scope)
-///   - SF2Channel                 (not used by the MIDI-to-WAV path)
-///
-/// `PresetsWithKeyCombinations`: see the type below for the Rust-specific identity
-/// scheme used in place of TS's `Map<BasicPreset, ...>`.
 use std::collections::{HashMap, HashSet};
 
 use crate::soundbank::basic_soundbank::modulator::Modulator;
@@ -70,7 +71,7 @@ pub struct SoundBankInfoData {
     pub product: Option<String>,
     pub copyright: Option<String>,
     pub comment: Option<String>,
-    /// Software used to edit the file. (TS 4.3.0 moved this field before `subject`.)
+    /// Software used to edit the file.
     pub software: Option<String>,
     pub subject: Option<String>,
     pub rom_info: Option<String>,
@@ -126,8 +127,6 @@ pub struct DLSLoop {
 pub type ModulatorSourceIndex = u8;
 
 /// MIDI system mode.
-/// TS 4.3.0 moved this type here from synthesizer/types.ts and renamed it
-/// `SynthSystem` → `MIDISystem`.
 /// Equivalent to: MIDISystem = "gm" | "gm2" | "gs" | "xg"
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum MIDISystem {
@@ -148,8 +147,7 @@ pub enum MIDISystem {
 ///
 /// TypeScript keys this by `BasicPreset` object identity (`Map<BasicPreset, Map<number,
 /// Set<number>>>`). Rust's `BasicPreset` has no stable identity once stored in a `Vec` other than
-/// its address, so — mirroring the scheme the pre-4.3.0 Rust port already used for this same
-/// purpose (`UsedPresetKeys` in `used_programs_and_keys.rs`) — this keys by the *pointer address*
+/// its address, so this keys by the *pointer address*
 /// of the referenced `BasicPreset` (`preset as *const BasicPreset as usize`). A caller holding a
 /// `&BasicPreset` (e.g. while iterating `BasicSoundBank::presets`) can compute the same key to
 /// look itself up; this is valid as long as the `Vec<BasicPreset>` isn't reallocated between

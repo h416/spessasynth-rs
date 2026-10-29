@@ -1,6 +1,7 @@
-/// little_endian.rs
-/// purpose: Little-endian byte read/write utilities.
-/// Ported from: src/utils/byte_functions/little_endian.ts
+//! little_endian.rs
+//! purpose: Little-endian byte read/write utilities.
+//! Ported from: src/utils/byte_functions/little_endian.ts
+
 use crate::utils::indexed_array::IndexedByteArray;
 
 /// Reads the number as little endian from an IndexedByteArray, going above 32 bits.
