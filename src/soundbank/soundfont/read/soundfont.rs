@@ -515,7 +515,7 @@ mod tests {
     use super::*;
     use crate::soundbank::basic_soundbank::modulator::DecodedModulator;
     use crate::soundbank::enums::sample_types;
-    use crate::soundbank::soundfont::read::samples::SF3_BIT_FLIT;
+    use crate::soundbank::soundfont::read::samples::SF3_BIT_FLAG;
 
     // -----------------------------------------------------------------------
     // Helper: build a minimal valid SF2 binary
@@ -767,7 +767,7 @@ mod tests {
         let smpl_bytes = vec![0xABu8; 200];
         let iba = IndexedByteArray::from_vec(smpl_bytes);
         let smpl_data = SmplData::Indexed(&iba);
-        let sf3_type = sample_types::MONO_SAMPLE | SF3_BIT_FLIT;
+        let sf3_type = sample_types::MONO_SAMPLE | SF3_BIT_FLAG;
         let sfs = SoundFontSample::new(
             "SF3sample".to_string(),
             0,

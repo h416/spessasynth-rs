@@ -21,7 +21,7 @@ use crate::synthesizer::audio_engine::parameters::system::{
     DEFAULT_GLOBAL_SYSTEM_PARAMETERS, GlobalSystemParameter,
 };
 use crate::synthesizer::audio_engine::channel::parameters::midi::{
-    CONTROLLER_TABLE_SIZE, CUSTOM_CONTROLLER_TABLE_SIZE, CUSTOM_RESET_ARRAY,
+    CONTROLLER_TABLE_SIZE,
     ChannelMidiParameter, ChannelMidiParameterValue, DEFAULT_CHANNEL_MIDI_PARAMETERS,
     DEFAULT_MIDI_CONTROLLER_VALUES, NON_CC_INDEX_OFFSET,
 };
@@ -36,7 +36,6 @@ use crate::synthesizer::audio_engine::synth_constants::{
     SPESSASYNTH_GAIN_FACTOR,
 };
 use crate::synthesizer::audio_engine::voice::voice::Voice;
-use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::{ChannelProperty, ChannelPropertyChangeCallback, SynthProcessorEvent};
 use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::{SpessaLog, spessa_synth_info};
@@ -47,7 +46,7 @@ use crate::utils::midi_hacks::BankSelectHacks;
 // ---------------------------------------------------------------------------
 
 /// Per-channel vibrato parameters used for GS NRPN custom vibrato.
-/// Equivalent to: channelVibrato inline object in MIDIChannel
+/// Equivalent to: CustomChannelVibrato
 #[derive(Clone, Debug, Default)]
 pub struct ChannelVibrato {
     /// Vibrato delay in seconds.
@@ -139,21 +138,16 @@ pub struct MidiChannel {
     /// Equivalent to: lockedControllers: boolean[]
     pub locked_controllers: Vec<bool>,
 
-    /// Custom (non-SF2) controller values: the SF2 NRPN generator LSB, the modulation
-    /// multiplier and the channel transpose fine tune (see `enums::custom_controllers`).
-    /// Equivalent to: customControllers: Float32Array (removed in TS 4.3.0)
-    pub custom_controllers: [f32; CUSTOM_CONTROLLER_TABLE_SIZE],
-
-    /// Key shift of the channel in semitones.
-    /// Equivalent to: channelTransposeKeyShift
-    pub channel_transpose_key_shift: i16,
+    /// The SF2 NRPN generator selector (SF2 spec section 9.6).
+    /// Equivalent to: sf2NRPNGeneratorLSB
+    pub sf2_nrpn_generator_lsb: i32,
 
     /// Per-note octave tuning (repeated every 12 notes, size 128).
-    /// Equivalent to: channelOctaveTuning: Int8Array(128)
+    /// Equivalent to: octaveTuning: Int8Array(128)
     pub channel_octave_tuning: [i8; 128],
 
     /// Dynamic modulator system for advanced SysEx handling.
-    /// Equivalent to: sysExModulators: DynamicModulatorSystem
+    /// Equivalent to: dynamicModulators: DynamicModulatorManager
     pub sys_ex_modulators: DynamicModulatorSystem,
 
     /// True if this is a percussion/drum channel.
@@ -209,21 +203,12 @@ pub struct MidiChannel {
     /// Rust-specific: needed because BasicPreset.get_voice_parameters requires the source bank.
     pub preset_bank_idx: Option<usize>,
 
-    /// True if the program on this channel is locked.
-    /// Equivalent to: lockPreset
-    pub lock_preset: bool,
-
     /// The MIDI system when the preset was locked.
     /// Equivalent to: lockedSystem: MIDISystem
     pub locked_system: MIDISystem,
 
-    /// Legacy pre-4.3 `lockGSNRPNParams`, kept only for the 4.2-shaped snapshot and
-    /// `set_vibrato`. TS 4.4.1 has no such lock: NRPN data entry uses `nrpnParamLock`
-    /// and `drumLock` instead (see data_entry.rs).
-    pub lock_gs_nrpn_params: bool,
-
     /// Custom vibrato settings for this channel (GS NRPN).
-    /// Equivalent to: channelVibrato
+    /// Equivalent to: customVibrato
     pub channel_vibrato: ChannelVibrato,
 
     /// The synthesizer system parameters (see [`SynthSystemView`]).
@@ -293,32 +278,20 @@ pub struct MidiChannel {
     pub per_note_pitch: bool,
 
     /// Generator offset values for SF2 NRPN support (0 = no change).
-    /// Equivalent to: generatorOffsets: Int16Array
+    /// Equivalent to: generators.offsets: Int16Array
     pub generator_offsets: [i16; GENERATORS_AMOUNT],
 
     /// True when at least one generator offset has been set.
-    /// Equivalent to: generatorOffsetsEnabled (protected)
+    /// Equivalent to: generators.offsetsEnabled
     pub generator_offsets_enabled: bool,
 
     /// Generator override values for AWE32 support (i16::MAX = no override).
-    /// Equivalent to: generatorOverrides: Int16Array
+    /// Equivalent to: generators.overrides: Int16Array
     pub generator_overrides: [i16; GENERATORS_AMOUNT],
 
     /// True when at least one generator override has been set.
-    /// Equivalent to: generatorOverridesEnabled (protected)
+    /// Equivalent to: generators.overridesEnabled
     pub generator_overrides_enabled: bool,
-
-    /// True if this channel is muted.
-    /// Equivalent to: _isMuted (protected)
-    pub is_muted: bool,
-
-    /// Previous voice count, used to detect voice count changes for events.
-    /// Equivalent to: previousVoiceCount (private)
-    previous_voice_count: u32,
-
-    /// True if insertion effect routing is enabled for this channel.
-    /// Equivalent to: insertionEnabled
-    pub insertion_enabled: bool,
 
     /// For Mono Mode restoring notes: `playing_notes[midi_note]` is true while that note
     /// is sounding on this channel.
@@ -361,8 +334,7 @@ impl MidiChannel {
             midi_controllers,
             pitch_wheels,
             locked_controllers: vec![false; CONTROLLER_TABLE_SIZE],
-            custom_controllers: CUSTOM_RESET_ARRAY,
-            channel_transpose_key_shift: 0,
+            sf2_nrpn_generator_lsb: 0,
             channel_octave_tuning: [0i8; 128],
             sys_ex_modulators: DynamicModulatorSystem::new(channel as usize),
             drum_channel: false,
@@ -388,9 +360,7 @@ impl MidiChannel {
             },
             preset,
             preset_bank_idx,
-            lock_preset: false,
             locked_system: MIDISystem::Gs,
-            lock_gs_nrpn_params: false,
             channel_vibrato: ChannelVibrato::default(),
             synth_system: SynthSystemView::default(),
             voice_count: 0,
@@ -408,9 +378,6 @@ impl MidiChannel {
             generator_overrides_enabled: false,
             poly_pressures: [0; 128],
             drum_params: (0..128).map(DrumParameterUtils::default_data).collect(),
-            is_muted: false,
-            previous_voice_count: 0,
-            insertion_enabled: false,
             playing_notes: [false; 128],
             note_on_id: [0; 128],
             note_off_id: [0; 128],
@@ -426,34 +393,23 @@ impl MidiChannel {
     /// otherwise returns the supplied current system.
     /// Equivalent to: get channelSystem()
     pub fn channel_system(&self, current_system: MIDISystem) -> MIDISystem {
-        if self.lock_preset {
+        if self.system_parameters.preset_lock {
             self.locked_system
         } else {
             current_system
         }
     }
 
-    /// Saves and resets the voice count. Call once per render quantum before rendering.
+    /// Resets the voice count. Call once per render quantum before rendering.
     /// Equivalent to: clearVoiceCount()
     pub fn clear_voice_count(&mut self) {
-        self.previous_voice_count = self.voice_count;
         self.voice_count = 0;
-    }
-
-    /// Sends a channelPropertyChange event if the voice count has changed.
-    /// Returns Some(event) if the count changed and event system is active.
-    /// Equivalent to: updateVoiceCount()
-    pub fn update_voice_count(&self, enable_event_system: bool) -> Option<SynthProcessorEvent> {
-        if self.voice_count != self.previous_voice_count {
-            self.build_channel_property_event(enable_event_system)
-        } else {
-            None
-        }
     }
 
     /// Sends the channel property as an event.
     /// Returns Some(event) if the event system is enabled.
-    /// Equivalent to: sendChannelProperty()
+    /// Not in TS 4.3.0+ (the `channelPropertyChange` event was removed; API only, no effect
+    /// on the MIDI-to-WAV output). Kept for the Rust event consumers.
     pub fn build_channel_property_event(
         &self,
         enable_event_system: bool,
@@ -468,9 +424,8 @@ impl MidiChannel {
             [NON_CC_INDEX_OFFSET + modulator_sources::PITCH_WHEEL_RANGE as usize]
             as f64
             / 128.0;
-        let transposition = self.channel_transpose_key_shift as f64
-            + self.custom_controllers[custom_controllers::CHANNEL_TRANSPOSE_FINE as usize] as f64
-                / 100.0;
+        let transposition =
+            self.system_parameters.key_shift + self.system_parameters.fine_tune / 100.0;
         Some(SynthProcessorEvent::ChannelPropertyChange(
             ChannelPropertyChangeCallback {
                 channel: self.channel,
@@ -478,7 +433,7 @@ impl MidiChannel {
                     voices_amount: self.voice_count,
                     pitch_wheel,
                     pitch_wheel_range,
-                    is_muted: self.is_muted,
+                    is_muted: self.system_parameters.is_muted,
                     is_drum: self.drum_channel,
                     transposition,
                 },
@@ -617,24 +572,6 @@ impl MidiChannel {
         })]
     }
 
-    /// Sets a custom controller value.
-    /// Equivalent to: setCustomController(type, value)
-    pub fn set_custom_controller(&mut self, controller_type: u8, value: f64) {
-        self.custom_controllers[controller_type as usize] = value as f32;
-    }
-
-    /// Locks or unlocks the preset from MIDI program changes.
-    /// Equivalent to: setPresetLock(locked)
-    pub fn set_preset_lock(&mut self, locked: bool, current_system: MIDISystem) {
-        if self.lock_preset == locked {
-            return;
-        }
-        self.lock_preset = locked;
-        if locked {
-            self.locked_system = current_system;
-        }
-    }
-
     /// Sets the GM/GS drum flag (updates patch.is_gm_gs_drum).
     /// Equivalent to: setGSDrums(drums)
     pub fn set_gs_drums(&mut self, drums: bool) {
@@ -646,17 +583,6 @@ impl MidiChannel {
         self.patch.is_gm_gs_drum = drums;
     }
 
-    /// Sets the custom vibrato.
-    /// Equivalent to: setVibrato(depth, rate, delay)
-    pub fn set_vibrato(&mut self, depth: f64, rate: f64, delay: f64) {
-        if self.lock_gs_nrpn_params {
-            return;
-        }
-        self.channel_vibrato.rate = rate;
-        self.channel_vibrato.delay = delay;
-        self.channel_vibrato.depth = depth;
-    }
-
     /// Equivalent to: resetVibratoParams()
     pub(crate) fn reset_vibrato_params(&mut self) {
         if !self.synth_system.custom_vibrato {
@@ -665,15 +591,6 @@ impl MidiChannel {
         self.channel_vibrato.rate = 0.0;
         self.channel_vibrato.depth = 0.0;
         self.channel_vibrato.delay = 0.0;
-    }
-
-    /// Disables and locks all GS NRPN parameters including custom vibrato.
-    /// Equivalent to: disableAndLockGSNRPN()
-    pub fn disable_and_lock_gs_nrpn(&mut self) {
-        self.lock_gs_nrpn_params = true;
-        self.channel_vibrato.rate = 0.0;
-        self.channel_vibrato.delay = 0.0;
-        self.channel_vibrato.depth = 0.0;
     }
 
     /// Resets the drum parameters of a drum channel to the defaults.
@@ -844,32 +761,6 @@ impl MidiChannel {
         }
     }
 
-    /// Mutes or unmutes this channel.
-    /// Returns events to dispatch.
-    /// Equivalent to: muteChannel(isMuted)
-    pub fn mute_channel(
-        &mut self,
-        voices: &mut [Voice],
-        current_time: f64,
-        is_muted: bool,
-        enable_event_system: bool,
-    ) -> Vec<SynthProcessorEvent> {
-        if is_muted {
-            self.stop_all_notes_impl(voices, current_time, true);
-        }
-        self.is_muted = is_muted;
-        let mut events = Vec::new();
-        if let Some(ev) = self.build_channel_property_event(enable_event_system) {
-            events.push(ev);
-        }
-        use crate::synthesizer::types::MuteChannelCallback;
-        events.push(SynthProcessorEvent::MuteChannel(MuteChannelCallback {
-            channel: self.channel,
-            is_muted,
-        }));
-        events
-    }
-
     /// Recomputes modulators for all active voices on this channel triggered by a given source.
     /// Equivalent to: computeModulatorsAll(sourceUsesCC, sourceIndex) (protected)
     pub fn compute_modulators_all_impl(
@@ -903,7 +794,7 @@ impl MidiChannel {
     /// Sets bank MSB unless the preset is locked.
     /// Equivalent to: setBankMSB(bankMSB) (protected)
     pub fn set_bank_msb(&mut self, bank_msb: u8) {
-        if !self.lock_preset {
+        if !self.system_parameters.preset_lock {
             self.patch.bank_msb = bank_msb;
         }
     }
@@ -911,7 +802,7 @@ impl MidiChannel {
     /// Sets bank LSB unless the preset is locked.
     /// Equivalent to: setBankLSB(bankLSB) (protected)
     pub fn set_bank_lsb(&mut self, bank_lsb: u8) {
-        if !self.lock_preset {
+        if !self.system_parameters.preset_lock {
             self.patch.bank_lsb = bank_lsb;
         }
     }
@@ -919,7 +810,7 @@ impl MidiChannel {
     /// Sets the GM/GS drum flag of the patch, unless the preset is locked.
     /// Equivalent to: setIsGMGSDrum(isGMGSDrum) (protected, new in 4.4.0)
     pub fn set_is_gm_gs_drum(&mut self, is_gm_gs_drum: bool) {
-        if self.lock_preset {
+        if self.system_parameters.preset_lock {
             return;
         }
         self.patch.is_gm_gs_drum = is_gm_gs_drum;
@@ -930,7 +821,7 @@ impl MidiChannel {
     /// internal parameters (drum channels ignore the key shift and tuning).
     /// Equivalent to: setDrumFlag(isDrum) (protected)
     pub fn set_drum_flag(&mut self, is_drum: bool) {
-        if self.lock_preset || self.drum_channel == is_drum {
+        if self.system_parameters.preset_lock || self.drum_channel == is_drum {
             return;
         }
 
@@ -950,7 +841,7 @@ impl MidiChannel {
         locks: DrumLocks,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
-        if self.lock_preset {
+        if self.system_parameters.preset_lock {
             return Vec::new();
         }
 
@@ -1013,8 +904,19 @@ impl MidiChannel {
     pub fn set_midi_parameter(&mut self, value: ChannelMidiParameterValue) {
         use ChannelMidiParameterValue::*;
         match value {
-            Pressure(v) => self.midi_parameters.pressure = v,
-            PitchWheel(v) => self.midi_parameters.pitch_wheel = v,
+            // The non-CC slots of the controller table mirror these values for the modulator
+            // sources (TS reads `midiParameters` directly), so every write keeps both.
+            Pressure(v) => {
+                self.midi_parameters.pressure = v;
+                self.midi_controllers
+                    [NON_CC_INDEX_OFFSET + modulator_sources::CHANNEL_PRESSURE as usize] =
+                    (v << 7) as i16;
+            }
+            PitchWheel(v) => {
+                self.midi_parameters.pitch_wheel = v;
+                self.midi_controllers[NON_CC_INDEX_OFFSET + modulator_sources::PITCH_WHEEL as usize] =
+                    v as i16;
+            }
             PitchWheelRange(v) => {
                 self.midi_parameters.pitch_wheel_range = v;
                 // The pitchWheelRange modulator source reads
@@ -1034,9 +936,6 @@ impl MidiChannel {
             AssignMode(v) => self.midi_parameters.assign_mode = v,
             EfxAssign(v) => {
                 self.midi_parameters.efx_assign = v;
-                // `insertion_enabled` is the legacy mirror read by the voice renderer and
-                // by `SynthesizerCore::update_active_gs_effects`; keep the two in sync.
-                self.insertion_enabled = v;
             }
             Cc1(v) => self.midi_parameters.cc1 = v,
             Cc2(v) => self.midi_parameters.cc2 = v,
@@ -1049,15 +948,16 @@ impl MidiChannel {
     }
 
     /// Sets a channel system parameter and refreshes the cached `current_*` values.
+    /// `voices`/`current_time` are needed by the notes stopped on `isMuted` and `keyShift`.
     /// Equivalent to: setSystemParameterInternal(parameter, value)
-    ///
-    /// # Note
-    /// The TS version has additional per-parameter side effects (e.g. `presetLock`
-    /// records the locked system, `isMuted`/`keyShift` stop all notes). Channel system
-    /// parameters are API-only (no MIDI message sets them), so those side effects stay on
-    /// the dedicated API paths (`set_preset_lock`, `mute_channel`).
-    pub fn set_system_parameter(&mut self, value: ChannelSystemParameterValue) {
+    pub fn set_system_parameter(
+        &mut self,
+        value: ChannelSystemParameterValue,
+        voices: &mut [Voice],
+        current_time: f64,
+    ) {
         use ChannelSystemParameterValue::*;
+        let prev = self.system_parameters.clone();
         match value {
             PresetLock(v) => self.system_parameters.preset_lock = v,
             IsMuted(v) => self.system_parameters.is_muted = v,
@@ -1069,7 +969,24 @@ impl MidiChannel {
             NrpnParamLock(v) => self.system_parameters.nrpn_param_lock = v,
             MonophonicRetrigger(v) => self.system_parameters.monophonic_retrigger = v,
         }
+        // if (this._systemParameters[parameter] === value) return;
+        if self.system_parameters == prev {
+            return;
+        }
         self.update_internal_params();
+        // Additional handling for specific parameters
+        match value {
+            PresetLock(true) => {
+                self.locked_system = self.synth_midi.system;
+            }
+            IsMuted(true) => {
+                self.stop_all_notes_impl(voices, current_time, true);
+            }
+            KeyShift(v) if !self.drum_channel && prev.key_shift != v => {
+                self.stop_all_notes_impl(voices, current_time, true);
+            }
+            _ => {}
+        }
     }
 
     /// Recomputes the cached `current_pan/current_gain/current_tuning/current_key_shift`
@@ -1267,7 +1184,7 @@ mod tests {
         for ch in [&mut melodic, &mut drum] {
             ch.synth_system.fine_tune = 5.0;
             ch.synth_midi.fine_tune = 30.0;
-            ch.set_system_parameter(ChannelSystemParameterValue::FineTune(2.0));
+            ch.set_system_parameter(ChannelSystemParameterValue::FineTune(2.0), &mut [], 0.0);
             ch.set_midi_parameter(ChannelMidiParameterValue::FineTune(40.0));
         }
         assert!((melodic.current_tuning() - 77.0).abs() < 1e-12);
@@ -1284,8 +1201,56 @@ mod tests {
         channel.synth_system.pan = 0.25;
         channel.synth_midi.volume = 0.5;
         channel.synth_midi.pan = -0.5;
-        channel.set_system_parameter(ChannelSystemParameterValue::Gain(0.5));
+        channel.set_system_parameter(ChannelSystemParameterValue::Gain(0.5), &mut [], 0.0);
         assert!((channel.current_gain() - SPESSASYNTH_GAIN_FACTOR * 2.0 * 0.25 * 0.5).abs() < 1e-12);
         assert!((channel.current_pan() - (0.25 - 0.5) * 500.0).abs() < 1e-12);
+    }
+
+    /// `presetLock` is the channel system parameter: locking records the current system
+    /// as the channel system and blocks bank changes (TS `channelSystem`, `setBankMSB`).
+    #[test]
+    fn test_preset_lock_system_parameter_locks_channel_system() {
+        let mut ch = MidiChannel::new(None, None, 0);
+        ch.synth_midi.system = MIDISystem::Xg;
+        ch.set_system_parameter(ChannelSystemParameterValue::PresetLock(true), &mut [], 0.0);
+        ch.synth_midi.system = MIDISystem::Gs;
+        assert_eq!(ch.channel_system(MIDISystem::Gs), MIDISystem::Xg);
+        ch.set_bank_msb(8);
+        assert_eq!(ch.patch.bank_msb, 0);
+        ch.set_system_parameter(ChannelSystemParameterValue::PresetLock(false), &mut [], 0.0);
+        assert_eq!(ch.channel_system(MIDISystem::Gs), MIDISystem::Gs);
+    }
+
+    /// `isMuted` and a changed `keyShift` (melodic channels only) force-stop the notes.
+    #[test]
+    fn test_mute_and_key_shift_system_parameters_stop_notes() {
+        let mut voices = vec![Voice::new(44_100.0, 128), Voice::new(44_100.0, 128)];
+        let start = |ch: &mut MidiChannel, voices: &mut Vec<Voice>| {
+            for v in voices.iter_mut() {
+                v.channel = ch.channel as _;
+                v.is_active = true;
+            }
+            ch.voice_count = voices.len() as u32;
+        };
+        let mut ch = MidiChannel::new(None, None, 0);
+        start(&mut ch, &mut voices);
+        ch.set_system_parameter(ChannelSystemParameterValue::IsMuted(true), &mut voices, 0.0);
+        assert!(voices.iter().all(|v| !v.is_active));
+
+        start(&mut ch, &mut voices);
+        ch.set_system_parameter(ChannelSystemParameterValue::KeyShift(2.0), &mut voices, 0.0);
+        assert!(voices.iter().all(|v| !v.is_active));
+
+        // Same value: no change, no stop
+        start(&mut ch, &mut voices);
+        ch.set_system_parameter(ChannelSystemParameterValue::KeyShift(2.0), &mut voices, 0.0);
+        assert!(voices.iter().all(|v| v.is_active));
+
+        // Drum channels keep their notes on a key shift change
+        let mut drum = MidiChannel::new(None, None, MIDI_DRUM_CHANNEL);
+        drum.drum_channel = true;
+        start(&mut drum, &mut voices);
+        drum.set_system_parameter(ChannelSystemParameterValue::KeyShift(3.0), &mut voices, 0.0);
+        assert!(voices.iter().all(|v| v.is_active));
     }
 }

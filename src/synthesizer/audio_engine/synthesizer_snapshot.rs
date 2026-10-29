@@ -13,7 +13,7 @@
 ///   `copyFrom` was dropped (Rust: `Clone`).
 /// - `InsertionProcessorSnapshot` lost its `sendLevelToReverb/Chorus/Delay` fields — the
 ///   sends moved into `params[20..23]` (the parameter cache grew 20 → 23). Its `channels`
-///   flags now read `c.midiParameters.efxAssign` (Rust legacy: `insertion_enabled`).
+///   flags now read `c.midiParameters.efxAssign`.
 /// - `applySnapshot` restores the insertion effect by *sending GS SysEx* through
 ///   `systemExclusive` (via `MIDIUtils.gsData`) instead of the removed
 ///   `sendAddress`-on-processor helper, letting the regular Roland EFX handler apply it.
@@ -71,16 +71,16 @@ pub struct SynthesizerSnapshot {
     /// Equivalent to: midiParameters: GlobalMIDIParameter
     pub midi_parameters: GlobalMIDIParameter,
 
-    /// Equivalent to: reverbProcessor: ReverbProcessorSnapshot
+    /// Equivalent to: gsReverbProcessor (4.3.0 `reverbProcessor` shape; API only)
     pub reverb_processor: ReverbSnapshot,
 
-    /// Equivalent to: chorusProcessor: ChorusProcessorSnapshot
+    /// Equivalent to: gsChorusProcessor (4.3.0 `chorusProcessor` shape; API only)
     pub chorus_processor: ChorusSnapshot,
 
-    /// Equivalent to: delayProcessor: DelayProcessorSnapshot
+    /// Equivalent to: gsDelayProcessor (4.3.0 `delayProcessor` shape; API only)
     pub delay_processor: DelaySnapshot,
 
-    /// Equivalent to: insertionProcessor: InsertionProcessorSnapshot
+    /// Equivalent to: gsInsertionProcessor (4.3.0 `insertionProcessor` shape; API only)
     pub insertion_processor: InsertionProcessorSnapshot,
 }
 
@@ -317,14 +317,14 @@ mod tests {
     #[test]
     fn test_apply_restores_channel_mute_via_snapshot() {
         let (mut core, _) = make_core_with_channels(1);
-        core.midi_channels[0].is_muted = true;
+        core.midi_channels[0].system_parameters.is_muted = true;
         let snap = get_synthesizer_snapshot(&core);
 
         // Clear state then restore
-        core.midi_channels[0].is_muted = false;
+        core.midi_channels[0].system_parameters.is_muted = false;
         apply_snapshot(&mut core, &snap);
 
-        assert!(core.midi_channels[0].is_muted);
+        assert!(core.midi_channels[0].system_parameters.is_muted);
     }
 
     #[test]

@@ -513,7 +513,7 @@ impl SpessaSynthProcessor {
     }
 
     /// Destroys the synthesizer, releasing all resources.
-    /// Equivalent to: destroySynthProcessor()
+    /// Equivalent to: destroy() (renamed from destroySynthProcessor in 4.4.0)
     pub fn destroy_synth_processor(&mut self) {
         self.synth_core.destroy();
     }

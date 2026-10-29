@@ -6,52 +6,14 @@ use crate::midi::midi_tools::sysex_data::{DEFAULT_GS_DRUM_MAP, DEFAULT_XG_DRUM_M
 use crate::soundbank::enums::modulator_sources;
 use crate::synthesizer::audio_engine::channel::midi_channel::{DrumLocks, MidiChannel};
 use crate::synthesizer::audio_engine::channel::parameters::midi::{
-    ChannelMidiParameterValue, CUSTOM_RESET_ARRAY, DEFAULT_CHANNEL_MIDI_PARAMETERS,
+    ChannelMidiParameterValue, DEFAULT_CHANNEL_MIDI_PARAMETERS,
     DEFAULT_MIDI_CONTROLLER_VALUES,
 };
 use crate::synthesizer::audio_engine::synth_constants::{DEFAULT_NRPN, MIDI_DRUM_CHANNEL};
 use crate::synthesizer::audio_engine::voice::voice::Voice;
-use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::SynthProcessorEvent;
 use crate::soundbank::types::MIDISystem;
 use crate::utils::midi_hacks::BankSelectHacks;
-
-/// MIDI controller numbers that are NOT reset by resetControllers (RP-15).
-/// Equivalent to: nonResettableCCs
-pub fn is_non_resettable(cc: u8) -> bool {
-    matches!(
-        cc,
-        midi_controllers::BANK_SELECT
-            | midi_controllers::BANK_SELECT_LSB
-            | midi_controllers::MAIN_VOLUME
-            | midi_controllers::MAIN_VOLUME_LSB
-            | midi_controllers::PAN
-            | midi_controllers::PAN_LSB
-            | midi_controllers::REVERB_DEPTH
-            | midi_controllers::TREMOLO_DEPTH
-            | midi_controllers::CHORUS_DEPTH
-            | midi_controllers::VARIATION_DEPTH
-            | midi_controllers::PHASER_DEPTH
-            | midi_controllers::SOUND_VARIATION
-            | midi_controllers::FILTER_RESONANCE
-            | midi_controllers::RELEASE_TIME
-            | midi_controllers::ATTACK_TIME
-            | midi_controllers::BRIGHTNESS
-            | midi_controllers::DECAY_TIME
-            | midi_controllers::VIBRATO_RATE
-            | midi_controllers::VIBRATO_DEPTH
-            | midi_controllers::VIBRATO_DELAY
-            | midi_controllers::SOUND_CONTROLLER10
-            | midi_controllers::POLY_MODE_ON
-            | midi_controllers::MONO_MODE_ON
-            | midi_controllers::OMNI_MODE_ON
-            | midi_controllers::OMNI_MODE_OFF
-            | midi_controllers::REGISTERED_PARAMETER_LSB
-            | midi_controllers::REGISTERED_PARAMETER_MSB
-            | midi_controllers::NON_REGISTERED_PARAMETER_LSB
-            | midi_controllers::NON_REGISTERED_PARAMETER_MSB
-    )
-}
 
 impl MidiChannel {
     /// Resets portamento state.
@@ -69,10 +31,10 @@ impl MidiChannel {
     /// Resets all controllers to their default values (full reset).
     ///
     /// Resets the octave tuning, all non-locked MIDI controllers,
-    /// portamento, vibrato, pitch wheel, sysex modulators, and custom controllers.
-    /// Preserves channelTransposeFine custom controller.
+    /// portamento, vibrato, pitch wheel, dynamic modulators and the SF2 NRPN selector.
     ///
-    /// Equivalent to: resetControllers(sendCCEvents = true)
+    /// Equivalent to: resetChannelInternal(sendCCEvents = true), up to "Reset program"
+    /// (the rest is `reset_preset`)
     pub fn reset_controllers(
         &mut self,
         send_event: bool,
@@ -183,11 +145,7 @@ impl MidiChannel {
         // Reset sysex modulators
         self.sys_ex_modulators.reset_modulators();
 
-        // Reset custom controllers (preserve transpose fine)
-        let transpose =
-            self.custom_controllers[custom_controllers::CHANNEL_TRANSPOSE_FINE as usize];
-        self.custom_controllers.copy_from_slice(&CUSTOM_RESET_ARRAY);
-        self.set_custom_controller(custom_controllers::CHANNEL_TRANSPOSE_FINE, transpose as f64);
+        self.sf2_nrpn_generator_lsb = 0;
         // TS 4.3.14 reset.ts: setMIDIParameter("modulationDepth", 50)
         // (set the value directly to avoid per-reset log spam).
         self.midi_parameters.modulation_depth = 50.0;
@@ -207,7 +165,8 @@ impl MidiChannel {
     /// Sets bank MSB to the system default, bank LSB to 0, GS drums off,
     /// drum flag to channel 9, and program to 0.
     ///
-    /// Equivalent to: resetPreset()
+    /// Equivalent to: the "Reset program" tail of resetChannelInternal(sendCCEvents)
+    /// (split out; every caller runs it right after `reset_controllers`)
     pub fn reset_preset(
         &mut self,
         sound_bank_manager: &crate::synthesizer::audio_engine::sound_bank_manager::SoundBankManager,
@@ -239,7 +198,7 @@ impl MidiChannel {
     /// Resets octave tuning, pitch wheel, vibrato, non-resettable CCs,
     /// portamento, and generator overrides/offsets.
     ///
-    /// Equivalent to: resetControllersRP15Compliant()
+    /// Equivalent to: resetRP15()
     pub fn reset_controllers_rp15(
         &mut self,
         voices: &mut [Voice],

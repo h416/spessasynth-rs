@@ -80,7 +80,7 @@ impl SynthesizerCore {
         (black && self.voice_count > 200 && velocity < 40)
             || (black && velocity < 10)
             // Or channel is muted...
-            || self.midi_channels[channel].is_muted
+            || self.midi_channels[channel].system_parameters.is_muted
             // Or channel has no preset...
             || self.midi_channels[channel].preset.is_none()
         {
@@ -795,7 +795,7 @@ mod tests {
     #[test]
     fn test_muted_channel_no_voice_added() {
         let (mut core, _events) = make_core_with_channel();
-        core.midi_channels[0].is_muted = true;
+        core.midi_channels[0].system_parameters.is_muted = true;
         core.note_on(0, 60, 100);
         assert_eq!(
             core.midi_channels[0].voice_count, 0,
@@ -806,7 +806,7 @@ mod tests {
     #[test]
     fn test_muted_channel_no_note_on_event() {
         let (mut core, events) = make_core_with_channel();
-        core.midi_channels[0].is_muted = true;
+        core.midi_channels[0].system_parameters.is_muted = true;
         core.note_on(0, 60, 100);
         let evs = events.lock().unwrap();
         let has_note_on = evs.iter().any(|e| matches!(e, SynthProcessorEvent::NoteOn(_)));
@@ -840,7 +840,8 @@ mod tests {
     fn test_sound_bank_note_above_127_no_voice_added() {
         let (mut core, _events) = make_core_with_channel();
         // note 100 + shift 64 = 164 → out of the 0-127 zone range, no zones match
-        core.midi_channels[0].channel_transpose_key_shift = 64;
+        core.midi_channels[0]
+            .set_system_parameter(crate::synthesizer::audio_engine::channel::parameters::system::ChannelSystemParameterValue::KeyShift(64.0), &mut [], 0.0);
         core.note_on(0, 100, 100);
         assert_eq!(
             core.midi_channels[0].voice_count, 0,
@@ -852,7 +853,8 @@ mod tests {
     fn test_sound_bank_note_below_0_no_voice_added() {
         let (mut core, _events) = make_core_with_channel();
         // note 0 + shift -64 = -64 → out of the 0-127 zone range, no zones match
-        core.midi_channels[0].channel_transpose_key_shift = -64;
+        core.midi_channels[0]
+            .set_system_parameter(crate::synthesizer::audio_engine::channel::parameters::system::ChannelSystemParameterValue::KeyShift(-64.0), &mut [], 0.0);
         core.note_on(0, 0, 100);
         assert_eq!(
             core.midi_channels[0].voice_count, 0,

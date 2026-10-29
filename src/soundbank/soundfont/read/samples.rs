@@ -9,8 +9,8 @@ use crate::utils::riff_chunk::RIFFChunk;
 use crate::utils::byte_functions::string::read_binary_string_indexed;
 
 /// SF3 compression bit flag in sampleType field.
-/// Equivalent to: SF3_BIT_FLIT = 0x10
-pub const SF3_BIT_FLIT: u16 = 0x10;
+/// Equivalent to: SF3_BIT_FLAG = 0x10
+pub const SF3_BIT_FLAG: u16 = 0x10;
 
 /// Audio data source for SoundFontSample construction.
 /// Equivalent to: `IndexedByteArray | Float32Array` union type in TypeScript.
@@ -92,9 +92,9 @@ impl SoundFontSample {
     ) -> Self {
         // Check SF3 compression flag.
         // https://github.com/FluidSynth/fluidsynth/wiki/SoundFont3Format
-        let compressed = (sample_type & SF3_BIT_FLIT) > 0;
+        let compressed = (sample_type & SF3_BIT_FLAG) > 0;
         // Remove the compression flag from sampleType.
-        sample_type &= !SF3_BIT_FLIT;
+        sample_type &= !SF3_BIT_FLAG;
 
         // Compute loop points relative to the sample start, in sample points.
         // Equivalent to: sampleLoopStartIndex - sampleStartIndex / 2
@@ -466,12 +466,12 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // SF3_BIT_FLIT constant
+    // SF3_BIT_FLAG constant
     // -----------------------------------------------------------------------
 
     #[test]
     fn test_sf3_bit_flit_value() {
-        assert_eq!(SF3_BIT_FLIT, 0x10);
+        assert_eq!(SF3_BIT_FLAG, 0x10);
     }
 
     // -----------------------------------------------------------------------
@@ -630,8 +630,8 @@ mod tests {
         let smpl_bytes = vec![0xABu8; 200];
         let iba = IndexedByteArray::from_vec(smpl_bytes);
         let smpl = SmplData::Indexed(&iba);
-        // SF3 mono = MONO_SAMPLE | SF3_BIT_FLIT = 1 | 0x10 = 0x11
-        let sf3_type = st::MONO_SAMPLE | SF3_BIT_FLIT;
+        // SF3 mono = MONO_SAMPLE | SF3_BIT_FLAG = 1 | 0x10 = 0x11
+        let sf3_type = st::MONO_SAMPLE | SF3_BIT_FLAG;
 
         let s = SoundFontSample::new(
             "SF3".to_string(),
@@ -661,7 +661,7 @@ mod tests {
         let smpl_bytes = vec![0xABu8; 200];
         let iba = IndexedByteArray::from_vec(smpl_bytes);
         let smpl = SmplData::Indexed(&iba);
-        let sf3_type = st::MONO_SAMPLE | SF3_BIT_FLIT;
+        let sf3_type = st::MONO_SAMPLE | SF3_BIT_FLAG;
 
         let s = SoundFontSample::new(
             "SF3".to_string(),
@@ -691,7 +691,7 @@ mod tests {
         let smpl_bytes = vec![0u8; 200];
         let iba = IndexedByteArray::from_vec(smpl_bytes);
         let smpl = SmplData::Indexed(&iba);
-        let sf3_type = st::MONO_SAMPLE | SF3_BIT_FLIT;
+        let sf3_type = st::MONO_SAMPLE | SF3_BIT_FLAG;
 
         let s = SoundFontSample::new(
             "SF3".to_string(),
@@ -975,7 +975,7 @@ mod tests {
         let smpl_bytes = vec![0u8; 100];
         let iba = IndexedByteArray::from_vec(smpl_bytes);
         let smpl = SmplData::Indexed(&iba);
-        let sf3_type = st::MONO_SAMPLE | SF3_BIT_FLIT;
+        let sf3_type = st::MONO_SAMPLE | SF3_BIT_FLAG;
         let mut s = SoundFontSample::new(
             "SF3".to_string(),
             0,
@@ -1025,7 +1025,7 @@ mod tests {
         let smpl_bytes = vec![0xABu8; 100];
         let iba = IndexedByteArray::from_vec(smpl_bytes);
         let smpl = SmplData::Indexed(&iba);
-        let sf3_type = st::MONO_SAMPLE | SF3_BIT_FLIT;
+        let sf3_type = st::MONO_SAMPLE | SF3_BIT_FLAG;
         let s = SoundFontSample::new(
             "SF3".to_string(),
             0,
@@ -1050,7 +1050,7 @@ mod tests {
         let smpl_bytes = vec![0xABu8; 100];
         let iba = IndexedByteArray::from_vec(smpl_bytes);
         let smpl = SmplData::Indexed(&iba);
-        let sf3_type = st::MONO_SAMPLE | SF3_BIT_FLIT;
+        let sf3_type = st::MONO_SAMPLE | SF3_BIT_FLAG;
         let s = SoundFontSample::new(
             "SF3".to_string(),
             0,

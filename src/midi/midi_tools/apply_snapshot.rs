@@ -24,10 +24,8 @@
 ///
 /// - `channelSnapshot.systemParameters.isMuted` -> `ChannelSnapshot::is_muted`
 /// - `channelSnapshot.systemParameters.presetLock` -> `ChannelSnapshot::lock_preset`
-/// - `channelSnapshot.systemParameters.keyShift` (semitones) ->
-///   `ChannelSnapshot::channel_transpose_key_shift`
-/// - `channelSnapshot.systemParameters.fineTune` (cents) ->
-///   `ChannelSnapshot::custom_controllers[CHANNEL_TRANSPOSE_FINE]`
+/// - `channelSnapshot.systemParameters.keyShift` (semitones) -> `ChannelSnapshot::key_shift`
+/// - `channelSnapshot.systemParameters.fineTune` (cents) -> `ChannelSnapshot::fine_tune`
 ///
 /// The one remaining gap is `insertionParams`: TS passes `snapshot.insertionProcessor`
 /// (`InsertionProcessorSnapshot`), but `ModifyMidiOptions.insertion_params` expects
@@ -43,7 +41,6 @@ use crate::midi::midi_tools::modify_midi::{
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::synthesizer::audio_engine::channel::parameters::midi::CONTROLLER_TABLE_SIZE;
 use crate::synthesizer::audio_engine::synthesizer_snapshot::SynthesizerSnapshot;
-use crate::synthesizer::enums::custom_controllers;
 
 /// Modifies the sequence according to the locked presets and controllers in the given snapshot.
 /// Note that this ignores the MIDI parameters and only applies system parameter tuning.
@@ -64,11 +61,8 @@ pub fn apply_snapshot_internal(midi: &mut BasicMidi, snapshot: &SynthesizerSnaps
         }
 
         let drum = channel_snapshot.drum_channel;
-        let key_shift = channel_snapshot.channel_transpose_key_shift as f64
-            + if drum { 0.0 } else { global_key_shift };
-        let fine_tune = channel_snapshot.custom_controllers
-            [custom_controllers::CHANNEL_TRANSPOSE_FINE as usize] as f64
-            + if drum { 0.0 } else { global_fine_tune };
+        let key_shift = channel_snapshot.key_shift + if drum { 0.0 } else { global_key_shift };
+        let fine_tune = channel_snapshot.fine_tune + if drum { 0.0 } else { global_fine_tune };
 
         let patch: Option<ClearableParameter<MidiPatch>> = if channel_snapshot.lock_preset {
             Some(ClearableParameter::Value(channel_snapshot.patch.patch))
@@ -229,7 +223,7 @@ mod tests {
     #[test]
     fn test_channel_key_shift_transposes_notes() {
         let mut snapshot = make_snapshot(1);
-        ch(&mut snapshot, 0).channel_transpose_key_shift = 2;
+        ch(&mut snapshot, 0).key_shift = 2.0;
 
         let mut midi = simple_midi(vec![
             make_msg(0, 0x90, vec![60, 100]),

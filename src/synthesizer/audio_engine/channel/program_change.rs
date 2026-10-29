@@ -28,7 +28,7 @@ impl MidiChannel {
         locks: DrumLocks,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
-        if self.lock_preset {
+        if self.system_parameters.preset_lock {
             return Vec::new();
         }
 

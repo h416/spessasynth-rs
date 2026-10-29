@@ -52,11 +52,11 @@ pub enum SourceFilter {
 /// Implement this trait when porting `MIDIChannel`.
 pub trait ChannelContext {
     /// Whether generator offsets are enabled.
-    /// Equivalent to: `this.generatorOffsetsEnabled`
+    /// Equivalent to: `this.generators.offsetsEnabled`
     fn generator_offsets_enabled(&self) -> bool;
 
     /// Per-channel generator offsets (same size as the number of generators).
-    /// Equivalent to: `this.generatorOffsets`
+    /// Equivalent to: `this.generators.offsets`
     fn generator_offsets(&self) -> &[i16];
 
     /// Whether to use per-note pitch wheels.

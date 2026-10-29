@@ -26,7 +26,7 @@ use crate::midi::enums::MidiController;
 use crate::soundbank::basic_soundbank::midi_patch::{MidiPatch, MidiPatchFull};
 use crate::soundbank::types::MIDISystem;
 
-/// Equivalent to: NoteOnCallback
+/// Equivalent to: NoteOnEvent
 #[derive(Clone, Copy, Debug)]
 pub struct NoteOnCallback {
     pub midi_note: u8,
@@ -34,28 +34,28 @@ pub struct NoteOnCallback {
     pub velocity: u8,
 }
 
-/// Equivalent to: NoteOffCallback
+/// Equivalent to: NoteOffEvent
 #[derive(Clone, Copy, Debug)]
 pub struct NoteOffCallback {
     pub midi_note: u8,
     pub channel: u8,
 }
 
-/// Equivalent to: DrumChangeCallback
+/// Not in TS 4.4.0+ (API event only, no effect on the MIDI-to-WAV output).
 #[derive(Clone, Copy, Debug)]
 pub struct DrumChangeCallback {
     pub channel: u8,
     pub is_drum_channel: bool,
 }
 
-/// Equivalent to: ProgramChangeCallback (extends MIDIPatch)
+/// Equivalent to: ProgramChangeEvent (extends MIDIPatchFull)
 #[derive(Clone, Copy, Debug)]
 pub struct ProgramChangeCallback {
     pub patch: MidiPatch,
     pub channel: u8,
 }
 
-/// Equivalent to: ControllerChangeCallback
+/// Equivalent to: ControllerChangeEvent
 #[derive(Clone, Copy, Debug)]
 pub struct ControllerChangeCallback {
     pub channel: u8,
@@ -63,7 +63,7 @@ pub struct ControllerChangeCallback {
     pub controller_value: u8,
 }
 
-/// Equivalent to: MuteChannelCallback
+/// Not in TS 4.4.0+ (API event only, no effect on the MIDI-to-WAV output).
 #[derive(Clone, Copy, Debug)]
 pub struct MuteChannelCallback {
     pub channel: u8,
@@ -82,7 +82,7 @@ pub type PresetList = Vec<PresetListEntry>;
 /// Equivalent to: SynthDisplayCallback
 pub type SynthDisplayCallback = Vec<u8>;
 
-/// Equivalent to: PitchWheelCallback
+/// Not in TS 4.4.0+ (API event only; TS reports it as `channelParamChange`).
 #[derive(Clone, Copy, Debug)]
 pub struct PitchWheelCallback {
     pub channel: u8,
@@ -92,14 +92,14 @@ pub struct PitchWheelCallback {
     pub midi_note: i32,
 }
 
-/// Equivalent to: ChannelPressureCallback
+/// Not in TS 4.4.0+ (API event only; TS reports it as `channelParamChange`).
 #[derive(Clone, Copy, Debug)]
 pub struct ChannelPressureCallback {
     pub channel: u8,
     pub pressure: u8,
 }
 
-/// Equivalent to: PolyPressureCallback
+/// Equivalent to: PolyPressureEvent
 #[derive(Clone, Copy, Debug)]
 pub struct PolyPressureCallback {
     pub channel: u8,
@@ -110,7 +110,7 @@ pub struct PolyPressureCallback {
 /// Equivalent to: SoundBankErrorCallback
 pub type SoundBankErrorCallback = String;
 
-/// Equivalent to: StopAllCallback
+/// Equivalent to: StopAllEvent
 #[derive(Clone, Copy, Debug)]
 pub struct StopAllCallback {
     pub channel: u8,
@@ -120,7 +120,7 @@ pub struct StopAllCallback {
 /// A single global MIDI parameter change (parameter + new value).
 /// TS 4.3.0's `globalParamChange` event payload is `{ parameter, value }` over the
 /// `GlobalMIDIParameter` keys; Rust uses a discriminated union.
-/// Equivalent to: GlobalMIDIParameterChangeCallback
+/// Equivalent to: GlobalMIDIParameterChangeEvent
 #[derive(Clone, Copy, Debug)]
 pub enum GlobalMIDIParameterChangeCallback {
     System(MIDISystem),
@@ -177,7 +177,7 @@ pub enum EffectKind {
 }
 
 /// All synthesizer processor events (discriminated union).
-/// Equivalent to: SynthProcessorEvent
+/// Equivalent to: SynthesizerEventCallback
 #[derive(Clone, Debug)]
 pub enum SynthProcessorEvent {
     NoteOn(NoteOnCallback),

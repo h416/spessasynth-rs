@@ -48,9 +48,8 @@
 /// - The per-channel `updateVoiceCount()` loop at the end of `process()` was removed
 ///   upstream (channel voice-count events move to the channel side) — removed here too.
 /// - `process()` no longer skips voices on muted channels in TS 4.3.0: TS mutes through the
-///   channel system parameter `isMuted` (note-ons are refused and the notes are stopped).
-///   Muting is API-only (no MIDI message sets it); the Rust port keeps the 4.2.0 `is_muted`
-///   flag and its render skip for the API.
+///   channel system parameter `isMuted` (note-ons are refused and the notes are stopped by
+///   `MidiChannel::set_system_parameter`).
 /// - Not ported (API only, no effect on the MIDI-to-WAV output): `ch.destroy()` (Rust drops
 ///   the channels) and `updatePresetList()` (TS reruns program changes and `reset()` when a
 ///   sound bank is added or removed; Rust loads the sound banks before playback).
@@ -89,7 +88,6 @@ use crate::synthesizer::audio_engine::synth_constants::{
     MIDI_DRUM_CHANNEL, EFX_SENDS_GAIN_CORRECTION,
 };
 use crate::synthesizer::audio_engine::voice::voice::Voice;
-use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::{
     CachedVoiceList, EffectChangeCallback, EffectKind, SynthProcessorEvent, SynthProcessorOptions,
 };
@@ -273,7 +271,7 @@ pub struct SynthesizerCore {
     pub pan_smoothing_factor: f64,
 
     /// Callback invoked for synthesizer events.
-    /// Equivalent to: eventCallbackHandler
+    /// Equivalent to: onEventCall
     pub event_callback: Box<dyn Fn(SynthProcessorEvent)>,
 
     /// Cache of computed voice lists, keyed by get_cached_voice_index output.
@@ -783,11 +781,6 @@ impl SynthesizerCore {
                     continue;
                 }
                 let ch = &mut self.midi_channels[v.channel as usize];
-                // Not in TS 4.3.0+ (API-only muting, see module doc).
-                if ch.is_muted {
-                    continue;
-                }
-
                 ch.render_voice(v, current_time, sample_count, &mut ctx);
 
                 // Update voice count
@@ -886,8 +879,7 @@ impl SynthesizerCore {
             let output_right = &ch.output_right;
 
             // Straight into the insertion EFX, but only if it is active
-            // (`insertion_enabled` is the Rust name for `midiParameters.efxAssign`).
-            if ch.insertion_enabled && fx && self.gs_insertion_active {
+            if ch.midi_parameters.efx_assign && fx && self.gs_insertion_active {
                 // Index is 0-based here as it's internal
                 for i in 0..sample_count {
                     self.insertion_input_l[i] =
@@ -1324,9 +1316,7 @@ impl SynthesizerCore {
     /// Equivalent to: updateActiveGSEffects() (renamed from updateActiveEffects in 4.4.0)
     pub fn update_active_gs_effects(&mut self) {
         if !self.system_parameters.gs_insertion_lock {
-            // TS reads `c.midiParameters.efxAssign`; the Rust channel keeps the same flag
-            // under the legacy name `insertion_enabled`.
-            self.gs_insertion_active = self.midi_channels.iter().any(|c| c.insertion_enabled);
+            self.gs_insertion_active = self.midi_channels.iter().any(|c| c.midi_parameters.efx_assign);
         }
         if !self.system_parameters.gs_delay_lock {
             self.gs_delay_active = if self.midi_parameters.system == MIDISystem::Xg {
@@ -1342,7 +1332,7 @@ impl SynthesizerCore {
     }
 
     /// Resets the insertion parameter cache to "no change" + the default sends.
-    /// Equivalent to: resetInsertionParams() (protected, new in TS 4.3.0)
+    /// Equivalent to: resetGSInsertionParams() (renamed from resetInsertionParams in 4.4.0)
     pub(crate) fn reset_insertion_params(&mut self) {
         // No change
         self.insertion_params.fill(255);
@@ -1352,7 +1342,7 @@ impl SynthesizerCore {
     }
 
     /// Resets the insertion effect to defaults.
-    /// Equivalent to: resetInsertion()
+    /// Equivalent to: resetGSInsertion() (renamed from resetInsertion in 4.4.0)
     pub fn reset_insertion(&mut self) {
         if self.system_parameters.gs_insertion_lock {
             return;
@@ -1387,7 +1377,7 @@ impl SynthesizerCore {
             channels: self
                 .midi_channels
                 .iter()
-                .map(|c| c.insertion_enabled)
+                .map(|c| c.midi_parameters.efx_assign)
                 .collect(),
         }
     }
@@ -1500,7 +1490,7 @@ impl SynthesizerCore {
     }
 
     /// Destroys the synthesizer, releasing all resources.
-    /// Equivalent to: destroySynthProcessor()
+    /// Equivalent to: destroy() (renamed from destroySynthProcessor in 4.4.0)
     pub fn destroy(&mut self) {
         self.voices.clear();
         // TS calls c.destroy() per channel (see module doc).

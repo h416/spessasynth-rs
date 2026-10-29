@@ -382,9 +382,8 @@ impl MidiChannel {
         let mut reverb_level = 0.0;
         let mut chorus_level = 0.0;
         let mut variation_level = 0.0;
-        // `insertion_enabled` is the Rust name for `midiParameters.efxAssign`.
         if core.effects_enabled
-            && !(self.insertion_enabled && core.gs_insertion_active)
+            && !(self.midi_parameters.efx_assign && core.gs_insertion_active)
             && !self.xg_insertion_assigned
         {
             let reverb_send = modulated[gt::REVERB_EFFECTS_SEND as usize] as f64 * voice.reverb_gain;

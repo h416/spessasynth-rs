@@ -17,7 +17,6 @@ use crate::synthesizer::audio_engine::channel::parameters::midi::{
     ChannelMidiParameterValue, NON_CC_INDEX_OFFSET,
 };
 use crate::synthesizer::audio_engine::voice::voice::Voice;
-use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::SynthProcessorEvent;
 use crate::utils::loggin::spessa_synth_info;
 
@@ -271,9 +270,7 @@ impl MidiChannel {
                 // Per SF spec, NRPN Select LSB > 100 is for setup only and should not
                 // be used on its own to select a generator parameter.
                 if param_fine <= 100 {
-                    let r#gen = self.custom_controllers
-                        [custom_controllers::SF2_NPRN_GENERATOR_LSB as usize]
-                        as GeneratorType;
+                    let r#gen = self.sf2_nrpn_generator_lsb as GeneratorType;
                     let offset = data_value - 8192;
                     self.set_generator_offset(r#gen, offset as i16, voices);
                 }

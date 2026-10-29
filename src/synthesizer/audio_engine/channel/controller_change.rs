@@ -8,7 +8,6 @@ use crate::synthesizer::audio_engine::synth_constants::{
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
 use crate::synthesizer::audio_engine::channel::parameters::midi::ChannelMidiParameterValue;
-use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::types::{ControllerChangeCallback, SynthProcessorEvent};
 use crate::soundbank::types::MIDISystem;
 use crate::utils::midi_hacks::BankSelectHacks;
@@ -123,7 +122,7 @@ impl MidiChannel {
 
             midi_controllers::NON_REGISTERED_PARAMETER_MSB => {
                 // SF2 spec section 9.6.2: reset SF2 NRPN generator LSB on new NRPN
-                self.custom_controllers[custom_controllers::SF2_NPRN_GENERATOR_LSB as usize] = 0.0;
+                self.sf2_nrpn_generator_lsb = 0;
                 // Clear and set state (some MIDI files only send MSB data).
                 self.midi_controllers[midi_controllers::DATA_ENTRY_MSB as usize] = 0;
                 self.last_parameter_is_registered = false;
@@ -134,34 +133,19 @@ impl MidiChannel {
                     [midi_controllers::NON_REGISTERED_PARAMETER_MSB as usize]
                     >> 7) as u8;
                 if nrpn_msb == non_registered_msb::SF2 {
-                    // Accumulate SF2 NRPN LSB selector
-                    let current = self.custom_controllers
-                        [custom_controllers::SF2_NPRN_GENERATOR_LSB as usize];
-                    // Reset if previous value was not a multiple-of-100
-                    let current_i = current as i32;
-                    if current_i % 100 != 0 {
-                        self.custom_controllers
-                            [custom_controllers::SF2_NPRN_GENERATOR_LSB as usize] = 0.0;
+                    // If a <100 value has already been sent, reset!
+                    if self.sf2_nrpn_generator_lsb % 100 != 0 {
+                        self.sf2_nrpn_generator_lsb = 0;
                     }
                     match value {
-                        100 => {
-                            self.custom_controllers
-                                [custom_controllers::SF2_NPRN_GENERATOR_LSB as usize] += 100.0;
+                        100 => self.sf2_nrpn_generator_lsb += 100,
+                        101 => self.sf2_nrpn_generator_lsb += 1000,
+                        102 => self.sf2_nrpn_generator_lsb += 10_000,
+                        _ => {
+                            if value < 100 {
+                                self.sf2_nrpn_generator_lsb += value as i32;
+                            }
                         }
-                        101 => {
-                            self.custom_controllers
-                                [custom_controllers::SF2_NPRN_GENERATOR_LSB as usize] += 1000.0;
-                        }
-                        102 => {
-                            self.custom_controllers
-                                [custom_controllers::SF2_NPRN_GENERATOR_LSB as usize] += 10_000.0;
-                        }
-                        v if v < 100 => {
-                            self.custom_controllers
-                                [custom_controllers::SF2_NPRN_GENERATOR_LSB as usize] +=
-                                value as f32;
-                        }
-                        _ => {}
                     }
                 }
                 // Clear and set state (some MIDI files only send MSB data).

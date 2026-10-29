@@ -8,7 +8,6 @@ use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::generator_types;
 use crate::soundbank::enums::modulator_sources;
 use crate::synthesizer::audio_engine::channel::parameters::midi::ChannelMidiParameterValue;
-use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::{
     sys_ex_logging, sys_ex_not_recognized,
 };
@@ -133,7 +132,7 @@ impl SynthesizerCore {
                                 // GS resets to the default kit not only when toggling drums,
                                 // But on any map change too.
                                 let ch = &mut self.midi_channels[channel];
-                                if !ch.lock_preset
+                                if !ch.system_parameters.preset_lock
                                     && (is_drums != ch.patch.is_gm_gs_drum || new_map != prev_map)
                                 {
                                     ch.patch.bank_msb = 0;

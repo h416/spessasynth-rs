@@ -3,7 +3,6 @@
 /// Ported from: src/synthesizer/audio_engine/engine_components/controller_tables.ts
 use crate::midi::enums::midi_controllers;
 use crate::soundbank::enums::modulator_sources;
-use crate::synthesizer::enums::custom_controllers;
 
 /*
  * A bit of explanation:
@@ -13,10 +12,14 @@ use crate::synthesizer::enums::custom_controllers;
  * This allows us for precise control range and supports full pitch-wheel resolution.
  */
 
-/// Equivalent to: NON_CC_INDEX_OFFSET
+/// Rust-only (the 4.2.0 table layout): the non-CC modulator sources pitch wheel, pitch wheel
+/// range and channel pressure are mirrored at `NON_CC_INDEX_OFFSET + source`. TS (4.3.0+)
+/// keeps a 128-entry table and reads `midiParameters`; `set_midi_parameter` and the
+/// `pitch_wheel`/`channel_pressure` methods keep both in sync.
 pub const NON_CC_INDEX_OFFSET: usize = 128;
 
-/// Equivalent to: CONTROLLER_TABLE_SIZE
+/// The channel controller table size: 128 CCs + the non-CC mirror (see
+/// `NON_CC_INDEX_OFFSET`). TS `CONTROLLER_TABLE_SIZE` (synth_constants.ts) is 128.
 pub const CONTROLLER_TABLE_SIZE: usize = 147;
 
 /// Compute default MIDI controller values at compile time.
@@ -65,23 +68,10 @@ const fn build_default_midi_controller_values() -> [i16; CONTROLLER_TABLE_SIZE] 
 }
 
 /// An array with the default MIDI controller values. Note that these are 14-bit, not 7-bit.
-/// Equivalent to: defaultMIDIControllerValues
+/// Equivalent to: DEFAULT_MIDI_CONTROLLERS (reset.ts), plus the non-CC mirror defaults
 pub const DEFAULT_MIDI_CONTROLLER_VALUES: [i16; CONTROLLER_TABLE_SIZE] =
     build_default_midi_controller_values();
 
-/// Equivalent to: CUSTOM_CONTROLLER_TABLE_SIZE (= Object.keys(customControllers).length = 7)
-pub const CUSTOM_CONTROLLER_TABLE_SIZE: usize = 7;
-
-/// Build the custom controller reset array at compile time.
-/// Equivalent to: customResetArray initialization
-const fn build_custom_reset_array() -> [f32; CUSTOM_CONTROLLER_TABLE_SIZE] {
-    let mut arr = [0.0f32; CUSTOM_CONTROLLER_TABLE_SIZE];
-    arr[custom_controllers::MODULATION_MULTIPLIER as usize] = 1.0;
-    arr
-}
-
-/// Equivalent to: customResetArray
-pub const CUSTOM_RESET_ARRAY: [f32; CUSTOM_CONTROLLER_TABLE_SIZE] = build_custom_reset_array();
 
 // ---------------------------------------------------------------------------
 // ChannelMidiParameter
@@ -253,11 +243,6 @@ mod tests {
         assert_eq!(CONTROLLER_TABLE_SIZE, 147);
     }
 
-    #[test]
-    fn test_custom_controller_table_size() {
-        assert_eq!(CUSTOM_CONTROLLER_TABLE_SIZE, 7);
-    }
-
     // --- DEFAULT_MIDI_CONTROLLER_VALUES: array length ---
 
     #[test]
@@ -410,36 +395,5 @@ mod tests {
     fn test_zero_entries_last() {
         // last entry (146) should be 0
         assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[146], 0);
-    }
-
-    // --- CUSTOM_RESET_ARRAY ---
-
-    #[test]
-    fn test_custom_reset_array_length() {
-        assert_eq!(CUSTOM_RESET_ARRAY.len(), CUSTOM_CONTROLLER_TABLE_SIZE);
-    }
-
-    #[test]
-    fn test_custom_reset_array_modulation_multiplier() {
-        // modulationMultiplier = 2 => 1.0
-        assert_eq!(CUSTOM_RESET_ARRAY[2], 1.0f32);
-    }
-
-    #[test]
-    fn test_custom_reset_array_channel_tuning_zero() {
-        // channelTuning = 0 => 0.0
-        assert_eq!(CUSTOM_RESET_ARRAY[0], 0.0f32);
-    }
-
-    #[test]
-    fn test_custom_reset_array_master_tuning_zero() {
-        // masterTuning = 3 => 0.0
-        assert_eq!(CUSTOM_RESET_ARRAY[3], 0.0f32);
-    }
-
-    #[test]
-    fn test_custom_reset_array_last_zero() {
-        // sf2NPRNGeneratorLSB = 6 => 0.0
-        assert_eq!(CUSTOM_RESET_ARRAY[6], 0.0f32);
     }
 }
