@@ -14,7 +14,7 @@ use crate::soundbank::enums::modulator_sources;
 use crate::soundbank::types::MIDISystem;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
 use crate::synthesizer::audio_engine::channel::parameters::midi::{
-    ChannelMidiParameterValue, NON_CC_INDEX_OFFSET,
+    ChannelMidiParameterValue,
 };
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::types::SynthProcessorEvent;

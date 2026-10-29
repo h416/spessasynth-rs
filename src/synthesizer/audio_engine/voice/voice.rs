@@ -3,7 +3,7 @@
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 use crate::soundbank::basic_soundbank::generator_types::GENERATORS_AMOUNT;
 use crate::soundbank::basic_soundbank::modulator::DecodedModulator;
-use crate::soundbank::basic_soundbank::modulator_source::VoiceModInputs;
+use crate::soundbank::basic_soundbank::modulator_source::{SF2Channel, VoiceModInputs};
 use crate::synthesizer::audio_engine::voice::compute_modulator::VoiceContext;
 use crate::synthesizer::audio_engine::voice::lowpass_filter::LowpassFilter;
 use crate::synthesizer::audio_engine::voice::modulation_envelope::ModulationEnvelope;
@@ -375,14 +375,14 @@ impl VoiceContext for Voice {
     /// and returns the result.
     ///
     /// # Design note
-    /// TypeScript calls `modulator.primarySource.getValue(controllerTable, pitchWheel, this)`.
+    /// TypeScript calls `modulator.primarySource.getValue(channel, pitchWheel, voice)`.
     /// In Rust, we extract modulator fields first (to release the immutable borrow of
     /// `self.modulators`), then mutate `self.resonance_offset` and `self.modulator_values`.
     ///
-    /// Equivalent to: computeModulator(controllerTable, pitchWheel, modulatorIndex)
+    /// Equivalent to: computeModulator(voice, pitchWheel, modulatorIndex)
     fn compute_single_modulator(
         &mut self,
-        midi_controllers: &[i16],
+        channel: &SF2Channel,
         pitch: i16,
         modulation_depth: f64,
         index: usize,
@@ -434,9 +434,9 @@ impl VoiceContext for Voice {
         };
 
         // source values are f32 from the precomputed lookup table (Float32Array in TS)
-        let source_value = primary_src.get_value(midi_controllers, pitch as i32, &voice_inputs);
+        let source_value = primary_src.get_value(channel, pitch as i32, &voice_inputs);
         let second_src_value =
-            secondary_src.get_value(midi_controllers, pitch as i32, &voice_inputs);
+            secondary_src.get_value(channel, pitch as i32, &voice_inputs);
 
         // Use f64 for intermediate computation to match TypeScript's `number` (f64) arithmetic.
         // TS: computedValue = sourceValue * secondSrcValue * transformAmount (all f64)
@@ -502,6 +502,11 @@ mod tests {
     use crate::soundbank::basic_soundbank::modulator::DecodedModulator;
     use crate::synthesizer::audio_engine::parameters::system::DEFAULT_GLOBAL_SYSTEM_PARAMETERS;
     use crate::synthesizer::enums::interpolation_types;
+    use crate::synthesizer::audio_engine::synth_constants::CONTROLLER_TABLE_SIZE;
+
+    fn test_channel(midi_controllers: &[i16]) -> SF2Channel<'_> {
+        SF2Channel { midi_controllers, pressure: 0, pitch_wheel_range: 2.0 }
+    }
 
     const SAMPLE_RATE: f64 = 44_100.0;
 
@@ -813,8 +818,8 @@ mod tests {
         let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.modulators = vec![make_no_controller_mod(gt::PAN, 0)];
         v.modulator_values = vec![99];
-        let midi_controllers = vec![0i16; 147];
-        let result = v.compute_single_modulator(&midi_controllers, 0, 1.0, 0);
+        let midi_controllers = vec![0i16; CONTROLLER_TABLE_SIZE];
+        let result = v.compute_single_modulator(&test_channel(&midi_controllers), 0, 1.0, 0);
         assert!((result - 0.0).abs() < 1e-5);
         assert_eq!(v.modulator_values[0], 0);
     }
@@ -826,8 +831,8 @@ mod tests {
         // amount = 100 → computed = 1.0 * 1.0 * 100.0 = 100.0
         v.modulators = vec![make_no_controller_mod(gt::PAN, 100)];
         v.modulator_values = vec![0];
-        let midi_controllers = vec![0i16; 147];
-        let result = v.compute_single_modulator(&midi_controllers, 0, 1.0, 0);
+        let midi_controllers = vec![0i16; CONTROLLER_TABLE_SIZE];
+        let result = v.compute_single_modulator(&test_channel(&midi_controllers), 0, 1.0, 0);
         // result ≈ 100.0 (NO_CONTROLLER returns full scale)
         assert!(result.abs() > 0.0, "result should be nonzero, got {result}");
         // modulatorValues stores as i16 (matches TS Int16Array)
@@ -839,8 +844,8 @@ mod tests {
         let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.modulators = vec![make_no_controller_mod(gt::PAN, 50)];
         v.modulator_values = vec![0];
-        let midi_controllers = vec![0i16; 147];
-        let result = v.compute_single_modulator(&midi_controllers, 0, 1.0, 0);
+        let midi_controllers = vec![0i16; CONTROLLER_TABLE_SIZE];
+        let result = v.compute_single_modulator(&test_channel(&midi_controllers), 0, 1.0, 0);
         assert_eq!(v.modulator_values[0], result as i16);
     }
 
@@ -852,8 +857,8 @@ mod tests {
         let mod_ = DecodedModulator::new(0, 0, gt::PAN, -100, 2);
         v.modulators = vec![mod_];
         v.modulator_values = vec![0];
-        let midi_controllers = vec![0i16; 147];
-        let result = v.compute_single_modulator(&midi_controllers, 0, 1.0, 0);
+        let midi_controllers = vec![0i16; CONTROLLER_TABLE_SIZE];
+        let result = v.compute_single_modulator(&test_channel(&midi_controllers), 0, 1.0, 0);
         assert!(
             result >= 0.0,
             "transform_type 2 should produce abs value, got {result}"

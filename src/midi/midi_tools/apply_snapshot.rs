@@ -39,7 +39,7 @@ use crate::midi::midi_tools::modify_midi::{
     modify_midi_internal, ChannelModification, ClearableParameter, ModifyMidiOptions,
 };
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
-use crate::synthesizer::audio_engine::channel::parameters::midi::CONTROLLER_TABLE_SIZE;
+use crate::synthesizer::audio_engine::synth_constants::CONTROLLER_TABLE_SIZE;
 use crate::synthesizer::audio_engine::synthesizer_snapshot::SynthesizerSnapshot;
 
 /// Modifies the sequence according to the locked presets and controllers in the given snapshot.

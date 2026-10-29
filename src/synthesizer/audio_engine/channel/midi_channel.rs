@@ -21,10 +21,11 @@ use crate::synthesizer::audio_engine::parameters::system::{
     DEFAULT_GLOBAL_SYSTEM_PARAMETERS, GlobalSystemParameter,
 };
 use crate::synthesizer::audio_engine::channel::parameters::midi::{
-    CONTROLLER_TABLE_SIZE,
-    ChannelMidiParameter, ChannelMidiParameterValue, DEFAULT_CHANNEL_MIDI_PARAMETERS,
-    DEFAULT_MIDI_CONTROLLER_VALUES, NON_CC_INDEX_OFFSET,
+    CHANNEL_MIDI_PARAMETER_COUNT, ChannelMidiParameter, ChannelMidiParameterKey,
+    ChannelMidiParameterValue, DEFAULT_CHANNEL_MIDI_PARAMETERS,
 };
+use crate::synthesizer::audio_engine::channel::reset::DEFAULT_MIDI_CONTROLLERS;
+use crate::synthesizer::audio_engine::synth_constants::CONTROLLER_TABLE_SIZE;
 use crate::synthesizer::audio_engine::channel::parameters::system::{
     ChannelSystemParameter, ChannelSystemParameterValue, DEFAULT_CHANNEL_SYSTEM_PARAMETERS,
 };
@@ -168,6 +169,11 @@ pub struct MidiChannel {
     /// `set_midi_parameter`.
     /// Equivalent to: _midiParameters (with the `midiParameters` getter)
     pub midi_parameters: ChannelMidiParameter,
+
+    /// If a Channel MIDI parameter is locked (not allowed to change), indexed by
+    /// [`ChannelMidiParameterKey`].
+    /// Equivalent to: lockedMIDIParameters
+    pub locked_midi_parameters: [bool; CHANNEL_MIDI_PARAMETER_COUNT],
 
     /// All system parameters of this channel (API-controlled).
     /// Equivalent to: _systemParameters (with the `systemParameters` getter)
@@ -324,7 +330,7 @@ impl MidiChannel {
     /// Creates a new MIDI channel.
     /// Equivalent to: constructor(synthProps, preset, channelNumber)
     pub fn new(preset: Option<BasicPreset>, preset_bank_idx: Option<usize>, channel: u8) -> Self {
-        let midi_controllers = DEFAULT_MIDI_CONTROLLER_VALUES;
+        let midi_controllers = DEFAULT_MIDI_CONTROLLERS;
         let mut generator_overrides = [0i16; GENERATORS_AMOUNT];
         generator_overrides.fill(GENERATOR_OVERRIDE_NO_CHANGE_VALUE);
         let mut pitch_wheels = [0i16; 128];
@@ -334,6 +340,7 @@ impl MidiChannel {
             midi_controllers,
             pitch_wheels,
             locked_controllers: vec![false; CONTROLLER_TABLE_SIZE],
+            locked_midi_parameters: [false; CHANNEL_MIDI_PARAMETER_COUNT],
             sf2_nrpn_generator_lsb: 0,
             channel_octave_tuning: [0i8; 128],
             sys_ex_modulators: DynamicModulatorSystem::new(channel as usize),
@@ -417,13 +424,8 @@ impl MidiChannel {
         if !enable_event_system {
             return None;
         }
-        let pitch_wheel = self.midi_controllers
-            [NON_CC_INDEX_OFFSET + modulator_sources::PITCH_WHEEL as usize]
-            as u16;
-        let pitch_wheel_range = self.midi_controllers
-            [NON_CC_INDEX_OFFSET + modulator_sources::PITCH_WHEEL_RANGE as usize]
-            as f64
-            / 128.0;
+        let pitch_wheel = self.midi_parameters.pitch_wheel as u16;
+        let pitch_wheel_range = self.midi_parameters.pitch_wheel_range;
         let transposition =
             self.system_parameters.key_shift + self.system_parameters.fine_tune / 100.0;
         Some(SynthProcessorEvent::ChannelPropertyChange(
@@ -456,13 +458,13 @@ impl MidiChannel {
         }
     }
 
-    /// Sets the modulation depth in cents.
-    /// Equivalent to: setModulationDepth(cents)
+    /// Sets the modulation depth in cents and logs it.
+    /// Equivalent to: setMIDIParameter("modulationDepth", cents) followed by the
+    /// `Modulation depth for ...` log (RPN 5 in data_entry.ts, GS LFO1 pitch depth in roland.ts).
     pub fn set_modulation_depth(&mut self, cents: f64) {
-        // TS 4.3.14: setMIDIParameter("modulationDepth", cents). The value is stored in cents
-        // directly and converted to a multiplier (dividing by 50) at the point of use in
-        // `compute_single_modulator`.
-        self.midi_parameters.modulation_depth = cents;
+        // Stored in cents and converted to a multiplier (dividing by 50) at the point of use
+        // in `compute_single_modulator`.
+        self.set_midi_parameter(ChannelMidiParameterValue::ModulationDepth(cents));
         spessa_synth_info(&format!(
             "Channel {} modulation depth. Cents: {}",
             self.channel,
@@ -480,45 +482,31 @@ impl MidiChannel {
         midi_note: i32,
         enable_event_system: bool,
     ) -> Vec<SynthProcessorEvent> {
-        let lock_idx = NON_CC_INDEX_OFFSET + modulator_sources::PITCH_WHEEL as usize;
-        if self.locked_controllers[lock_idx] {
-            return Vec::new();
-        }
-
         let mut events = Vec::new();
 
         if midi_note == -1 {
+            // Disable the per note pitch mode
             self.per_note_pitch = false;
-            self.midi_controllers[lock_idx] = pitch;
-            // TS 4.3.0: the global pitch wheel is mirrored on the channel MIDI parameters,
-            // where `compute_single_modulator` now reads it from.
-            self.midi_parameters.pitch_wheel = pitch as i32;
+            // setMIDIParameter("pitchWheel", pitch): the lock check, then the recompute
+            if self.locked_midi_parameters[ChannelMidiParameterKey::PitchWheel as usize] {
+                return events;
+            }
+            self.set_midi_parameter(ChannelMidiParameterValue::PitchWheel(pitch as i32));
             self.compute_modulators_all_impl(voices, 0, modulator_sources::PITCH_WHEEL as usize);
             if let Some(ev) = self.build_channel_property_event(enable_event_system) {
                 events.push(ev);
             }
         } else {
             if !self.per_note_pitch {
-                let current = self.midi_controllers[lock_idx];
-                self.pitch_wheels.fill(current);
+                // Enable the per-note pitch (fill the pitches with the current CC value)
+                self.pitch_wheels.fill(self.midi_parameters.pitch_wheel as i16);
             }
             self.per_note_pitch = true;
+
             self.pitch_wheels[midi_note as usize] = pitch;
-            // Recompute only voices with this specific note.
-            let mut vc = 0u32;
-            if self.voice_count > 0 {
-                for v in voices.iter_mut() {
-                    if v.is_active && v.channel == self.channel && v.midi_note == midi_note as u8 {
-                        let mut modulated = v.modulated_generators;
-                        compute_modulators(self, v, &mut modulated, SourceFilter::NonCC, modulator_sources::POLY_PRESSURE as usize);
-                        v.modulated_generators = modulated;
-                        vc += 1;
-                        if vc >= self.voice_count {
-                            break;
-                        }
-                    }
-                }
-            }
+
+            // Recompute only specific modulators
+            self.compute_modulators_all_impl(voices, 0, modulator_sources::PITCH_WHEEL as usize);
         }
 
         use crate::synthesizer::types::PitchWheelCallback;
@@ -538,9 +526,11 @@ impl MidiChannel {
         voices: &mut [Voice],
         pressure: u8,
     ) -> Vec<SynthProcessorEvent> {
-        self.midi_parameters.pressure = pressure as i32;
-        self.midi_controllers[NON_CC_INDEX_OFFSET + modulator_sources::CHANNEL_PRESSURE as usize] =
-            (pressure as i16) << 7;
+        // setMIDIParameter("pressure", pressure): the lock check, then the recompute
+        if self.locked_midi_parameters[ChannelMidiParameterKey::Pressure as usize] {
+            return Vec::new();
+        }
+        self.set_midi_parameter(ChannelMidiParameterValue::Pressure(pressure as i32));
         self.compute_modulators_all_impl(voices, 0, modulator_sources::CHANNEL_PRESSURE as usize);
 
         use crate::synthesizer::types::ChannelPressureCallback;
@@ -892,41 +882,30 @@ impl MidiChannel {
     // Channel parameter infrastructure (TS 4.3.0)
     // -----------------------------------------------------------------------
 
+    /// Locks or unlocks a given Channel MIDI Parameter.
+    /// This prevents any changes to it until it's unlocked.
+    /// Equivalent to: lockMIDIParameter(parameter, isLocked)
+    pub fn lock_midi_parameter(&mut self, parameter: ChannelMidiParameterKey, is_locked: bool) {
+        self.locked_midi_parameters[parameter as usize] = is_locked;
+    }
+
     /// Sets a channel MIDI parameter and refreshes the cached `current_*` values.
     /// Equivalent to: setMIDIParameter(parameter, value)
     ///
     /// # Note
-    /// The TS version additionally recomputes modulators for `pitchWheel`/`pressure`
-    /// and fires a `channelParamChange` event. Those two parameters go through the
-    /// dedicated `pitch_wheel`/`channel_pressure` methods (which also keep the value in the
-    /// `midi_controllers` table the modulator sources read, and recompute the modulators),
-    /// so no voice recompute is done here. The event has no effect on rendering.
+    /// The TS version recomputes the modulators for `pitchWheel`/`pressure` here. Rust has
+    /// no voices in this call, so those two go through `pitch_wheel`/`channel_pressure`,
+    /// which check the lock, set the value with this method and recompute. The
+    /// `channelParamChange` event is not ported (API only, no effect on the output).
     pub fn set_midi_parameter(&mut self, value: ChannelMidiParameterValue) {
         use ChannelMidiParameterValue::*;
+        if self.locked_midi_parameters[value.key() as usize] {
+            return;
+        }
         match value {
-            // The non-CC slots of the controller table mirror these values for the modulator
-            // sources (TS reads `midiParameters` directly), so every write keeps both.
-            Pressure(v) => {
-                self.midi_parameters.pressure = v;
-                self.midi_controllers
-                    [NON_CC_INDEX_OFFSET + modulator_sources::CHANNEL_PRESSURE as usize] =
-                    (v << 7) as i16;
-            }
-            PitchWheel(v) => {
-                self.midi_parameters.pitch_wheel = v;
-                self.midi_controllers[NON_CC_INDEX_OFFSET + modulator_sources::PITCH_WHEEL as usize] =
-                    v as i16;
-            }
-            PitchWheelRange(v) => {
-                self.midi_parameters.pitch_wheel_range = v;
-                // The pitchWheelRange modulator source reads
-                // `Math.floor(channel.midiParameters.pitchWheelRange * 128)`; Rust keeps that
-                // value in the non-CC slot of the controller table, which is what the
-                // modulator source reads. No recompute here, like the TS.
-                self.midi_controllers
-                    [NON_CC_INDEX_OFFSET + modulator_sources::PITCH_WHEEL_RANGE as usize] =
-                    (v * 128.0).floor() as i16;
-            }
+            Pressure(v) => self.midi_parameters.pressure = v,
+            PitchWheel(v) => self.midi_parameters.pitch_wheel = v,
+            PitchWheelRange(v) => self.midi_parameters.pitch_wheel_range = v,
             ModulationDepth(v) => self.midi_parameters.modulation_depth = v,
             RxChannel(v) => self.midi_parameters.rx_channel = v,
             PolyMode(v) => self.midi_parameters.poly_mode = v,
@@ -1128,6 +1107,14 @@ impl ChannelContext for MidiChannel {
         self.midi_parameters.modulation_depth
     }
 
+    fn channel_pressure(&self) -> i32 {
+        self.midi_parameters.pressure
+    }
+
+    fn pitch_wheel_range(&self) -> f64 {
+        self.midi_parameters.pitch_wheel_range
+    }
+
     fn poly_pressure(&self, midi_note: usize) -> u8 {
         self.poly_pressures[midi_note]
     }
@@ -1252,5 +1239,31 @@ mod tests {
         start(&mut drum, &mut voices);
         drum.set_system_parameter(ChannelSystemParameterValue::KeyShift(3.0), &mut voices, 0.0);
         assert!(voices.iter().all(|v| v.is_active));
+    }
+
+    /// `setMIDIParameterInternal` returns early for a locked parameter, so the pitch wheel
+    /// and channel pressure MIDI messages leave a locked value alone.
+    #[test]
+    fn test_locked_midi_parameters_ignore_changes() {
+        let mut channel = MidiChannel::new(None, None, 0);
+        let mut voices: Vec<Voice> = Vec::new();
+        MidiChannel::pitch_wheel(&mut channel, &mut voices, 1000, -1, false);
+        MidiChannel::channel_pressure(&mut channel, &mut voices, 30);
+        channel.lock_midi_parameter(ChannelMidiParameterKey::PitchWheel, true);
+        channel.lock_midi_parameter(ChannelMidiParameterKey::Pressure, true);
+        MidiChannel::pitch_wheel(&mut channel, &mut voices, 9000, -1, false);
+        MidiChannel::channel_pressure(&mut channel, &mut voices, 100);
+        assert_eq!(channel.midi_parameters.pitch_wheel, 1000);
+        assert_eq!(channel.midi_parameters.pressure, 30);
+        // The per-note pitch mode is still disabled by a locked global pitch wheel.
+        MidiChannel::pitch_wheel(&mut channel, &mut voices, 500, 60, false);
+        assert!(channel.per_note_pitch);
+        assert_eq!(channel.pitch_wheels[61], 1000);
+        MidiChannel::pitch_wheel(&mut channel, &mut voices, 9000, -1, false);
+        assert!(!channel.per_note_pitch);
+
+        channel.lock_midi_parameter(ChannelMidiParameterKey::PitchWheel, false);
+        MidiChannel::pitch_wheel(&mut channel, &mut voices, 9000, -1, false);
+        assert_eq!(channel.midi_parameters.pitch_wheel, 9000);
     }
 }

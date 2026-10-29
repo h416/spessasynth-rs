@@ -6,9 +6,6 @@
 //! `ChannelStatus` while the events before the target are skipped, then sent once at the end.
 //! Non-skippable CCs (data entry, parameter selection, bank select, ...) and every other event
 //! are processed immediately.
-//!
-//! `DEFAULT_MIDI_CONTROLLERS`, `RP_15_RESET_CC_NUMS` and `CONTROLLER_TABLE_SIZE` are exports of
-//! the TS channel/`synth_constants` modules and are reproduced locally here (pure data).
 use crate::midi::enums::{
     midi_controllers, midi_message_types, MidiController, MidiMessageType,
 };
@@ -17,15 +14,9 @@ use crate::midi::midi_tools::midi_utils::{AnalyzedMidiMessage, MidiUtils};
 use crate::midi::midi_tools::parameter_tracker::ParameterTracker;
 use crate::sequencer::sequencer::SpessaSynthSequencer;
 use crate::sequencer::types::{MetaEventEventData, SequencerEvent};
-use crate::synthesizer::audio_engine::synth_constants::{DEFAULT_NRPN, DEFAULT_RPN};
+use crate::synthesizer::audio_engine::channel::reset::{DEFAULT_MIDI_CONTROLLERS, RP_15_RESET_CC_NUMS};
+use crate::synthesizer::audio_engine::synth_constants::CONTROLLER_TABLE_SIZE;
 use crate::utils::byte_functions::big_endian::read_big_endian;
-
-/// The size of the MIDI controller table (the 128 real MIDI CCs).
-/// Equivalent to (reproduced locally, see the module doc): `CONTROLLER_TABLE_SIZE` in TS 4.4.1's
-/// `synthesizer/audio_engine/synth_constants.ts`. NOT the same constant as
-/// `channel/parameters/midi.rs::CONTROLLER_TABLE_SIZE` (147, which appends non-CC
-/// modulator-source slots that this seek bookkeeping never touches).
-const CONTROLLER_TABLE_SIZE: usize = 128;
 
 /// CCs that must not be skipped during seek.
 /// Equivalent to: nonSkippableCCs
@@ -47,58 +38,6 @@ fn is_cc_non_skippable(cc: MidiController) -> bool {
             | midi_controllers::POLY_MODE_ON
     )
 }
-
-/// An array with the default MIDI controller values used by the sequencer's own seek-time
-/// controller-restore bookkeeping. Note that these are 14-bit (a 7-bit shift to the right for
-/// 7-bit values), matching only 18 of the `CONTROLLER_TABLE_SIZE` entries — the rest default to 0.
-///
-/// Equivalent to (reproduced locally, see the module doc): `DEFAULT_MIDI_CONTROLLERS` in TS 4.4.1's
-/// `synthesizer/audio_engine/channel/reset.ts`.
-const fn build_default_midi_controllers() -> [i16; CONTROLLER_TABLE_SIZE] {
-    let mut arr = [0i16; CONTROLLER_TABLE_SIZE];
-    // Values come from Falcosoft MIDI Player
-    arr[midi_controllers::MAIN_VOLUME as usize] = 100 << 7;
-    arr[midi_controllers::BALANCE as usize] = 64 << 7;
-    arr[midi_controllers::EXPRESSION as usize] = 127 << 7;
-    arr[midi_controllers::PAN as usize] = 64 << 7;
-
-    arr[midi_controllers::FILTER_RESONANCE as usize] = 64 << 7;
-    arr[midi_controllers::RELEASE_TIME as usize] = 64 << 7;
-    arr[midi_controllers::ATTACK_TIME as usize] = 64 << 7;
-    arr[midi_controllers::BRIGHTNESS as usize] = 64 << 7;
-
-    arr[midi_controllers::DECAY_TIME as usize] = 64 << 7;
-    arr[midi_controllers::VIBRATO_RATE as usize] = 64 << 7;
-    arr[midi_controllers::VIBRATO_DEPTH as usize] = 64 << 7;
-    arr[midi_controllers::VIBRATO_DELAY as usize] = 64 << 7;
-    arr[midi_controllers::GENERAL_PURPOSE_CONTROLLER6 as usize] = 64 << 7;
-    arr[midi_controllers::GENERAL_PURPOSE_CONTROLLER8 as usize] = 64 << 7;
-
-    arr[midi_controllers::REGISTERED_PARAMETER_LSB as usize] = (DEFAULT_RPN as i16) << 7;
-    arr[midi_controllers::REGISTERED_PARAMETER_MSB as usize] = (DEFAULT_RPN as i16) << 7;
-    arr[midi_controllers::NON_REGISTERED_PARAMETER_LSB as usize] = (DEFAULT_NRPN as i16) << 7;
-    arr[midi_controllers::NON_REGISTERED_PARAMETER_MSB as usize] = (DEFAULT_NRPN as i16) << 7;
-
-    arr
-}
-
-const DEFAULT_MIDI_CONTROLLERS: [i16; CONTROLLER_TABLE_SIZE] = build_default_midi_controllers();
-
-/// The CCs reset by the RP-15 Recommended Practice (4.4.0 added the NRPN pair).
-/// Equivalent to (reproduced locally, see the module doc): `RP_15_RESET_CC_NUMS` in TS 4.4.1's
-/// `synthesizer/audio_engine/channel/reset.ts`.
-const RP_15_RESET_CC_NUMS: [MidiController; 10] = [
-    midi_controllers::MODULATION_WHEEL,
-    midi_controllers::EXPRESSION,
-    midi_controllers::SUSTAIN_PEDAL,
-    midi_controllers::PORTAMENTO_ON_OFF,
-    midi_controllers::SOSTENUTO_PEDAL,
-    midi_controllers::SOFT_PEDAL,
-    midi_controllers::REGISTERED_PARAMETER_MSB,
-    midi_controllers::REGISTERED_PARAMETER_LSB,
-    midi_controllers::NON_REGISTERED_PARAMETER_MSB,
-    midi_controllers::NON_REGISTERED_PARAMETER_LSB,
-];
 
 /// Per-channel controller/pitch-wheel/portamento bookkeeping accumulated while skipping events
 /// during a seek, sent to the synth only once at the end (or immediately for `nonSkippableCCs`).
@@ -447,6 +386,7 @@ mod tests {
     use crate::midi::midi_track::MidiTrack;
     use crate::midi::types::{TempoChange, TimelineEvent};
     use crate::synthesizer::processor::SpessaSynthProcessor;
+    use crate::synthesizer::audio_engine::synth_constants::DEFAULT_RPN;
     use crate::synthesizer::types::{SynthProcessorEvent, SynthProcessorOptions};
 
     fn make_processor() -> SpessaSynthProcessor {

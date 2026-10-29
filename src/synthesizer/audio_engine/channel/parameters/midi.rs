@@ -1,82 +1,6 @@
-/// controller_tables.rs
-/// purpose: Default MIDI controller values and custom controller reset arrays.
-/// Ported from: src/synthesizer/audio_engine/engine_components/controller_tables.ts
-use crate::midi::enums::midi_controllers;
-use crate::soundbank::enums::modulator_sources;
-
-/*
- * A bit of explanation:
- * The controller table is stored as an i16 array, it stores 14-bit values.
- * This controller table is then extended with the modulatorSources section,
- * for example, pitch range and pitch range depth.
- * This allows us for precise control range and supports full pitch-wheel resolution.
- */
-
-/// Rust-only (the 4.2.0 table layout): the non-CC modulator sources pitch wheel, pitch wheel
-/// range and channel pressure are mirrored at `NON_CC_INDEX_OFFSET + source`. TS (4.3.0+)
-/// keeps a 128-entry table and reads `midiParameters`; `set_midi_parameter` and the
-/// `pitch_wheel`/`channel_pressure` methods keep both in sync.
-pub const NON_CC_INDEX_OFFSET: usize = 128;
-
-/// The channel controller table size: 128 CCs + the non-CC mirror (see
-/// `NON_CC_INDEX_OFFSET`). TS `CONTROLLER_TABLE_SIZE` (synth_constants.ts) is 128.
-pub const CONTROLLER_TABLE_SIZE: usize = 147;
-
-/// Compute default MIDI controller values at compile time.
-/// Equivalent to: defaultMIDIControllerValues initialization + setResetValue calls
-const fn build_default_midi_controller_values() -> [i16; CONTROLLER_TABLE_SIZE] {
-    let mut arr = [0i16; CONTROLLER_TABLE_SIZE];
-
-    // setResetValue(i, v) => arr[i] = v << 7
-
-    // Values come from Falcosoft MidiPlayer 6
-    arr[midi_controllers::MAIN_VOLUME as usize] = 100 << 7;
-    arr[midi_controllers::BALANCE as usize] = 64 << 7;
-    arr[midi_controllers::EXPRESSION_CONTROLLER as usize] = 127 << 7;
-    arr[midi_controllers::PAN as usize] = 64 << 7;
-
-    // Note: TS 4.3.0 no longer defaults portamento on/off (CC65) to on; it stays 0 (off),
-    // matching DEFAULT_MIDI_CONTROLLERS in reset.ts.
-
-    arr[midi_controllers::FILTER_RESONANCE as usize] = 64 << 7;
-    arr[midi_controllers::RELEASE_TIME as usize] = 64 << 7;
-    arr[midi_controllers::ATTACK_TIME as usize] = 64 << 7;
-    arr[midi_controllers::BRIGHTNESS as usize] = 64 << 7;
-
-    arr[midi_controllers::DECAY_TIME as usize] = 64 << 7;
-    arr[midi_controllers::VIBRATO_RATE as usize] = 64 << 7;
-    arr[midi_controllers::VIBRATO_DEPTH as usize] = 64 << 7;
-    arr[midi_controllers::VIBRATO_DELAY as usize] = 64 << 7;
-    arr[midi_controllers::GENERAL_PURPOSE_CONTROLLER6 as usize] = 64 << 7;
-    arr[midi_controllers::GENERAL_PURPOSE_CONTROLLER8 as usize] = 64 << 7;
-
-    // Note: TS 4.3.0 removed the default reverb depth (CC91). It now defaults to 0,
-    // matching DEFAULT_MIDI_CONTROLLERS in reset.ts (previously 4.2.0 set it to 40).
-
-    // RPN and NRPN default to 127 (DEFAULT_RPN = DEFAULT_NRPN = 0x7f, the "null" parameter;
-    // DEFAULT_NRPN was 0 in 4.3.x, 127 again since 4.4.0).
-    arr[midi_controllers::REGISTERED_PARAMETER_LSB as usize] = 127 << 7;
-    arr[midi_controllers::REGISTERED_PARAMETER_MSB as usize] = 127 << 7;
-    arr[midi_controllers::NON_REGISTERED_PARAMETER_LSB as usize] = 127 << 7;
-    arr[midi_controllers::NON_REGISTERED_PARAMETER_MSB as usize] = 127 << 7;
-
-    // Pitch wheel
-    arr[NON_CC_INDEX_OFFSET + modulator_sources::PITCH_WHEEL as usize] = 64 << 7;
-    arr[NON_CC_INDEX_OFFSET + modulator_sources::PITCH_WHEEL_RANGE as usize] = 2 << 7;
-
-    arr
-}
-
-/// An array with the default MIDI controller values. Note that these are 14-bit, not 7-bit.
-/// Equivalent to: DEFAULT_MIDI_CONTROLLERS (reset.ts), plus the non-CC mirror defaults
-pub const DEFAULT_MIDI_CONTROLLER_VALUES: [i16; CONTROLLER_TABLE_SIZE] =
-    build_default_midi_controller_values();
-
-
-// ---------------------------------------------------------------------------
-// ChannelMidiParameter
-// ---------------------------------------------------------------------------
-
+//! midi.rs
+//! purpose: The channel MIDI parameters (state driven by MIDI messages / SysEx).
+//! Ported from: src/synthesizer/audio_engine/channel/parameters/midi.ts
 use crate::midi::enums::MidiController;
 
 /// Per-channel MIDI parameters (state driven by MIDI messages / SysEx).
@@ -227,173 +151,91 @@ pub const DEFAULT_CHANNEL_MIDI_PARAMETERS: ChannelMidiParameter = ChannelMidiPar
     dry_level: 127,
 };
 
+/// The keys of [`ChannelMidiParameter`], used to lock a parameter.
+/// Equivalent to: keyof ChannelMIDIParameter
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChannelMidiParameterKey {
+    Pressure,
+    PitchWheel,
+    PitchWheelRange,
+    ModulationDepth,
+    RxChannel,
+    PolyMode,
+    KeyShift,
+    FineTune,
+    RandomPan,
+    AssignMode,
+    EfxAssign,
+    Cc1,
+    Cc2,
+    DrumMap,
+    VelocitySenseDepth,
+    VelocitySenseOffset,
+    DryLevel,
+}
+
+/// The number of [`ChannelMidiParameterKey`]s.
+pub const CHANNEL_MIDI_PARAMETER_COUNT: usize = 17;
+
+impl ChannelMidiParameterValue {
+    /// The parameter this value is for.
+    pub fn key(&self) -> ChannelMidiParameterKey {
+        use ChannelMidiParameterKey as K;
+        use ChannelMidiParameterValue as V;
+        match self {
+            V::Pressure(_) => K::Pressure,
+            V::PitchWheel(_) => K::PitchWheel,
+            V::PitchWheelRange(_) => K::PitchWheelRange,
+            V::ModulationDepth(_) => K::ModulationDepth,
+            V::RxChannel(_) => K::RxChannel,
+            V::PolyMode(_) => K::PolyMode,
+            V::KeyShift(_) => K::KeyShift,
+            V::FineTune(_) => K::FineTune,
+            V::RandomPan(_) => K::RandomPan,
+            V::AssignMode(_) => K::AssignMode,
+            V::EfxAssign(_) => K::EfxAssign,
+            V::Cc1(_) => K::Cc1,
+            V::Cc2(_) => K::Cc2,
+            V::DrumMap(_) => K::DrumMap,
+            V::VelocitySenseDepth(_) => K::VelocitySenseDepth,
+            V::VelocitySenseOffset(_) => K::VelocitySenseOffset,
+            V::DryLevel(_) => K::DryLevel,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // --- Constants ---
-
     #[test]
-    fn test_non_cc_index_offset() {
-        assert_eq!(NON_CC_INDEX_OFFSET, 128);
-    }
-
-    #[test]
-    fn test_controller_table_size() {
-        assert_eq!(CONTROLLER_TABLE_SIZE, 147);
-    }
-
-    // --- DEFAULT_MIDI_CONTROLLER_VALUES: array length ---
-
-    #[test]
-    fn test_default_midi_controller_values_length() {
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES.len(), CONTROLLER_TABLE_SIZE);
-    }
-
-    // --- DEFAULT_MIDI_CONTROLLER_VALUES: non-zero entries ---
-
-    #[test]
-    fn test_main_volume() {
-        // mainVolume = 7, value = 100 << 7 = 12800
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[7], 12800);
-    }
-
-    #[test]
-    fn test_balance() {
-        // balance = 8, value = 64 << 7 = 8192
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[8], 8192);
-    }
-
-    #[test]
-    fn test_pan() {
-        // pan = 10, value = 64 << 7 = 8192
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[10], 8192);
-    }
-
-    #[test]
-    fn test_expression_controller() {
-        // expressionController = 11, value = 127 << 7 = 16256
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[11], 16256);
-    }
-
-    #[test]
-    fn test_portamento_on_off() {
-        // TS 4.3.0 no longer defaults portamento on/off (CC65); it stays 0 (off).
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[65], 0);
-    }
-
-    #[test]
-    fn test_filter_resonance() {
-        // filterResonance = 71, value = 64 << 7 = 8192
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[71], 8192);
-    }
-
-    #[test]
-    fn test_release_time() {
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[72], 8192);
-    }
-
-    #[test]
-    fn test_attack_time() {
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[73], 8192);
-    }
-
-    #[test]
-    fn test_brightness() {
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[74], 8192);
-    }
-
-    #[test]
-    fn test_decay_time() {
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[75], 8192);
-    }
-
-    #[test]
-    fn test_vibrato_rate() {
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[76], 8192);
-    }
-
-    #[test]
-    fn test_vibrato_depth() {
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[77], 8192);
-    }
-
-    #[test]
-    fn test_vibrato_delay() {
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[78], 8192);
-    }
-
-    #[test]
-    fn test_general_purpose_controller6() {
-        // generalPurposeController6 = 81
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[81], 8192);
-    }
-
-    #[test]
-    fn test_general_purpose_controller8() {
-        // generalPurposeController8 = 83
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[83], 8192);
-    }
-
-    #[test]
-    fn test_non_registered_parameter_lsb() {
-        // TS 4.4.0 DEFAULT_NRPN = 127 (was 0 in 4.3.x).
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[98], 127 << 7);
-    }
-
-    #[test]
-    fn test_non_registered_parameter_msb() {
-        // TS 4.4.0 DEFAULT_NRPN = 127 (was 0 in 4.3.x).
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[99], 127 << 7);
-    }
-
-    #[test]
-    fn test_registered_parameter_lsb() {
-        // registeredParameterLSB = 100
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[100], 16256);
-    }
-
-    #[test]
-    fn test_registered_parameter_msb() {
-        // registeredParameterMSB = 101
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[101], 16256);
-    }
-
-    #[test]
-    fn test_pitch_wheel() {
-        // NON_CC_INDEX_OFFSET + pitchWheel = 128 + 14 = 142, value = 64 << 7 = 8192
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[142], 8192);
-    }
-
-    #[test]
-    fn test_pitch_wheel_range() {
-        // NON_CC_INDEX_OFFSET + pitchWheelRange = 128 + 16 = 144, value = 2 << 7 = 256
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[144], 256);
-    }
-
-    // --- DEFAULT_MIDI_CONTROLLER_VALUES: zero entries ---
-
-    #[test]
-    fn test_zero_entries_bank_select() {
-        // bankSelect = 0 should be 0
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[0], 0);
-    }
-
-    #[test]
-    fn test_zero_entries_modulation_wheel() {
-        // modulationWheel = 1 should be 0
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[1], 0);
-    }
-
-    #[test]
-    fn test_zero_entries_sustain_pedal() {
-        // sustainPedal = 64 should be 0
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[64], 0);
-    }
-
-    #[test]
-    fn test_zero_entries_last() {
-        // last entry (146) should be 0
-        assert_eq!(DEFAULT_MIDI_CONTROLLER_VALUES[146], 0);
+    fn test_parameter_keys_are_distinct_and_in_range() {
+        let d = &DEFAULT_CHANNEL_MIDI_PARAMETERS;
+        let values = [
+            ChannelMidiParameterValue::Pressure(d.pressure),
+            ChannelMidiParameterValue::PitchWheel(d.pitch_wheel),
+            ChannelMidiParameterValue::PitchWheelRange(d.pitch_wheel_range),
+            ChannelMidiParameterValue::ModulationDepth(d.modulation_depth),
+            ChannelMidiParameterValue::RxChannel(d.rx_channel),
+            ChannelMidiParameterValue::PolyMode(d.poly_mode),
+            ChannelMidiParameterValue::KeyShift(d.key_shift),
+            ChannelMidiParameterValue::FineTune(d.fine_tune),
+            ChannelMidiParameterValue::RandomPan(d.random_pan),
+            ChannelMidiParameterValue::AssignMode(d.assign_mode),
+            ChannelMidiParameterValue::EfxAssign(d.efx_assign),
+            ChannelMidiParameterValue::Cc1(d.cc1),
+            ChannelMidiParameterValue::Cc2(d.cc2),
+            ChannelMidiParameterValue::DrumMap(d.drum_map),
+            ChannelMidiParameterValue::VelocitySenseDepth(d.velocity_sense_depth),
+            ChannelMidiParameterValue::VelocitySenseOffset(d.velocity_sense_offset),
+            ChannelMidiParameterValue::DryLevel(d.dry_level),
+        ];
+        assert_eq!(values.len(), CHANNEL_MIDI_PARAMETER_COUNT);
+        let mut seen = [false; CHANNEL_MIDI_PARAMETER_COUNT];
+        for v in &values {
+            let i = v.key() as usize;
+            assert!(!seen[i]);
+            seen[i] = true;
+        }
     }
 }

@@ -11,7 +11,7 @@ use crate::soundbank::basic_soundbank::midi_patch::MidiPatchFull;
 use crate::synthesizer::audio_engine::channel::midi_channel::DrumLocks;
 use crate::midi::drum_parameters::{DrumParameter, DrumParameterUtils};
 use crate::synthesizer::audio_engine::channel::midi_channel::ChannelVibrato;
-use crate::synthesizer::audio_engine::channel::parameters::midi::CONTROLLER_TABLE_SIZE;
+use crate::synthesizer::audio_engine::synth_constants::CONTROLLER_TABLE_SIZE;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::soundbank::types::MIDISystem;
 
