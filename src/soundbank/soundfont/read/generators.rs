@@ -57,7 +57,7 @@ mod tests {
         bytes.extend_from_slice(&[0u8; 4]);
         RIFFChunk::new(
             "pgen".to_string(),
-            bytes.len() as u32,
+            bytes.len(),
             IndexedByteArray::from_vec(bytes),
         )
     }

@@ -25,27 +25,27 @@ pub const MOD_SOURCE_TRANSFORM_POSSIBILITIES: usize = 4;
 // The equation is taken from FluidSynth (gen_conv.c) as the SoundFont standard.
 // ---------------------------------------------------------------------------
 
-static CONCAVE: LazyLock<Vec<f32>> = LazyLock::new(|| {
+/// (concave, convex), both `MODULATOR_RESOLUTION + 1` long (Float32Array in TS).
+static CURVES: LazyLock<(Vec<f32>, Vec<f32>)> = LazyLock::new(|| {
     let len = MODULATOR_RESOLUTION + 1; // 16_385 entries
     let mut concave = vec![0.0f32; len];
+    let mut convex = vec![0.0f32; len];
+    concave[0] = 0.0;
     concave[len - 1] = 1.0;
-    for i in 1..(MODULATOR_RESOLUTION - 1) {
-        // x = ((-200*2) / 960) * log10(i / (len - 1))
-        let x = ((-400.0_f64) / 960.0) * (i as f64 / (len - 1) as f64).log10();
+
+    convex[0] = 0.0;
+    convex[len - 1] = 1.0;
+    for i in 1..MODULATOR_RESOLUTION {
+        // The formula was made for a 128-entry table.
+        // At this resolution it goes above 1 near the ends, so clamp it.
+        // Spelled like the TS (`Math.log(..) / Math.LN10`), not `log10`.
+        let x = ((((-200.0_f64 * 2.0) / 960.0) * (i as f64 / (len - 1) as f64).ln())
+            / std::f64::consts::LN_10)
+            .min(1.0);
+        convex[i] = (1.0 - x) as f32;
         concave[len - 1 - i] = x as f32;
     }
-    concave
-});
-
-static CONVEX: LazyLock<Vec<f32>> = LazyLock::new(|| {
-    let len = MODULATOR_RESOLUTION + 1; // 16_385 entries
-    let mut convex = vec![0.0f32; len];
-    convex[len - 1] = 1.0;
-    for (i, val) in convex.iter_mut().enumerate().skip(1).take(MODULATOR_RESOLUTION - 2) {
-        let x = ((-400.0_f64) / 960.0) * (i as f64 / (len - 1) as f64).log10();
-        *val = (1.0 - x) as f32;
-    }
-    convex
+    (concave, convex)
 });
 
 /// Transforms a value with a given curve type.
@@ -89,12 +89,12 @@ pub fn get_modulator_curve_value(
             if is_bipolar {
                 value = value * 2.0 - 1.0;
                 if value < 0.0 {
-                    -(CONCAVE[(-value * MODULATOR_RESOLUTION as f64) as usize] as f64)
+                    -(CURVES.0[(-value * MODULATOR_RESOLUTION as f64) as usize] as f64)
                 } else {
-                    CONCAVE[(value * MODULATOR_RESOLUTION as f64) as usize] as f64
+                    CURVES.0[(value * MODULATOR_RESOLUTION as f64) as usize] as f64
                 }
             } else {
-                CONCAVE[(value * MODULATOR_RESOLUTION as f64) as usize] as f64
+                CURVES.0[(value * MODULATOR_RESOLUTION as f64) as usize] as f64
             }
         }
 
@@ -102,12 +102,12 @@ pub fn get_modulator_curve_value(
             if is_bipolar {
                 value = value * 2.0 - 1.0;
                 if value < 0.0 {
-                    -(CONVEX[(-value * MODULATOR_RESOLUTION as f64) as usize] as f64)
+                    -(CURVES.1[(-value * MODULATOR_RESOLUTION as f64) as usize] as f64)
                 } else {
-                    CONVEX[(value * MODULATOR_RESOLUTION as f64) as usize] as f64
+                    CURVES.1[(value * MODULATOR_RESOLUTION as f64) as usize] as f64
                 }
             } else {
-                CONVEX[(value * MODULATOR_RESOLUTION as f64) as usize] as f64
+                CURVES.1[(value * MODULATOR_RESOLUTION as f64) as usize] as f64
             }
         }
 

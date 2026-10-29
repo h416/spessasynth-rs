@@ -38,15 +38,15 @@ pub struct BasicPresetZone {
 impl BasicPresetZone {
     /// Creates a new preset zone.
     ///
-    /// The TypeScript constructor calls `instrument.linkTo(preset)`,
-    /// which will be implemented after `BasicInstrument` is ported (currently TODO).
+    /// The TypeScript constructor calls `instrument.linkTo(preset)`. Not done here (the zone
+    /// holds an index, not the instrument): the link tracking is only used by sound bank
+    /// editing (trim / remove unused), which is outside the MIDI-to-WAV scope.
     ///
     /// Equivalent to:
     /// ```ts
     /// constructor(preset: BasicPreset, instrument: BasicInstrument)
     /// ```
     pub fn new(preset_idx: usize, instrument_idx: usize) -> Self {
-        // TODO: Call instrument.linkTo(preset) after BasicInstrument is ported.
         Self {
             zone: BasicZone::new(),
             parent_preset_idx: preset_idx,
@@ -67,13 +67,11 @@ impl BasicPresetZone {
 
     /// Replaces the instrument of this zone with another instrument (by index).
     ///
-    /// The TypeScript setter calls `unlinkFrom` on the old instrument and `linkTo` on the new instrument,
-    /// but both operations are TODO until `BasicInstrument` is ported.
+    /// The TypeScript setter calls `unlinkFrom` on the old instrument and `linkTo` on the new
+    /// instrument; not done here (see `new`).
     ///
     /// Equivalent to: `public set instrument(instrument: BasicInstrument)`
     pub fn set_instrument(&mut self, new_instrument_idx: usize) {
-        // TODO: After BasicInstrument is ported, implement unlinkFrom on the old instrument and
-        //       linkTo on the new instrument.
         self.instrument_idx = new_instrument_idx;
     }
 

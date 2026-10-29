@@ -157,7 +157,7 @@ mod tests {
     fn make_wlnk_chunk(data: &[u8]) -> RIFFChunk {
         RIFFChunk::new(
             "wlnk".to_string(),
-            data.len() as u32,
+            data.len(),
             IndexedByteArray::from_vec(data.to_vec()),
         )
     }
@@ -437,7 +437,7 @@ mod tests {
 
         let written = wl_orig.write();
         let mut buf = IndexedByteArray::from_vec(written.to_vec());
-        let mut chunk = RIFFChunk::read(&mut buf, true, false);
+        let mut chunk = RIFFChunk::read(&mut buf, false, true);
         let wl_read = WaveLink::read(&mut chunk);
 
         assert_eq!(wl_read.table_index, 5);
@@ -455,7 +455,7 @@ mod tests {
 
         let written = wl_orig.write();
         let mut buf = IndexedByteArray::from_vec(written.to_vec());
-        let mut chunk = RIFFChunk::read(&mut buf, true, false);
+        let mut chunk = RIFFChunk::read(&mut buf, false, true);
         let wl_read = WaveLink::read(&mut chunk);
 
         assert_eq!(wl_read.table_index, 42);
@@ -475,7 +475,7 @@ mod tests {
 
         let written = wl_orig.write();
         let mut buf = IndexedByteArray::from_vec(written.to_vec());
-        let mut chunk = RIFFChunk::read(&mut buf, true, false);
+        let mut chunk = RIFFChunk::read(&mut buf, false, true);
         let wl_read = WaveLink::read(&mut chunk);
 
         assert_eq!(wl_read.table_index, 1);

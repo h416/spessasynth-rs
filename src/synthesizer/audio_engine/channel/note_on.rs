@@ -1,6 +1,5 @@
-/// note_on.rs
-/// purpose: MIDI note on handler for SynthesizerCore.
-/// Ported from: src/synthesizer/audio_engine/engine_methods/note_on.ts
+//! MIDI note on handler.
+//! Ported from: src/synthesizer/audio_engine/channel/note_on.ts
 use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::{
     GENERATORS_AMOUNT, generator_types as gt,
@@ -13,7 +12,11 @@ use crate::synthesizer::audio_engine::channel::portamento_time::portamento_time_
 use crate::synthesizer::audio_engine::synth_constants::{
     GENERATOR_OVERRIDE_NO_CHANGE_VALUE, MIN_EXCLUSIVE_LENGTH,
 };
+use crate::soundbank::types::VoiceParameters;
+use crate::synthesizer::audio_engine::sound_bank_manager::SoundBankManager;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
+use crate::synthesizer::audio_engine::user_drum_set::FALLBACK_PATCH;
+use crate::synthesizer::audio_engine::voice::unit_converter::timecents_to_seconds;
 use crate::synthesizer::types::{CachedVoiceList, NoteOnCallback, SynthProcessorEvent};
 use crate::utils::loggin::spessa_synth_warn;
 
@@ -65,148 +68,118 @@ impl SynthesizerCore {
         velocity: u8,
         emit: bool,
     ) {
-        if velocity == 0 {
-            // velocity 0 = note off (per MIDI spec)
+        if velocity < 1 {
             self.note_off_channel(channel, midi_note);
             return;
         }
         let velocity = velocity.min(127);
 
-        // Black MIDI mode: drop low-velocity notes when voice count is high
-        let voice_count_total = self.voice_count;
-        if (self.system_parameters.black_midi_mode
-            && voice_count_total > 200
-            && velocity < 40)
-            || (self.system_parameters.black_midi_mode && velocity < 10)
-            || self.midi_channels[channel].is_muted
+        let black = self.system_parameters.black_midi_mode;
+        if
+        // If black MIDI conditions are met...
+        (black && self.voice_count > 200 && velocity < 40)
+            || (black && velocity < 10)
+            // Or channel is muted...
+            || self.midi_channels[channel].system_parameters.is_muted
+            // Or channel has no preset...
+            || self.midi_channels[channel].preset.is_none()
         {
             return;
         }
 
-        // Require a preset to be loaded
-        if self.midi_channels[channel].preset.is_none() {
-            return;
-        }
+        // Apply Velocity Sense and clamp
+        let real_velocity = clamp_f64(
+            ((velocity as f64)
+                * (self.midi_channels[channel].midi_parameters.velocity_sense_depth as f64 / 64.0)
+                + (self.midi_channels[channel].midi_parameters.velocity_sense_offset as f64 - 64.0)
+                    * 2.0)
+                .floor(),
+            0.0,
+            127.0,
+        ) as u8;
 
-        // Apply Velocity Sense and clamp.
-        // Default depth/offset (64/64) is the identity transform.
-        let velocity_sense_depth =
-            self.midi_channels[channel].midi_parameters.velocity_sense_depth as f64;
-        let velocity_sense_offset =
-            self.midi_channels[channel].midi_parameters.velocity_sense_offset as f64;
-        let mut real_velocity = ((velocity as f64) * (velocity_sense_depth / 64.0)
-            + (velocity_sense_offset - 64.0) * 2.0)
-            .floor()
-            .clamp(0.0, 127.0) as u8;
-
-        // Note which we should grab presets from (strictly internal).
-        let mut sound_bank_note =
-            midi_note as i32 + self.midi_channels[channel].current_key_shift();
-        // Sanity check on the raw played note.
+        // Sanity check
         if midi_note > 127 {
             return;
         }
-
-        // Apply MIDI Tuning Standard (MTS) if active. Indexed by the raw played note.
-        let program = self.midi_channels[channel]
-            .preset
-            .as_ref()
-            .unwrap()
-            .program;
-        let mts_idx = program as usize * 128 + midi_note as usize;
-        if mts_idx < self.tunings.len() {
-            let tune = self.tunings[mts_idx];
-            if tune >= 0.0 {
-                // Overwrite the note with MIDI tuning standard.
-                sound_bank_note = tune.trunc() as i32;
-            }
+        // Drum keys may not receive note on
+        if self.midi_channels[channel].drum_channel
+            && !self.midi_channels[channel].drum_params[midi_note as usize].rx_note_on
+        {
+            return;
         }
-        // Used for preset lookups; may be out of 0-127 range (then no zones match).
-        let sound_bank_note_u8 = sound_bank_note as u8;
 
-        // Monophonic retrigger: kill any current note before starting new one.
-        // Either the (per-channel, falling back to global) monophonicRetrigger system
-        // parameter is set, or the channel's assign mode is Single (0).
-        let monophonic_retrigger = self.midi_channels[channel]
+        // Note which we should grab presets from (strictly internal)
+        let mut sound_bank_note =
+            midi_note as i32 + self.midi_channels[channel].current_key_shift();
+
+        // MIDI Tuning Standard
+        let program = self.midi_channels[channel].preset.as_ref().unwrap().program;
+        let tune = self.tunings[program as usize * 128 + midi_note as usize];
+        if tune >= 0.0 {
+            // Overwrite the note with MIDI tuning standard!
+            sound_bank_note = tune.trunc() as i32;
+        }
+
+        // The key shift may push the note out of range
+        if !(0..=127).contains(&sound_bank_note) {
+            return;
+        }
+        let sound_bank_note = sound_bank_note as u8;
+
+        // Monophonic retrigger
+        if self.midi_channels[channel]
             .system_parameters
             .monophonic_retrigger
-            .unwrap_or(self.system_parameters.monophonic_retrigger);
-        if monophonic_retrigger || self.midi_channels[channel].midi_parameters.assign_mode == 0 {
-            let current_time = self.current_time;
-            // TS default: killNote(midiNote) uses releaseTime = -12_000 (near-instant).
-            self.midi_channels[channel].kill_note(
-                midi_note,
-                -12_000,
-                &mut self.voices,
-                current_time,
-            );
-        }
-
-        // Key velocity override from key modifier manager
-        let key_vel = self
-            .key_modifier_manager
-            .get_velocity(channel as u8, midi_note);
-        if key_vel > -1 {
-            real_velocity = key_vel as u8;
-        }
-
-        // Gain override from key modifier manager
-        let voice_gain = self
-            .key_modifier_manager
-            .get_gain(channel as u8, midi_note);
-
-        // Portamento: compute glide duration if enabled
-        let portamento_time_cc = (self.midi_channels[channel].midi_controllers
-            [midi_controllers::PORTAMENTO_TIME as usize]
-            >> 7) as u8;
-        let porta_control = (self.midi_channels[channel].midi_controllers
-            [midi_controllers::PORTAMENTO_CONTROL as usize]
-            >> 7) as u8;
-        let portamento_on = self.midi_channels[channel].midi_controllers
-            [midi_controllers::PORTAMENTO_ON_OFF as usize]
-            >= 8192; // (64 << 7)
-
-        let mut portamento_from_key: i32 = -1;
-        let mut portamento_duration: f64 = 0.0;
-
-        if !self.midi_channels[channel].drum_channel
-            && porta_control as i32 != sound_bank_note
-            && portamento_on
-            && portamento_time_cc > 0
+            .unwrap_or(self.system_parameters.monophonic_retrigger)
+            || self.midi_channels[channel].midi_parameters.assign_mode == 0
         {
-            if porta_control > 0 {
-                // Key 0 means initial portamento (no glide)
-                let diff =
-                    (sound_bank_note - porta_control as i32).unsigned_abs() as u8;
-                portamento_duration =
-                    portamento_time_to_seconds(portamento_time_cc, diff as f64);
-                portamento_from_key = porta_control as i32;
-            }
-            // Update portamento control to current note
             let current_time = self.current_time;
-            let current_system = self.midi_parameters.system;
-            let enable = self.system_parameters.events_enabled;
-            let evs = self.midi_channels[channel].controller_change(
-                midi_controllers::PORTAMENTO_CONTROL,
-                sound_bank_note_u8,
-                &mut self.voices,
-                current_time,
-                current_system,
-                enable,
-            );
-            for ev in evs {
-                self.call_event(ev);
-            }
+            // TS default: killNote(midiNote) uses releaseTime = -12_000.
+            self.midi_channels[channel].kill_note(midi_note, -12_000, &mut self.voices, current_time);
         }
 
-        self.midi_channels[channel].playing_notes[midi_note as usize] = true;
+        // Gain
+        let mut voice_gain = 1.0f64;
 
-        // Mono mode: kill only the previously-sounding note (legato), not all voices.
+        // Portamento
+        let ch = &mut self.midi_channels[channel];
+        let previous_note = ch.last_portamento_note;
+        let portamento_enabled = ch.portamento_force
+            || ch.midi_controllers[midi_controllers::PORTAMENTO_ON_OFF as usize] >= 8192;
+
+        // 14-bit MIDI CC -> 7-bit value
+        let portamento_time = ch.midi_controllers[midi_controllers::PORTAMENTO_TIME as usize] >> 7;
+
+        let can_apply_portamento = portamento_enabled // Enabled?
+            && !ch.drum_channel // Not a drum channel?
+            && previous_note >= 0 // Valid note?
+            && previous_note != midi_note as i32 // Not the same note?
+            && portamento_time > 0; // Non-instant time?
+
+        let mut porta_from_key: i32 = -1;
+        let mut porta_time: f64 = 0.0;
+
+        if can_apply_portamento {
+            let key_distance = (midi_note as i32 - previous_note).abs();
+
+            porta_from_key = previous_note;
+            porta_time = portamento_time_to_seconds(portamento_time as u8, key_distance as f64);
+
+            ch.portamento_force = false;
+        }
+
+        // Always track the last note, even if portamento isn't applied.
+        // See: https://github.com/spessasus/spessasynth_core/issues/77
+        ch.last_portamento_note = midi_note as i32;
+
+        ch.playing_notes[midi_note as usize] = true;
+
+        // Mono mode
         if !self.midi_channels[channel].midi_parameters.poly_mode {
             let last_mono_note = self.midi_channels[channel].last_mono_note;
             if last_mono_note >= 0 && last_mono_note != midi_note as i32 {
                 let current_time = self.current_time;
-                // TS default: killNote(lastMonoNote) uses releaseTime = -12_000.
                 self.midi_channels[channel].kill_note(
                     last_mono_note as u8,
                     -12_000,
@@ -218,115 +191,51 @@ impl SynthesizerCore {
             self.midi_channels[channel].last_mono_velocity = velocity;
         }
 
-        // -----------------------------------------------------------------------
-        // Get cached voices for this note (with key modifier override support)
-        // -----------------------------------------------------------------------
-        let override_patch = self
-            .key_modifier_manager
-            .has_override_patch(channel as u8, sound_bank_note_u8);
-
+        // Get voices
         // A missing preset yields an empty voice list rather than aborting the note-on:
         // TS `getVoices` returns `[]` and execution continues, so the random-pan generator
         // is still advanced and the note ID still consumed. Bailing out early here would
         // desync the deterministic generator from the TS one.
         let cached_voices: CachedVoiceList = 'voices: {
-            if override_patch {
-                // Key modifier overrides the patch for this note
-                let patch = match self
-                    .key_modifier_manager
-                    .get_patch(channel as u8, sound_bank_note_u8)
-                {
-                    Ok(p) => p,
-                    Err(_) => break 'voices Vec::new(),
-                };
-                // Find the bank index for the override patch
-                if let Some((_, bank_idx)) = self
-                    .sound_bank_manager
-                    .get_preset_and_bank_idx(patch, self.midi_parameters.system)
-                {
-                    // Get a preset clone from the bank so we can release the borrow
-                    let preset_clone = self.sound_bank_manager.sound_bank_list[bank_idx]
-                        .sound_bank
-                        .presets
-                        .iter()
-                        .find(|p| {
-                            p.program == patch.program
-                                && p.bank_msb == patch.bank_msb
-                                && p.bank_lsb == patch.bank_lsb
-                        })
-                        .cloned();
-                    if let Some(preset) = preset_clone {
-                        self.get_cached_voices_impl(
-                            bank_idx,
-                            &preset,
-                            sound_bank_note_u8,
-                            real_velocity,
-                        )
-                    } else {
-                        Vec::new()
-                    }
-                } else {
-                    Vec::new()
+            let (preset_clone, bank_idx) = {
+                let ch = &self.midi_channels[channel];
+                match (&ch.preset, ch.preset_bank_idx) {
+                    (Some(p), Some(bi)) => (p.clone(), bi),
+                    _ => break 'voices Vec::new(),
                 }
-            } else {
-                // Use channel's current preset
-                let (preset_clone, bank_idx) = {
-                    let ch = &self.midi_channels[channel];
-                    match (&ch.preset, ch.preset_bank_idx) {
-                        (Some(p), Some(bi)) => (p.clone(), bi),
-                        _ => break 'voices Vec::new(),
-                    }
-                };
-                self.get_cached_voices_impl(
-                    bank_idx,
-                    &preset_clone,
-                    sound_bank_note_u8,
-                    real_velocity,
-                )
-            }
+            };
+            self.get_cached_voices_impl(bank_idx, &preset_clone, sound_bank_note, real_velocity)
         };
 
-        // Drum parameters and pan override
+        // Overrides
+        // Zero means disabled
         let mut pan_override: f64 = 0.0;
-        let mut pitch_offset: f64 = 0.0;
-        let mut reverb_send: f64 = 1.0;
-        let mut chorus_send: f64 = 1.0;
-        let mut delay_send: f64 = 1.0;
         let mut exclusive_override: i32 = 0;
-        let mut voice_gain = voice_gain;
-
+        let mut pitch_offset: f64 = 0.0;
+        let mut reverb_gain: f64 = 1.0;
+        let mut chorus_gain: f64 = 1.0;
+        let mut variation_gain: f64 = 1.0;
         if self.midi_channels[channel].midi_parameters.random_pan {
-            // The range is -500 to 500.
-            // This runs before the drum block (and before the rxNoteOn bail-out) so that
-            // the generator is advanced in the exact same order as in TS.
+            // The range is -500 to 500
             pan_override = js_round(self.random_generator.next_f64() * 1000.0 - 500.0);
         }
 
+        // Drum parameters
         if self.midi_channels[channel].drum_channel {
             let p = &self.midi_channels[channel].drum_params[midi_note as usize];
-
-            // Check if note on is allowed
-            if !p.rx_note_on {
-                return;
-            }
-
-            // Pan handling
-            let drum_pan = p.pan;
-            if drum_pan != 64 {
-                if drum_pan == 0 {
+            let drum_pan = p.pan as i32 - 64;
+            // If pan is different from default then it's overridden
+            if drum_pan != 0 {
+                if drum_pan == -64 {
                     // Random pan
-                    pan_override =
-                        js_round(self.random_generator.next_f64() * 1000.0 - 500.0);
+                    pan_override = js_round(self.random_generator.next_f64() * 1000.0 - 500.0);
                 } else {
-                    // Calculate with channel pan
                     let channel_pan = (self.midi_channels[channel].midi_controllers
                         [midi_controllers::PAN as usize]
                         >> 7) as i32
                         - 64;
-                    let target_pan =
-                        (drum_pan as i32 - 64 + channel_pan).clamp(-63, 63);
-                    // Compute the product first; ensure override is applied,
-                    // even for zero (matches TS `(targetPan / 63) * 500 || 1`).
+                    let target_pan = (drum_pan + channel_pan).clamp(-63, 63);
+                    // Ensure that override is applied, even for zero
                     pan_override = (target_pan as f64 / 63.0) * 500.0;
                     if pan_override == 0.0 {
                         pan_override = 1.0;
@@ -334,16 +243,13 @@ impl SynthesizerCore {
                 }
             }
 
-            pitch_offset = p.pitch;
-            exclusive_override = p.exclusive_class as i32;
-            reverb_send = p.reverb_gain;
-            chorus_send = p.chorus_gain;
-            delay_send = p.delay_gain;
-
-            // Gain override only if not set by key modifier
-            if voice_gain == 1.0 {
-                voice_gain = p.gain;
-            }
+            pitch_offset = p.pitch_fine + p.pitch_coarse * 100.0;
+            exclusive_override = p.assign_group as i32;
+            reverb_gain = p.reverb_send as f64 / 127.0;
+            chorus_gain = p.chorus_send as f64 / 127.0;
+            variation_gain = p.variation_send as f64 / 127.0;
+            voice_gain = (p.level as f64 / 120.0).powi(2);
+            self.gs_delay_active = self.gs_delay_active || variation_gain > 0.0;
         }
 
         // Groups voices from this Note On together (overlapping notes / mono legato
@@ -368,9 +274,12 @@ impl SynthesizerCore {
             // Setup basic voice state (raw played note).
             self.voices[voice_idx].setup(self.current_time, channel as u8, midi_note, note_id);
 
-            // Select the active oscillator type
-            self.voices[voice_idx].oscillator_type =
-                self.system_parameters.interpolation_type;
+            // Select the correct oscillator
+            // Channel takes precedence
+            self.voices[voice_idx].oscillator_type = self.midi_channels[channel]
+                .system_parameters
+                .interpolation_type
+                .unwrap_or(self.system_parameters.interpolation_type);
 
             // Copy unmodulated generators from cache
             if cached.generators.len() == GENERATORS_AMOUNT {
@@ -523,6 +432,13 @@ impl SynthesizerCore {
                 .init(&modulated_copy, start_time, target_key);
             self.voices[voice_idx].filter.init();
 
+            // Calculate LFO start times
+            let now = self.current_time;
+            self.voices[voice_idx].vib_lfo_start_time = now
+                + timecents_to_seconds(modulated_copy[gt::DELAY_VIB_LFO as usize] as i32);
+            self.voices[voice_idx].mod_lfo_start_time = now
+                + timecents_to_seconds(modulated_copy[gt::DELAY_MOD_LFO as usize] as i32);
+
             // -----------------------------------------------------------------------
             // Compute sample offsets (from modulatedGenerators)
             // -----------------------------------------------------------------------
@@ -571,18 +487,19 @@ impl SynthesizerCore {
             let lm = self.voices[voice_idx].looping_mode;
             self.voices[voice_idx].oscillators[osc_idx].is_looping =
                 lm == 1 || lm == 3;
+            self.voices[voice_idx].oscillators[osc_idx].has_looped = false;
 
             // -----------------------------------------------------------------------
             // Apply portamento, pan override, gain modifier, and initial current pan
             // -----------------------------------------------------------------------
-            self.voices[voice_idx].portamento_from_key = portamento_from_key;
-            self.voices[voice_idx].portamento_duration = portamento_duration;
+            self.voices[voice_idx].portamento_from_key = porta_from_key;
+            self.voices[voice_idx].portamento_duration = porta_time;
             self.voices[voice_idx].override_pan = pan_override;
             self.voices[voice_idx].gain_modifier = voice_gain;
             self.voices[voice_idx].pitch_offset = pitch_offset;
-            self.voices[voice_idx].reverb_send = reverb_send;
-            self.voices[voice_idx].chorus_send = chorus_send;
-            self.voices[voice_idx].delay_send = delay_send;
+            self.voices[voice_idx].reverb_gain = reverb_gain;
+            self.voices[voice_idx].chorus_gain = chorus_gain;
+            self.voices[voice_idx].variation_gain = variation_gain;
 
             // Set initial pan to prevent a brief pop from center to actual pan
             // TS: voice.currentPan = clamp(panOverride || modulatedGenerators[pan])
@@ -612,6 +529,44 @@ impl SynthesizerCore {
         }
     }
 
+    /// Returns the voice parameters of a GS user drum set key, with the index of the bank
+    /// they come from.
+    /// Equivalent to: UserDrumSet.getVoiceParameters(midiNote, velocity)
+    fn get_user_drum_voice_parameters(
+        &self,
+        drum_set: usize,
+        midi_note: u8,
+        velocity: u8,
+    ) -> Option<(Vec<VoiceParameters>, usize)> {
+        let set = &self.sound_bank_manager.user_drum_sets[drum_set];
+        let binding = &set.key_params[midi_note as usize];
+        // TS: soundBankManager.systemGetter = () => this.midiParameters.system
+        let system = self.midi_parameters.system;
+        let resolve = |patch| {
+            self.sound_bank_manager
+                .get_preset_and_bank_idx(patch, system)
+                // Protect from binding to self as well
+                .filter(|&(_, bank_idx)| SoundBankManager::user_drum_set_of(bank_idx).is_none())
+        };
+        let (resolved, bank_idx) =
+            resolve(set.bound_patch(midi_note as usize)).or_else(|| resolve(FALLBACK_PATCH))?;
+        let bank = &self.sound_bank_manager.sound_bank_list[bank_idx].sound_bank;
+        let mut params = resolved.get_voice_parameters(
+            binding.source_note_number,
+            velocity,
+            &bank.instruments,
+            &bank.default_modulators,
+        );
+
+        // Ensure that the key sounds as intended, similarly to 'PGAL' DLS chunk alias
+        for p in params.iter_mut() {
+            if p.generators[gt::KEY_NUM as usize] < 0 {
+                p.generators[gt::KEY_NUM as usize] = binding.source_note_number as i16;
+            }
+        }
+        Some((params, bank_idx))
+    }
+
     /// Gets or computes (and caches) voices for a specific bank index and preset.
     ///
     /// Called from `note_on` after cloning the preset out of the channel/bank to
@@ -637,19 +592,43 @@ impl SynthesizerCore {
         let cache_key = self.get_cached_voice_index(&patch, midi_note, velocity);
 
         // Check cache first
-        if let Some(cached) = self.cached_voices.get(&cache_key) {
-            return cached.clone();
+        let user_drum_generation = SoundBankManager::user_drum_set_of(bank_idx)
+            .map(|i| self.sound_bank_manager.user_drum_sets[i].generation.get());
+        match user_drum_generation {
+            Some(generation) => {
+                if let Some((g, cached)) = self.user_drum_cached_voices.get(&cache_key)
+                    && *g == generation
+                {
+                    return cached.clone();
+                }
+            }
+            None => {
+                if let Some(cached) = self.cached_voices.get(&cache_key) {
+                    return cached.clone();
+                }
+            }
         }
 
         // Not cached: compute voice parameters (borrow bank immutably, release after block)
-        let voice_params = {
-            let bank = &self.sound_bank_manager.sound_bank_list[bank_idx].sound_bank;
-            preset.get_voice_parameters(
-                midi_note,
-                velocity,
-                &bank.instruments,
-                &bank.default_modulators,
-            )
+        // A GS user drum set takes its voices from the drum set each key is bound to.
+        let (voice_params, bank_idx) = match SoundBankManager::user_drum_set_of(bank_idx) {
+            Some(drum_set) => match self.get_user_drum_voice_parameters(drum_set, midi_note, velocity) {
+                Some(found) => found,
+                // No drums at all (only user drum sets are present)
+                None => (Vec::new(), bank_idx),
+            },
+            None => {
+                let bank = &self.sound_bank_manager.sound_bank_list[bank_idx].sound_bank;
+                (
+                    preset.get_voice_parameters(
+                        midi_note,
+                        velocity,
+                        &bank.instruments,
+                        &bank.default_modulators,
+                    ),
+                    bank_idx,
+                )
+            }
         };
 
         // Build CachedVoice list
@@ -702,7 +681,15 @@ impl SynthesizerCore {
         }
 
         // Cache the result and return
-        self.cached_voices.insert(cache_key, voices.clone());
+        match user_drum_generation {
+            Some(generation) => {
+                self.user_drum_cached_voices
+                    .insert(cache_key, (generation, voices.clone()));
+            }
+            None => {
+                self.cached_voices.insert(cache_key, voices.clone());
+            }
+        }
         voices
     }
 }
@@ -808,7 +795,7 @@ mod tests {
     #[test]
     fn test_muted_channel_no_voice_added() {
         let (mut core, _events) = make_core_with_channel();
-        core.midi_channels[0].is_muted = true;
+        core.midi_channels[0].system_parameters.is_muted = true;
         core.note_on(0, 60, 100);
         assert_eq!(
             core.midi_channels[0].voice_count, 0,
@@ -819,7 +806,7 @@ mod tests {
     #[test]
     fn test_muted_channel_no_note_on_event() {
         let (mut core, events) = make_core_with_channel();
-        core.midi_channels[0].is_muted = true;
+        core.midi_channels[0].system_parameters.is_muted = true;
         core.note_on(0, 60, 100);
         let evs = events.lock().unwrap();
         let has_note_on = evs.iter().any(|e| matches!(e, SynthProcessorEvent::NoteOn(_)));
@@ -853,7 +840,8 @@ mod tests {
     fn test_sound_bank_note_above_127_no_voice_added() {
         let (mut core, _events) = make_core_with_channel();
         // note 100 + shift 64 = 164 → out of the 0-127 zone range, no zones match
-        core.midi_channels[0].channel_transpose_key_shift = 64;
+        core.midi_channels[0]
+            .set_system_parameter(crate::synthesizer::audio_engine::channel::parameters::system::ChannelSystemParameterValue::KeyShift(64.0), &mut [], 0.0);
         core.note_on(0, 100, 100);
         assert_eq!(
             core.midi_channels[0].voice_count, 0,
@@ -865,7 +853,8 @@ mod tests {
     fn test_sound_bank_note_below_0_no_voice_added() {
         let (mut core, _events) = make_core_with_channel();
         // note 0 + shift -64 = -64 → out of the 0-127 zone range, no zones match
-        core.midi_channels[0].channel_transpose_key_shift = -64;
+        core.midi_channels[0]
+            .set_system_parameter(crate::synthesizer::audio_engine::channel::parameters::system::ChannelSystemParameterValue::KeyShift(-64.0), &mut [], 0.0);
         core.note_on(0, 0, 100);
         assert_eq!(
             core.midi_channels[0].voice_count, 0,

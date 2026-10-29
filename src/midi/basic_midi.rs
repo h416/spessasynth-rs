@@ -357,22 +357,27 @@ impl BasicMidi {
                                     116 | 118 => {
                                         loop_start = Some(ticks);
                                     }
-                                    // Touhou (cc4) / EMIDI (cc117) / EMIDI global (cc119)
-                                    // loop end. For Touhou loops, the data value must be 0.
-                                    4 | 117 | 119 => {
-                                        let cc_num = data[0];
-                                        let value = data.get(1).copied().unwrap_or(0);
-                                        if loop_end.is_none()
-                                            && (cc_num != 4 || value == 0)
-                                        {
-                                            loop_type = MidiLoopType::Soft;
-                                            loop_end = Some(ticks);
-                                        } else {
-                                            // Appeared more than once (or a CC4 with a nonzero
-                                            // value) → not a real loop marker.
-                                            loop_end = Some(0);
-                                            loop_type = MidiLoopType::Hard;
+                                    // Touhou
+                                    4 => {
+                                        // For Touhou loops, the data value must be 0.
+                                        // Otherwise, it is a regular foot controller.
+                                        if data.get(1).copied().unwrap_or(0) == 0 {
+                                            if loop_end.is_none() {
+                                                loop_type = MidiLoopType::Soft;
+                                                loop_end = Some(ticks);
+                                            } else {
+                                                // This controller has occurred more than once.
+                                                // This means that it doesn't indicate the loop
+                                                loop_end = Some(0);
+                                                loop_type = MidiLoopType::Hard;
+                                            }
                                         }
+                                    }
+                                    // EMIDI/XMI (cc117), EMIDI global loop (cc119)
+                                    117 | 119 => {
+                                        // A repeated loop end does not indicate the loop
+                                        loop_end = if loop_end.is_none() { Some(ticks) } else { Some(0) };
+                                        loop_type = MidiLoopType::Hard;
                                     }
                                     // Bank select MSB – DLS RMIDI bank offset detection
                                     0 => {
@@ -507,18 +512,24 @@ impl BasicMidi {
                 i += 1;
             }
 
-            // Track name: set after inner loop (index > 0 only; track 0 name = the MIDI name).
+            // Track name: set after inner loop.
+            // 4.4.0 names the first track too (the port detection reads it); only its
+            // metadata handling still skips it.
             self.tracks[track_idx].name = String::new();
-            if track_idx > 0
-                && let Some(name_msg) = events
-                    .iter()
-                    .find(|e| e.status_byte == midi_message_types::TRACK_NAME)
-                    .cloned()
+            if let Some(name_msg) = events
+                .iter()
+                .find(|e| e.status_byte == midi_message_types::TRACK_NAME)
+                .cloned()
             {
                 let track_name =
                     read_binary_string(&name_msg.data, name_msg.data.len(), 0);
                 self.tracks[track_idx].name = track_name.clone();
-                if !track_has_voice[track_idx]
+                // If the track has no voice messages, its "track name" event (if it has any)
+                // Is some metadata.
+                // Add it to copyright
+                // Don't add the first track's name as it's not metadata, it's the name!
+                if track_idx > 0
+                    && !track_has_voice[track_idx]
                     && !track_name.to_lowercase().contains("setup")
                 {
                     extra_metadata.push(name_msg);
@@ -551,6 +562,11 @@ impl BasicMidi {
             })
             .min()
             .unwrap_or(0);
+        // No note-ons: the key range is not inverted
+        if key_range.min > key_range.max {
+            key_range.min = 0.0;
+            key_range.max = 127.0;
+        }
 
         SpessaLog::info(&format!(
             "First note-on detected at: {} ticks!",
@@ -600,6 +616,32 @@ impl BasicMidi {
                 if port_map_opt[port].is_none() {
                     port_map_opt[port] = Some(port_offset);
                     port_offset += 16;
+                }
+            }
+        }
+
+        // Attempt to determine ports from track names:
+        // A<num> or PartA<num>
+        // B<num> or PartB<num>
+        // C<num> or PartC<num>
+        // D<num> or PartD<num>
+        if port_offset == 0 {
+            // `/^X\d/`: the name starts with the letter followed by an ASCII digit
+            let starts = |n: &str, c: char| {
+                let mut it = n.chars();
+                it.next() == Some(c) && it.next().is_some_and(|d| d.is_ascii_digit())
+            };
+            for (track_idx, track) in self.tracks.iter().enumerate() {
+                let n = track.name.as_str();
+                for (part, letter) in [(0usize, 'A'), (1, 'B'), (2, 'C'), (3, 'D')] {
+                    if n.contains(&format!("Part{letter}")) || starts(n, letter) {
+                        track_ports[track_idx] = Some(part as u32);
+                        while port_map_opt.len() <= part {
+                            port_map_opt.push(None);
+                        }
+                        port_map_opt[part] = Some(part as u32 * 16);
+                        break;
+                    }
                 }
             }
         }
@@ -982,7 +1024,8 @@ mod tests {
         m.flush(false);
         assert_eq!(m.midi_loop.start, 100);
         assert_eq!(m.midi_loop.end, 400);
-        assert_eq!(m.midi_loop.loop_type, MidiLoopType::Soft);
+        // 4.4.0: EMIDI/XMI loop ends (CC117/CC119) are hard loops.
+        assert_eq!(m.midi_loop.loop_type, MidiLoopType::Hard);
     }
 
     // ── Touhou loop false-positive fix (4.3.0) ─────────────────────────
@@ -1060,7 +1103,8 @@ mod tests {
         m.tracks.push(t);
         m.flush(false);
         assert_eq!(m.midi_loop.end, 300);
-        assert_eq!(m.midi_loop.loop_type, MidiLoopType::Soft);
+        // 4.4.0: EMIDI/XMI loop ends (CC117/CC119) are hard loops.
+        assert_eq!(m.midi_loop.loop_type, MidiLoopType::Hard);
     }
 
     #[test]
@@ -1107,7 +1151,8 @@ mod tests {
         m.tracks.push(t);
         m.flush(false);
         assert_eq!(m.midi_loop.end, 300);
-        assert_eq!(m.midi_loop.loop_type, MidiLoopType::Soft);
+        // 4.4.0: EMIDI/XMI loop ends (CC117/CC119) are hard loops.
+        assert_eq!(m.midi_loop.loop_type, MidiLoopType::Hard);
     }
 
     #[test]
@@ -1123,7 +1168,8 @@ mod tests {
         m.flush(false);
         assert_eq!(m.midi_loop.start, 100);
         assert_eq!(m.midi_loop.end, 400);
-        assert_eq!(m.midi_loop.loop_type, MidiLoopType::Soft);
+        // 4.4.0: EMIDI/XMI loop ends (CC117/CC119) are hard loops.
+        assert_eq!(m.midi_loop.loop_type, MidiLoopType::Hard);
     }
 
     #[test]

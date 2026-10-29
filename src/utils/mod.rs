@@ -7,7 +7,7 @@
 ///
 /// Note: `SpessaSynthCoreUtils` (a JS-only utility aggregate object) is not ported.
 ///
-/// Note: `sysex_detector.rs` was deleted (Task 18), matching TS 4.3.0's removal of
+/// Note: `sysex_detector.rs` was deleted, matching TS 4.3.0's removal of
 /// `sysex_detector.ts`: its `isXGOn`/`isGSOn`/`isGMOn`/`isGM2On`/`isGSDrumsOn`/`syxToChannel`
 /// detectors were replaced by `MIDIUtils.analyzeSysEx` in `midi/midi_tools/midi_utils.ts`, and
 /// all Rust call sites now use `MidiUtils::analyze_sysex`.

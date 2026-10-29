@@ -13,20 +13,17 @@
 /// and added a new `RIFFChunk.getParts` method. This is a purely organizational change (no
 /// behavior difference) plus the new `getParts` capability.
 ///
-/// The associated functions below mirror the new 4.3.0 class layout 1:1. The original free
-/// functions (`read_riff_chunk`, `write_riff_chunk_raw`, `write_riff_chunk_parts`,
-/// `find_riff_list_type`) are kept as thin backward-compatible wrappers because ~15 other
-/// files (soundbank/*, midi/*) that are out of scope for this task still call them; those call
-/// sites will be migrated to `RIFFChunk::...` as each of those files is ported in later
-/// phase-2 tasks (Task 15/16/17).
+/// The associated functions below mirror the new 4.3.0 class layout 1:1.
 use crate::utils::indexed_array::IndexedByteArray;
-use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, write_dword};
+use crate::utils::byte_functions::little_endian::{
+    read_le64_indexed, read_little_endian_indexed, write_dword,
+};
 use crate::utils::byte_functions::string::{
     get_string_bytes, read_binary_string, read_binary_string_indexed, write_binary_string_indexed,
 };
 use std::borrow::Cow;
 
-/// Equivalent to TypeScript's `GenericRIFFFourCC = "RIFF" | "LIST" | "INFO"`.
+/// Equivalent to TypeScript's `GenericRIFFFourCC = "RIFF" | "RIFS" | "LIST" | "INFO"`.
 pub type GenericRIFFFourCC = String;
 
 /// Equivalent to TypeScript's `WAVFourCC = "wave" | "cue " | "fmt "`.
@@ -42,29 +39,41 @@ pub struct RIFFChunk {
     /// The chunk's FourCC code.
     pub header: FourCC,
     /// The chunk's size in bytes.
-    pub size: u32,
+    /// TS `number`: 64-bit (RF64) chunks can exceed `u32`.
+    pub size: usize,
     /// The chunk's binary data.
-    /// Note: `data.length` will be 0 if `read_data` was set to `false` in `read_riff_chunk`.
+    /// Note: `data.length` will be 0 if `read_data` was set to `false` in `RIFFChunk::read`.
     pub data: IndexedByteArray,
+    /// The size of the chunk's header in bytes (8, or 12 for 64-bit (RF64) chunks).
+    pub header_size: usize,
 }
 
 impl RIFFChunk {
     /// Creates a new RIFF chunk.
-    /// Equivalent to: `new RIFFChunk(header, size, data)`
-    pub fn new(header: FourCC, size: u32, data: IndexedByteArray) -> Self {
-        Self { header, size, data }
+    /// Equivalent to: `new RIFFChunk(header, size, data, headerSize = 8)`
+    /// (only `RIFFChunk.read` passes a non-default `headerSize`; it builds the struct directly)
+    pub fn new(header: FourCC, size: usize, data: IndexedByteArray) -> Self {
+        Self {
+            header,
+            size,
+            data,
+            header_size: 8,
+        }
     }
 
     /// Reads a RIFF chunk from an array.
     /// * `data_array` - the array to read from.
+    /// * `rf64` - if the chunk uses a 64-bit size.
     /// * `read_data` - if the data should be read as well.
-    /// * `force_shift` - if the index should be shifted to the end of the chunk even if the
-    ///   data has not been read.
     ///
-    /// Equivalent to: `RIFFChunk.read(dataArray, readData = true, forceShift = false)`
-    pub fn read(data_array: &mut IndexedByteArray, read_data: bool, force_shift: bool) -> RIFFChunk {
+    /// Equivalent to: `RIFFChunk.read(dataArray, rf64 = false, readData = true)`
+    pub fn read(data_array: &mut IndexedByteArray, rf64: bool, read_data: bool) -> RIFFChunk {
         let header = read_binary_string_indexed(data_array, 4);
-        let mut size = read_little_endian_indexed(data_array, 4);
+        let mut size = if rf64 {
+            read_le64_indexed(data_array, 8) as usize
+        } else {
+            read_little_endian_indexed(data_array, 4) as usize
+        };
         // Safeguard against evil DLS files (e.g. CrysDLS v1.23.dls)
         // https://github.com/spessasus/spessasynth_core/issues/5
         if header.is_empty() {
@@ -73,21 +82,26 @@ impl RIFFChunk {
 
         let chunk_data = if read_data {
             let start = data_array.current_index;
-            let end = start + size as usize;
+            let end = start + size;
             data_array.slice(start, end)
         } else {
             IndexedByteArray::new(0)
         };
 
-        if read_data || force_shift {
-            data_array.current_index += size as usize;
+        if read_data {
+            data_array.current_index += size;
             #[allow(clippy::manual_is_multiple_of)]
             if size % 2 != 0 {
                 data_array.current_index += 1;
             }
         }
 
-        RIFFChunk::new(header, size, chunk_data)
+        RIFFChunk {
+            header,
+            size,
+            data: chunk_data,
+            header_size: if rf64 { 12 } else { 8 },
+        }
     }
 
     /// Writes a RIFF chunk correctly.
@@ -253,55 +267,12 @@ impl RIFFChunk {
     }
 }
 
-// -----------------------------------------------------------------------------------------
-// Backward-compatible free-function wrappers (pre-4.3.0 API shape).
-// See the module doc comment above for why these are kept.
-// -----------------------------------------------------------------------------------------
-
-/// Reads a RIFF chunk from an `IndexedByteArray`, advancing the cursor.
-/// Equivalent to: `RIFFChunk.read(dataArray, readData = true, forceShift = false)`
-pub fn read_riff_chunk(
-    data_array: &mut IndexedByteArray,
-    read_data: bool,
-    force_shift: bool,
-) -> RIFFChunk {
-    RIFFChunk::read(data_array, read_data, force_shift)
-}
-
-/// Writes a RIFF chunk given a raw byte slice.
-/// Equivalent to: `RIFFChunk.write(header, data, addZeroByte = false, isList = false)`
-pub fn write_riff_chunk_raw(
-    header: &str,
-    data: &[u8],
-    add_zero_byte: bool,
-    is_list: bool,
-) -> IndexedByteArray {
-    RIFFChunk::write(header, data, add_zero_byte, is_list)
-}
-
-/// Writes a RIFF chunk from multiple byte slices, combining them in order.
-/// Equivalent to: `RIFFChunk.writeParts(header, chunks, isList = false)`
-pub fn write_riff_chunk_parts(header: &str, chunks: &[&[u8]], is_list: bool) -> IndexedByteArray {
-    RIFFChunk::write_parts(header, chunks, is_list)
-}
-
-/// Finds a chunk with a given LIST type in a collection.
-/// Also sets `data.current_index` to 4 (past the LIST type FourCC) on the found chunk,
-/// so the caller can immediately start reading sub-chunks.
-/// Equivalent to: `RIFFChunk.findListType(collection, type)`
-pub fn find_riff_list_type<'a>(
-    collection: &'a mut [RIFFChunk],
-    type_: &str,
-) -> Option<&'a mut RIFFChunk> {
-    RIFFChunk::find_list_type(collection, type_)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     // -----------------------------------------------------------------------
-    // read_riff_chunk
+    // RIFFChunk::read
     // -----------------------------------------------------------------------
 
     fn make_chunk_bytes(header: &str, data: &[u8]) -> IndexedByteArray {
@@ -317,7 +288,7 @@ mod tests {
     #[test]
     fn test_read_basic_chunk() {
         let mut buf = make_chunk_bytes("fmt ", &[1, 2, 3, 4]);
-        let chunk = read_riff_chunk(&mut buf, true, false);
+        let chunk = RIFFChunk::read(&mut buf, false, true);
         assert_eq!(chunk.header, "fmt ");
         assert_eq!(chunk.size, 4);
         assert_eq!(chunk.data.len(), 4);
@@ -335,7 +306,7 @@ mod tests {
         bytes.extend_from_slice(&3u32.to_le_bytes()); // size = 3
         bytes.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0x00]); // 3 bytes + 1 pad
         let mut buf = IndexedByteArray::from_vec(bytes);
-        let chunk = read_riff_chunk(&mut buf, true, false);
+        let chunk = RIFFChunk::read(&mut buf, false, true);
         assert_eq!(chunk.size, 3);
         assert_eq!(chunk.data.len(), 3);
         // 4 (header) + 4 (size) + 3 (data) + 1 (pad) = 12
@@ -345,7 +316,7 @@ mod tests {
     #[test]
     fn test_read_chunk_read_data_false_no_advance() {
         let mut buf = make_chunk_bytes("fmt ", &[1, 2, 3, 4]);
-        let chunk = read_riff_chunk(&mut buf, false, false);
+        let chunk = RIFFChunk::read(&mut buf, false, false);
         assert_eq!(chunk.header, "fmt ");
         assert_eq!(chunk.size, 4);
         assert_eq!(chunk.data.len(), 0); // data not read
@@ -354,12 +325,18 @@ mod tests {
     }
 
     #[test]
-    fn test_read_chunk_force_shift_advances_without_reading() {
-        let mut buf = make_chunk_bytes("fmt ", &[1, 2, 3, 4]);
-        let chunk = read_riff_chunk(&mut buf, false, true);
-        assert_eq!(chunk.data.len(), 0); // data not read
-        // Cursor advanced past all bytes: 4 + 4 + 4 = 12
-        assert_eq!(buf.current_index, 12);
+    fn test_read_chunk_rf64_size_and_header_size() {
+        // "RIFS"-style chunk: 4 (header) + 8 (64-bit size) + 3 (data) + 1 (pad)
+        let mut bytes = b"smpl".to_vec();
+        bytes.extend_from_slice(&3u64.to_le_bytes());
+        bytes.extend_from_slice(&[7, 8, 9, 0]);
+        let mut buf = IndexedByteArray::from_vec(bytes);
+        let chunk = RIFFChunk::read(&mut buf, true, true);
+        assert_eq!(chunk.header, "smpl");
+        assert_eq!(chunk.size, 3);
+        assert_eq!(chunk.header_size, 12);
+        assert_eq!((chunk.data[0], chunk.data[1], chunk.data[2]), (7, 8, 9));
+        assert_eq!(buf.current_index, 16);
     }
 
     #[test]
@@ -368,7 +345,7 @@ mod tests {
         let mut bytes = vec![0x00, 0x00, 0x00, 0x00]; // header = ""
         bytes.extend_from_slice(&100u32.to_le_bytes()); // file says size = 100
         let mut buf = IndexedByteArray::from_vec(bytes);
-        let chunk = read_riff_chunk(&mut buf, true, false);
+        let chunk = RIFFChunk::read(&mut buf, false, true);
         assert_eq!(chunk.header, "");
         assert_eq!(chunk.size, 0); // overridden to 0
         assert_eq!(chunk.data.len(), 0);
@@ -385,22 +362,22 @@ mod tests {
         bytes.extend_from_slice(&[0x0A, 0x0B]);
         let mut buf = IndexedByteArray::from_vec(bytes);
 
-        let c1 = read_riff_chunk(&mut buf, true, false);
+        let c1 = RIFFChunk::read(&mut buf, false, true);
         assert_eq!(c1.header, "fmt ");
         assert_eq!(c1.data[0], 0x01);
 
-        let c2 = read_riff_chunk(&mut buf, true, false);
+        let c2 = RIFFChunk::read(&mut buf, false, true);
         assert_eq!(c2.header, "data");
         assert_eq!(c2.data[0], 0x0A);
     }
 
     // -----------------------------------------------------------------------
-    // write_riff_chunk_raw
+    // RIFFChunk::write
     // -----------------------------------------------------------------------
 
     #[test]
     fn test_write_basic_chunk() {
-        let out = write_riff_chunk_raw("fmt ", &[1, 2, 3, 4], false, false);
+        let out = RIFFChunk::write("fmt ", &[1, 2, 3, 4], false, false);
         // [fmt ][04 00 00 00][01 02 03 04]
         assert_eq!(out.len(), 12);
         let s: &[u8] = &out;
@@ -411,7 +388,7 @@ mod tests {
 
     #[test]
     fn test_write_chunk_is_list() {
-        let out = write_riff_chunk_raw("INFO", &[0xAA, 0xBB], false, true);
+        let out = RIFFChunk::write("INFO", &[0xAA, 0xBB], false, true);
         // [LIST][06 00 00 00][INFO][AA BB]
         // written_size = 2 + 4 = 6
         // final_size = 12 + 2 = 14 (even, no extra pad)
@@ -426,7 +403,7 @@ mod tests {
 
     #[test]
     fn test_write_chunk_add_zero_byte() {
-        let out = write_riff_chunk_raw("TEST", &[1, 2], true, false);
+        let out = RIFFChunk::write("TEST", &[1, 2], true, false);
         // data_length = 2 + 1 = 3, written_size = 3
         // final_size = 8 + 3 = 11 → round up to 12
         assert_eq!(out.len(), 12);
@@ -439,7 +416,7 @@ mod tests {
 
     #[test]
     fn test_write_chunk_odd_data_gets_pad_byte() {
-        let out = write_riff_chunk_raw("TEST", &[1, 2, 3], false, false);
+        let out = RIFFChunk::write("TEST", &[1, 2, 3], false, false);
         // final_size = 8 + 3 = 11 → padded to 12
         // written_size stays 3 (pad not counted)
         assert_eq!(out.len(), 12);
@@ -450,20 +427,20 @@ mod tests {
 
     #[test]
     fn test_write_chunk_even_data_no_pad() {
-        let out = write_riff_chunk_raw("TEST", &[1, 2], false, false);
+        let out = RIFFChunk::write("TEST", &[1, 2], false, false);
         // final_size = 8 + 2 = 10 (even, no pad)
         assert_eq!(out.len(), 10);
     }
 
     // -----------------------------------------------------------------------
-    // write_riff_chunk_parts
+    // RIFFChunk::write_parts
     // -----------------------------------------------------------------------
 
     #[test]
     fn test_write_parts_basic() {
         let c1: &[u8] = &[1, 2];
         let c2: &[u8] = &[3, 4];
-        let out = write_riff_chunk_parts("TEST", &[c1, c2], false);
+        let out = RIFFChunk::write_parts("TEST", &[c1, c2], false);
         // total data = 4, even
         assert_eq!(out.len(), 12);
         let s: &[u8] = &out;
@@ -475,7 +452,7 @@ mod tests {
     #[test]
     fn test_write_parts_is_list() {
         let c1: &[u8] = &[0xDE, 0xAD, 0xBE, 0xEF];
-        let out = write_riff_chunk_parts("pdta", &[c1], true);
+        let out = RIFFChunk::write_parts("pdta", &[c1], true);
         // written_size = 4 + 4 = 8
         let s: &[u8] = &out;
         assert_eq!(&s[0..4], b"LIST");
@@ -486,7 +463,7 @@ mod tests {
 
     #[test]
     fn test_write_parts_empty_chunks() {
-        let out = write_riff_chunk_parts("TEST", &[], false);
+        let out = RIFFChunk::write_parts("TEST", &[], false);
         // data_length = 0, written_size = 0, final_size = 8 (even)
         assert_eq!(out.len(), 8);
         let s: &[u8] = &out;
@@ -497,7 +474,7 @@ mod tests {
     #[test]
     fn test_write_parts_odd_total_gets_pad() {
         let c1: &[u8] = &[1, 2, 3];
-        let out = write_riff_chunk_parts("TEST", &[c1], false);
+        let out = RIFFChunk::write_parts("TEST", &[c1], false);
         // final_size = 8 + 3 = 11 → 12
         assert_eq!(out.len(), 12);
         assert_eq!(out[11], 0);
@@ -521,7 +498,7 @@ mod tests {
         let c2: &[u8] = &[3, 4];
         let parts = RIFFChunk::get_parts("TEST", &[c1, c2], false);
         let joined = concat_parts(&parts);
-        let direct = write_riff_chunk_parts("TEST", &[c1, c2], false);
+        let direct = RIFFChunk::write_parts("TEST", &[c1, c2], false);
         assert_eq!(joined, direct.to_vec());
     }
 
@@ -530,7 +507,7 @@ mod tests {
         let c1: &[u8] = &[0xDE, 0xAD, 0xBE, 0xEF];
         let parts = RIFFChunk::get_parts("pdta", &[c1], true);
         let joined = concat_parts(&parts);
-        let direct = write_riff_chunk_parts("pdta", &[c1], true);
+        let direct = RIFFChunk::write_parts("pdta", &[c1], true);
         assert_eq!(joined, direct.to_vec());
     }
 
@@ -539,7 +516,7 @@ mod tests {
         let c1: &[u8] = &[1, 2, 3];
         let parts = RIFFChunk::get_parts("TEST", &[c1], false);
         let joined = concat_parts(&parts);
-        let direct = write_riff_chunk_parts("TEST", &[c1], false);
+        let direct = RIFFChunk::write_parts("TEST", &[c1], false);
         assert_eq!(joined, direct.to_vec());
         assert_eq!(*joined.last().unwrap(), 0);
     }
@@ -548,7 +525,7 @@ mod tests {
     fn test_get_parts_matches_write_parts_empty_chunks() {
         let parts = RIFFChunk::get_parts("TEST", &[], false);
         let joined = concat_parts(&parts);
-        let direct = write_riff_chunk_parts("TEST", &[], false);
+        let direct = RIFFChunk::write_parts("TEST", &[], false);
         assert_eq!(joined, direct.to_vec());
     }
 
@@ -565,7 +542,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // find_riff_list_type
+    // RIFFChunk::find_list_type
     // -----------------------------------------------------------------------
 
     fn make_list_chunk(list_type: &str, content: &[u8]) -> RIFFChunk {
@@ -575,7 +552,7 @@ mod tests {
         data_bytes.extend_from_slice(content);
         RIFFChunk::new(
             "LIST".to_string(),
-            data_bytes.len() as u32,
+            data_bytes.len(),
             IndexedByteArray::from_vec(data_bytes),
         )
     }
@@ -583,7 +560,7 @@ mod tests {
     #[test]
     fn test_find_list_type_found() {
         let mut collection = vec![make_list_chunk("INFO", &[1, 2, 3, 4])];
-        let found = find_riff_list_type(&mut collection, "INFO");
+        let found = RIFFChunk::find_list_type(&mut collection, "INFO");
         assert!(found.is_some());
         let chunk = found.unwrap();
         assert_eq!(chunk.header, "LIST");
@@ -594,7 +571,7 @@ mod tests {
     #[test]
     fn test_find_list_type_not_found() {
         let mut collection = vec![make_list_chunk("INFO", &[1, 2])];
-        let found = find_riff_list_type(&mut collection, "pdta");
+        let found = RIFFChunk::find_list_type(&mut collection, "pdta");
         assert!(found.is_none());
     }
 
@@ -603,7 +580,7 @@ mod tests {
         let non_list = RIFFChunk::new("RIFF".to_string(), 4, IndexedByteArray::from_slice(b"sfbk"));
         let list_chunk = make_list_chunk("INFO", &[]);
         let mut collection = vec![non_list, list_chunk];
-        let found = find_riff_list_type(&mut collection, "INFO");
+        let found = RIFFChunk::find_list_type(&mut collection, "INFO");
         assert!(found.is_some());
         assert_eq!(found.unwrap().header, "LIST");
     }
@@ -615,7 +592,7 @@ mod tests {
             make_list_chunk("INFO", &[0xBB]),
             make_list_chunk("INFO", &[0xCC]),
         ];
-        let found = find_riff_list_type(&mut collection, "INFO").unwrap();
+        let found = RIFFChunk::find_list_type(&mut collection, "INFO").unwrap();
         // First matching chunk has content [0xBB]
         assert_eq!(found.data[4], 0xBB);
     }
@@ -623,7 +600,7 @@ mod tests {
     #[test]
     fn test_find_list_type_cursor_set_to_4() {
         let mut collection = vec![make_list_chunk("sdta", &[9, 8, 7])];
-        let found = find_riff_list_type(&mut collection, "sdta").unwrap();
+        let found = RIFFChunk::find_list_type(&mut collection, "sdta").unwrap();
         assert_eq!(found.data.current_index, 4);
         // Verify sub-chunk content starts at index 4
         assert_eq!(found.data[4], 9);
@@ -636,9 +613,9 @@ mod tests {
     #[test]
     fn test_roundtrip_basic_chunk() {
         let original_data: &[u8] = &[0x10, 0x20, 0x30, 0x40];
-        let written = write_riff_chunk_raw("fmt ", original_data, false, false);
+        let written = RIFFChunk::write("fmt ", original_data, false, false);
         let mut buf = IndexedByteArray::from_vec(written.to_vec());
-        let chunk = read_riff_chunk(&mut buf, true, false);
+        let chunk = RIFFChunk::read(&mut buf, false, true);
         assert_eq!(chunk.header, "fmt ");
         assert_eq!(chunk.size, 4);
         let s: &[u8] = &chunk.data;
@@ -648,13 +625,13 @@ mod tests {
     #[test]
     fn test_roundtrip_list_chunk_then_find() {
         let content: &[u8] = &[0xDE, 0xAD];
-        let written = write_riff_chunk_raw("INFO", content, false, true);
+        let written = RIFFChunk::write("INFO", content, false, true);
         let mut buf = IndexedByteArray::from_vec(written.to_vec());
-        let chunk = read_riff_chunk(&mut buf, true, false);
+        let chunk = RIFFChunk::read(&mut buf, false, true);
         assert_eq!(chunk.header, "LIST");
 
         let mut collection = vec![chunk];
-        let found = find_riff_list_type(&mut collection, "INFO").unwrap();
+        let found = RIFFChunk::find_list_type(&mut collection, "INFO").unwrap();
         // After find, cursor is at 4 (past "INFO")
         assert_eq!(found.data.current_index, 4);
         assert_eq!(found.data[4], 0xDE);

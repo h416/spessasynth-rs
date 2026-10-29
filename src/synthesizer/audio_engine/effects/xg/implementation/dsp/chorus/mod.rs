@@ -1,0 +1,19 @@
+//! The XG chorus, celeste and flanger programs.
+pub mod celeste1;
+pub mod celeste2;
+pub mod celeste3;
+pub mod celeste4;
+pub mod chorus1;
+pub mod chorus2;
+pub mod chorus3;
+pub mod chorus4;
+pub mod fb_chorus;
+pub mod flanger1;
+pub mod flanger2;
+pub mod flanger3;
+pub mod gm_chorus1;
+pub mod gm_chorus2;
+pub mod gm_chorus3;
+pub mod gm_chorus4;
+pub mod gm_flanger;
+pub mod xg_chorus;

@@ -10,7 +10,7 @@
 ///   needed.
 /// - `loadNewSequenceInternal`: only parameter rename (`parsedMidi` → `parsedMIDI`, a JS-only
 ///   identifier rename with no Rust-side equivalent) and `SpessaSynthInfo`/`SpessaSynthWarn` →
-///   `SpessaLog.info`/`SpessaLog.warn` (Task 18 API; behavior-identical thin wrappers, see
+///   `SpessaLog.info`/`SpessaLog.warn` (behavior-identical thin wrappers, see
 ///   `utils/loggin.rs`). No other logic changes.
 /// - `this.synth.clearEmbeddedBank()` → `this.synth.clearEmbeddedSoundBank()` (pure rename on
 ///   `SpessaSynthProcessor`, out of scope: `processor.rs` is not part of this task's file list).
@@ -58,19 +58,7 @@ impl SpessaSynthSequencer {
     ///
     /// Takes a song index into self.songs instead of a reference, to avoid borrow conflicts.
     pub(crate) fn load_new_sequence(&mut self, song_index: usize) {
-        let tracks_len = self.songs[song_index].tracks.len();
-        if tracks_len == 0 {
-            SpessaLog::warn("This MIDI has no tracks!");
-            return;
-        }
-
         let duration = self.songs[song_index].duration;
-        if duration == 0.0 {
-            SpessaLog::warn("This MIDI file has a duration of exactly 0 seconds.");
-            self.paused_time = Some(0.0);
-            self.is_finished = true;
-            return;
-        }
 
         let time_division = self.songs[song_index].time_division;
         self.one_tick_to_seconds = 60.0 / (120.0 * time_division as f64);
@@ -89,7 +77,7 @@ impl SpessaSynthSequencer {
                 .unwrap();
             let bank_offset = self.songs[song_index].bank_offset as u8;
             self.synth.set_embedded_sound_bank(bank_data, bank_offset);
-            // TODO: preloadSynth for embedded sound bank
+            // preloadSynth is not ported (see `load_new_song_list`)
         }
 
         // Copy over the port data
@@ -123,6 +111,15 @@ impl SpessaSynthSequencer {
         self.call_event(SequencerEvent::SongChange(SongChangeEventData {
             song_index: self.song_index,
         }));
+
+        if duration == 0.0 {
+            // The song is loaded, but there is nothing to play
+            // https://github.com/spessasus/SpessaSynth/issues/106
+            SpessaLog::warn("This MIDI file has a duration of exactly 0 seconds.");
+            self.paused_time = Some(0.0);
+            self.is_finished = true;
+            return;
+        }
 
         if duration <= 0.2 {
             let short_str = format_time(duration.round()).time;

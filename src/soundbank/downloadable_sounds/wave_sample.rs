@@ -265,9 +265,10 @@ impl WaveSample {
 
         // Correct loop offsets if needed
         if let Some(loop_data) = loop_opt {
-            let diff_start = loop_data.loop_start as i32 - sample.loop_start as i32;
-            let loop_end_abs = loop_data.loop_start as i32 + loop_data.loop_length as i32;
-            let diff_end = loop_end_abs - sample.loop_end as i32;
+            // i64: TS computes in f64, so the u32 sum may not wrap (e.g. a loop length of 0xFFFFFFFF)
+            let diff_start = loop_data.loop_start as i64 - sample.loop_start as i64;
+            let loop_end_abs = loop_data.loop_start as i64 + loop_data.loop_length as i64;
+            let diff_end = loop_end_abs - sample.loop_end as i64;
 
             if diff_start != 0 {
                 let fine = diff_start % 32_768;
@@ -380,7 +381,7 @@ mod tests {
     fn make_wsmp_chunk(data: &[u8]) -> RIFFChunk {
         RIFFChunk::new(
             "wsmp".to_string(),
-            data.len() as u32,
+            data.len(),
             IndexedByteArray::from_vec(data.to_vec()),
         )
     }
@@ -1009,7 +1010,7 @@ mod tests {
         let written = ws_orig.write();
         let written_bytes = written.to_vec();
         let mut buf = IndexedByteArray::from_vec(written_bytes);
-        let mut chunk = RIFFChunk::read(&mut buf, true, false);
+        let mut chunk = RIFFChunk::read(&mut buf, false, true);
         let ws_read = WaveSample::read(&mut chunk).unwrap();
 
         assert_eq!(ws_read.unity_note, 48);
@@ -1034,7 +1035,7 @@ mod tests {
         let written = ws_orig.write();
         let written_bytes = written.to_vec();
         let mut buf = IndexedByteArray::from_vec(written_bytes);
-        let mut chunk = RIFFChunk::read(&mut buf, true, false);
+        let mut chunk = RIFFChunk::read(&mut buf, false, true);
         let ws_read = WaveSample::read(&mut chunk).unwrap();
 
         assert_eq!(ws_read.unity_note, 60);
@@ -1054,7 +1055,7 @@ mod tests {
         let written = ws_orig.write();
         let written_bytes = written.to_vec();
         let mut buf = IndexedByteArray::from_vec(written_bytes);
-        let mut chunk = RIFFChunk::read(&mut buf, true, false);
+        let mut chunk = RIFFChunk::read(&mut buf, false, true);
         let ws_read = WaveSample::read(&mut chunk).unwrap();
 
         assert_eq!(ws_read.unity_note, 72);

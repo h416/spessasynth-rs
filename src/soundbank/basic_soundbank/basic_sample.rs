@@ -15,9 +15,9 @@
 /// be expressed with a single `&mut self`. Implemented at the `BasicSoundBank` level.
 ///
 /// Vorbis compression (`compressSample`) is for SF3 writing and not needed for
-/// midi-to-wav, so it is omitted (TODO).
-/// Vorbis decoding (`decode_vorbis_into_audio_data`) is needed for SF3 reading but
-/// will be implemented after adding the lewton / symphonia crate (TODO).
+/// midi-to-wav, so it is omitted.
+/// Vorbis decoding (`decode_vorbis_into_audio_data`) is only needed for SF3, which is
+/// outside the scope of this port; it fills the sample with silence.
 use crate::soundbank::enums::{SampleType, sample_types};
 use crate::utils::loggin::SpessaLog;
 
@@ -353,13 +353,12 @@ impl BasicSample {
 
     /// Decodes vorbis-compressed data into `audio_data`.
     ///
-    /// TODO: implement with lewton / symphonia after adding to Cargo.toml.
-    /// Currently fills with silence to avoid panics during non-SF3 use cases.
+    /// SF3 is outside the scope of this port, so this fills the sample with silence
+    /// (and warns) instead of decoding.
     ///
     /// Equivalent to: `protected decodeVorbis(): Float32Array`
     fn decode_vorbis_into_audio_data(&mut self) {
-        // TODO: Add vorbis decoding crate (lewton or symphonia) to Cargo.toml.
-        // Equivalent to the stbvorbis.decode() call in TypeScript.
+        // TS decodes with stbvorbis.decode() here.
         SpessaLog::warn(&format!(
             "decode_vorbis not implemented for sample '{}'. Filling with silence.",
             self.name

@@ -1,625 +1,328 @@
-/// channel_snapshot.rs
-/// purpose: Snapshot of a single MIDI channel's state.
-/// Ported from: src/synthesizer/audio_engine/snapshot/channel_snapshot.ts
-///
-/// # Design note
-/// The original TypeScript `create` and `apply` methods receive a `SpessaSynthProcessor`.
-/// In Rust, `MidiChannel` is unified inside `SynthesizerCore`, so we accept
-/// `&SynthesizerCore` / `&mut SynthesizerCore` directly, eliminating the
-/// dependency on the (not-yet-ported) `processor.rs`.
+//! channel_snapshot.rs
+//! purpose: Snapshot of a single MIDI channel's state.
+//! Ported from: src/synthesizer/audio_engine/channel/channel_snapshot.ts
+//!
+//! `getChannelSnapshot`/`applySnapshot` are bound to `MIDIChannel` in TS. The Rust channel
+//! does not own the voices, the sound bank manager or the drum locks, so `apply_snapshot`
+//! takes them as arguments and returns the events the program change produced.
+use crate::midi::drum_parameters::{DrumParameter, DrumParameterUtils};
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatchFull;
-use crate::synthesizer::audio_engine::channel::drum_parameters::DrumParameters;
-use crate::synthesizer::audio_engine::channel::midi_channel::ChannelVibrato;
-use crate::synthesizer::audio_engine::channel::parameters::midi::{
-    CONTROLLER_TABLE_SIZE, CUSTOM_CONTROLLER_TABLE_SIZE,
-};
-use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
+use crate::soundbank::enums::modulator_sources;
 use crate::soundbank::types::MIDISystem;
+use crate::synthesizer::audio_engine::channel::awe32_nrpn::ChannelGenerators;
+use crate::synthesizer::audio_engine::channel::midi_channel::{
+    ChannelVibrato, DrumLocks, MidiChannel,
+};
+use crate::synthesizer::audio_engine::channel::parameters::midi::{
+    CHANNEL_MIDI_PARAMETER_COUNT, ChannelMidiParameter, ChannelMidiParameterKey,
+};
+use crate::synthesizer::audio_engine::channel::parameters::system::{
+    ChannelSystemParameter, ChannelSystemParameterValue,
+};
+use crate::synthesizer::audio_engine::sound_bank_manager::SoundBankManager;
+use crate::synthesizer::audio_engine::synth_constants::CONTROLLER_TABLE_SIZE;
+use crate::synthesizer::audio_engine::voice::voice::Voice;
+use crate::synthesizer::types::SynthProcessorEvent;
 
-/// Snapshot of a single MIDI channel's state.
-/// Equivalent to: class ChannelSnapshot
+/// This interface is a snapshot of a `MidiChannel`,
+/// capturing its current state, which can be saved and restored.
+///
+/// See also `SynthesizerSnapshot`.
+/// Equivalent to: interface ChannelSnapshot
 #[derive(Clone, Debug)]
 pub struct ChannelSnapshot {
-    /// The MIDI patch assigned to the channel (with preset name).
-    /// Equivalent to: patch: MIDIPatchNamed
-    pub patch: MidiPatchFull,
-
-    /// Whether the channel's program change is disabled.
-    /// Equivalent to: lockPreset
-    pub lock_preset: bool,
-
-    /// The MIDI system active when the preset was locked.
+    /// The currently selected MIDI patch of the channel.
+    /// Equivalent to: patch?: MIDIPatchFull
+    pub patch: Option<MidiPatchFull>,
+    /// Indicates the MIDI system when the preset was locked.
     /// Equivalent to: lockedSystem
     pub locked_system: MIDISystem,
 
-    /// Full MIDI controller table (14-bit values).
-    /// Equivalent to: midiControllers: Int16Array
+    /// An array of MIDI controllers for the channel (14-bit values).
+    /// Equivalent to: midiControllers
     pub midi_controllers: [i16; CONTROLLER_TABLE_SIZE],
-
-    /// Locked controller flags.
-    /// Equivalent to: lockedControllers: boolean[]
+    /// An array indicating if a controller, at the equivalent index in the
+    /// `midi_controllers` array, is locked (i.e., not allowed changing).
+    /// Equivalent to: lockedControllers
     pub locked_controllers: Vec<bool>,
+    /// An array for the MIDI 2.0 Per-note pitch wheels.
+    /// Equivalent to: pitchWheels
+    pub pitch_wheels: [i16; 128],
+    /// Used for handling SF2/AWE32 NRPN generator adjustments.
+    /// Equivalent to: generators
+    pub generators: ChannelGenerators,
 
-    /// Custom (non-SF2) controller values.
-    /// Equivalent to: customControllers: Float32Array
-    pub custom_controllers: [f32; CUSTOM_CONTROLLER_TABLE_SIZE],
+    /// The Channel MIDI Parameters of this channel.
+    /// These are only editable via MIDI messages.
+    /// Equivalent to: midiParameters
+    pub midi_parameters: ChannelMidiParameter,
+    /// Whether a Channel MIDI parameter is locked (i.e., not allowed changing), indexed by
+    /// `ChannelMidiParameterKey`.
+    /// Equivalent to: lockedMIDIParameters
+    pub locked_midi_parameters: [bool; CHANNEL_MIDI_PARAMETER_COUNT],
+    /// The Channel System Parameters of this channel.
+    /// These are only editable via the API.
+    /// Equivalent to: systemParameters
+    pub system_parameters: ChannelSystemParameter,
+    /// An array of octave tuning values for each note on the channel.
+    /// Each index corresponds to a note (0 = C, 1 = C#, ..., 11 = B).
+    /// Note: Repeated every 12 notes.
+    /// Equivalent to: octaveTuning
+    pub octave_tuning: [i8; 128],
 
-    /// Whether GS NRPN parameters (including custom vibrato) are locked.
-    /// Maps to `lockGSNRPNParams` in MidiChannel.
-    /// Equivalent to: lockVibrato
-    pub lock_vibrato: bool,
+    /// Per-note pitch wheel mode uses the pitchWheels table as source
+    /// instead of the regular entry in the midiControllers table.
+    /// Equivalent to: perNotePitch
+    pub per_note_pitch: bool,
 
-    /// Custom vibrato settings for this channel (GS NRPN).
-    /// Equivalent to: channelVibrato
-    pub channel_vibrato: ChannelVibrato,
+    /// The vibrato settings for the channel.
+    /// Equivalent to: customVibrato
+    pub custom_vibrato: ChannelVibrato,
 
-    /// Key shift in semitones.
-    /// Equivalent to: channelTransposeKeyShift
-    pub channel_transpose_key_shift: i16,
+    /// Parameters for each drum instrument.
+    /// Equivalent to: drumParams
+    pub drum_params: Vec<DrumParameter>,
 
-    /// Per-note octave tuning (cents, 128 entries).
-    /// Equivalent to: channelOctaveTuning: Int8Array
-    pub channel_octave_tuning: [i8; 128],
-
-    /// Whether the channel is muted.
-    /// Equivalent to: isMuted
-    pub is_muted: bool,
-
-    /// Whether the channel is a drum/percussion channel.
+    /// Indicates whether this channel is a drum channel.
     /// Equivalent to: drumChannel
     pub drum_channel: bool,
 
-    /// Zero-based channel index this snapshot represents.
-    /// Equivalent to: channelNumber
-    pub channel_number: u8,
-
-    /// Per-drum-note parameters (128 entries).
-    pub drum_params: Vec<DrumParameters>,
-
-    /// Whether insertion effect routing is enabled for this channel.
-    pub insertion_enabled: bool,
+    /// The channel's number (0-based index).
+    /// Equivalent to: channel
+    pub channel: u8,
 }
 
-impl ChannelSnapshot {
-    /// Creates a new channel snapshot with explicit field values.
-    /// Equivalent to: constructor(...)
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        patch: MidiPatchFull,
-        lock_preset: bool,
-        locked_system: MIDISystem,
-        midi_controllers: [i16; CONTROLLER_TABLE_SIZE],
-        locked_controllers: Vec<bool>,
-        custom_controllers: [f32; CUSTOM_CONTROLLER_TABLE_SIZE],
-        lock_vibrato: bool,
-        channel_vibrato: ChannelVibrato,
-        channel_transpose_key_shift: i16,
-        channel_octave_tuning: [i8; 128],
-        is_muted: bool,
-        drum_channel: bool,
-        channel_number: u8,
-        drum_params: Vec<DrumParameters>,
-    ) -> Self {
-        Self {
-            patch,
-            lock_preset,
-            locked_system,
-            midi_controllers,
-            locked_controllers,
-            custom_controllers,
-            lock_vibrato,
-            channel_vibrato,
-            channel_transpose_key_shift,
-            channel_octave_tuning,
-            is_muted,
-            drum_channel,
-            channel_number,
-            drum_params,
-            insertion_enabled: false,
-        }
-    }
-
-    /// Creates a deep copy of an existing snapshot.
-    /// Equivalent to: static copyFrom(snapshot: ChannelSnapshot)
-    pub fn copy_from(snapshot: &ChannelSnapshot) -> Self {
-        snapshot.clone()
-    }
-
-    /// Creates a snapshot of the specified channel from the synthesizer state.
-    ///
-    /// Equivalent to: static create(spessaSynthProcessor, channelNumber)
-    ///
-    /// The TypeScript original receives a `SpessaSynthProcessor` and accesses
-    /// `processor.midiChannels[channelNumber]`. In Rust, `MidiChannel` lives
-    /// inside `SynthesizerCore`, so we accept `&SynthesizerCore` directly.
-    pub fn create(core: &SynthesizerCore, channel_number: usize) -> Self {
-        let ch = &core.midi_channels[channel_number];
-        let preset_name = ch
-            .preset
-            .as_ref()
-            .map_or_else(|| "undefined".to_string(), |p| p.name.clone());
-        Self {
-            patch: MidiPatchFull {
-                patch: ch.patch,
-                name: preset_name,
+impl MidiChannel {
+    /// Equivalent to: getChannelSnapshot() (MIDIChannel.getSnapshot)
+    pub fn get_snapshot(&self) -> ChannelSnapshot {
+        ChannelSnapshot {
+            patch: self.preset.as_ref().map(|preset| MidiPatchFull {
+                patch: self.patch,
+                name: preset.name.clone(),
                 // Equivalent to: isDrum: this.preset.isDrum
-                // (the channel's drum flag tracks preset.isDrum on program change;
-                // the full preset->bank lookup is reworked in a later channel task)
-                is_drum: ch.drum_channel,
+                // (the channel's drum flag tracks preset.isDrum on program change)
+                is_drum: self.drum_channel,
+            }),
+            locked_system: self.locked_system,
+
+            midi_controllers: self.midi_controllers,
+            locked_controllers: self.locked_controllers.clone(),
+            pitch_wheels: self.pitch_wheels,
+            generators: ChannelGenerators {
+                offsets: self.generator_offsets,
+                offsets_enabled: self.generator_offsets_enabled,
+                overrides: self.generator_overrides,
+                overrides_enabled: self.generator_overrides_enabled,
             },
-            lock_preset: ch.lock_preset,
-            locked_system: ch.locked_system,
-            midi_controllers: ch.midi_controllers,
-            locked_controllers: ch.locked_controllers.clone(),
-            custom_controllers: ch.custom_controllers,
-            lock_vibrato: ch.lock_gs_nrpn_params,
-            channel_vibrato: ch.channel_vibrato.clone(),
-            channel_transpose_key_shift: ch.channel_transpose_key_shift,
-            channel_octave_tuning: ch.channel_octave_tuning,
-            is_muted: ch.is_muted,
-            drum_channel: ch.drum_channel,
-            channel_number: channel_number as u8,
-            drum_params: ch.drum_params.clone(),
-            insertion_enabled: ch.insertion_enabled,
+
+            midi_parameters: self.midi_parameters.clone(),
+            locked_midi_parameters: self.locked_midi_parameters,
+            system_parameters: self.system_parameters.clone(),
+            octave_tuning: self.channel_octave_tuning,
+            per_note_pitch: self.per_note_pitch,
+
+            custom_vibrato: self.channel_vibrato.clone(),
+
+            drum_params: self.drum_params.clone(),
+            drum_channel: self.drum_channel,
+            channel: self.channel,
         }
     }
 
-    /// Applies the snapshot to the specified channel in the synthesizer.
-    ///
-    /// Equivalent to: apply(spessaSynthProcessor: SpessaSynthProcessor)
-    ///
-    /// The TypeScript original receives a `SpessaSynthProcessor`. In Rust we
-    /// accept `&mut SynthesizerCore` directly so that `processor.rs` is not needed.
-    pub fn apply(&self, core: &mut SynthesizerCore) {
-        let channel_idx = self.channel_number as usize;
-        let current_system = core.midi_parameters.system;
-        let enable_event_system = core.system_parameters.events_enabled;
-
-        // Restore mute flag (set directly; notes should be stopped by the caller)
-        core.midi_channels[channel_idx].is_muted = self.is_muted;
-
-        // Restore drum flag (direct; program_change below will set drum_channel via
-        // preset detection, but we also need the flag correct before the call)
-        core.midi_channels[channel_idx].drum_channel = self.drum_channel;
-
-        // Restore MIDI controllers
-        core.midi_channels[channel_idx].midi_controllers = self.midi_controllers;
-        core.midi_channels[channel_idx].locked_controllers = self.locked_controllers.clone();
-        core.midi_channels[channel_idx].custom_controllers = self.custom_controllers;
-        core.midi_channels[channel_idx].update_channel_tuning();
-
-        // Restore GS NRPN lock, vibrato, and transpose
-        core.midi_channels[channel_idx].lock_gs_nrpn_params = self.lock_vibrato;
-        core.midi_channels[channel_idx].channel_vibrato = self.channel_vibrato.clone();
-        core.midi_channels[channel_idx].channel_transpose_key_shift =
-            self.channel_transpose_key_shift;
-        core.midi_channels[channel_idx].channel_octave_tuning = self.channel_octave_tuning;
-
-        // Unlock preset so that the upcoming program_change is allowed
-        core.midi_channels[channel_idx].lock_preset = false;
-
-        // Restore bank and drum-patch flag (equivalent to setPatch's first three steps)
-        let patch = self.patch.patch;
-        core.midi_channels[channel_idx].set_bank_msb(patch.bank_msb);
-        core.midi_channels[channel_idx].set_bank_lsb(patch.bank_lsb);
-        core.midi_channels[channel_idx].set_gs_drums(patch.is_gm_gs_drum);
-
-        // Execute program change (looks up the preset from the sound bank and fires events).
-        // Split borrow: `midi_channels[i]` (mut) and `sound_bank_manager` (shared) are
-        // separate fields — the same pattern used in handle_xg.rs.
-        let events = core.midi_channels[channel_idx].program_change(
-            patch.program,
-            &core.sound_bank_manager,
-            current_system,
-            enable_event_system,
-        );
-
-        // Restore lock state, bypassing set_preset_lock() so that we can
-        // also restore the exact `locked_system` value from the snapshot.
-        core.midi_channels[channel_idx].lock_preset = self.lock_preset;
-        core.midi_channels[channel_idx].locked_system = self.locked_system;
-
-        // Restore drum parameters
-        core.midi_channels[channel_idx].drum_params = self.drum_params.clone();
-
-        // Restore insertion effect assignment.
-        // 4.3.16: no longer latches `insertionActive` here — `applySnapshot` calls
-        // `update_active_effects()` once every channel has been restored.
-        core.midi_channels[channel_idx].set_midi_parameter(
-            crate::synthesizer::audio_engine::channel::parameters::midi::
-                ChannelMidiParameterValue::EfxAssign(self.insertion_enabled),
-        );
-
-        // Dispatch events collected during program_change
-        for ev in events {
-            core.call_event(ev);
+    /// Equivalent to: applySnapshot(snapshot) (MIDIChannel.applySnapshot)
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_snapshot(
+        &mut self,
+        snapshot: &ChannelSnapshot,
+        voices: &mut [Voice],
+        sound_bank_manager: &SoundBankManager,
+        current_system: MIDISystem,
+        locks: DrumLocks,
+        enable_event_system: bool,
+        current_time: f64,
+    ) -> Vec<SynthProcessorEvent> {
+        self.midi_controllers = snapshot.midi_controllers;
+        for i in 0..CONTROLLER_TABLE_SIZE {
+            self.lock_controller(i, snapshot.locked_controllers[i]);
         }
+
+        self.pitch_wheels = snapshot.pitch_wheels;
+        self.channel_octave_tuning = snapshot.octave_tuning;
+
+        self.per_note_pitch = snapshot.per_note_pitch;
+
+        self.channel_vibrato.rate = snapshot.custom_vibrato.rate;
+        self.channel_vibrato.delay = snapshot.custom_vibrato.delay;
+        self.channel_vibrato.depth = snapshot.custom_vibrato.depth;
+
+        self.generator_offsets = snapshot.generators.offsets;
+        self.generator_overrides = snapshot.generators.overrides;
+        self.generator_offsets_enabled = snapshot.generators.offsets_enabled;
+        self.generator_overrides_enabled = snapshot.generators.overrides_enabled;
+
+        for i in 0..128 {
+            DrumParameterUtils::copy_into(&snapshot.drum_params[i], &mut self.drum_params[i]);
+        }
+
+        // Disable to set patch
+        // Restored in system params
+        self.set_system_parameter(ChannelSystemParameterValue::PresetLock(false), voices, current_time);
+        let mut events = Vec::new();
+        if let Some(patch) = &snapshot.patch {
+            self.set_bank_msb(patch.patch.bank_msb);
+            self.set_bank_lsb(patch.patch.bank_lsb);
+            self.set_is_gm_gs_drum(patch.patch.is_gm_gs_drum);
+            events = self.program_change(
+                patch.patch.program,
+                sound_bank_manager,
+                current_system,
+                locks,
+                enable_event_system,
+            );
+            // Fallback if no preset matched and the flag didn't sync
+            self.set_drum_flag(snapshot.drum_channel);
+        } else {
+            self.set_drum_flag(snapshot.drum_channel);
+        }
+        self.locked_system = snapshot.locked_system;
+
+        // Restore MIDI parameters
+        // Unlock them first
+        self.locked_midi_parameters = [false; CHANNEL_MIDI_PARAMETER_COUNT];
+
+        // Then set
+        for value in snapshot.midi_parameters.entries() {
+            let key = value.key();
+            self.set_midi_parameter(value);
+            // setMIDIParameter recomputes these two (see `set_midi_parameter`)
+            match key {
+                ChannelMidiParameterKey::PitchWheel => {
+                    self.compute_modulators_all_impl(voices, 0, modulator_sources::PITCH_WHEEL as usize);
+                }
+                ChannelMidiParameterKey::Pressure => {
+                    self.compute_modulators_all_impl(
+                        voices,
+                        0,
+                        modulator_sources::CHANNEL_PRESSURE as usize,
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        // Then re-lock!
+        self.locked_midi_parameters = snapshot.locked_midi_parameters;
+
+        // Restore system parameters last
+        for value in snapshot.system_parameters.entries() {
+            self.set_system_parameter(value, voices, current_time);
+        }
+
+        // The controllers were written directly, update the playing voices
+        self.compute_modulators_all_impl(voices, -1, 0);
+        events
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
-    use crate::synthesizer::audio_engine::channel::parameters::midi::CUSTOM_CONTROLLER_TABLE_SIZE;
+    use crate::synthesizer::audio_engine::channel::parameters::midi::ChannelMidiParameterValue;
     use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
-    use crate::synthesizer::types::{SynthProcessorEvent, SynthProcessorOptions};
-use crate::soundbank::types::MIDISystem;
-    use std::sync::{Arc, Mutex};
+    use crate::synthesizer::types::SynthProcessorOptions;
 
-    // -----------------------------------------------------------------------
-    // Helpers
-    // -----------------------------------------------------------------------
-
-    fn make_core() -> (SynthesizerCore, Arc<Mutex<Vec<SynthProcessorEvent>>>) {
-        let events: Arc<Mutex<Vec<SynthProcessorEvent>>> = Arc::new(Mutex::new(Vec::new()));
-        let ev_clone = Arc::clone(&events);
-        let core = SynthesizerCore::new(
-            move |ev| {
-                ev_clone.lock().unwrap().push(ev);
-            },
-            44100.0,
-            SynthProcessorOptions {
-                events_enabled: true,
-                ..Default::default()
-            },
-        );
-        (core, events)
-    }
-
-    fn make_core_with_channel() -> (SynthesizerCore, Arc<Mutex<Vec<SynthProcessorEvent>>>) {
-        let (mut core, events) = make_core();
+    fn make_core() -> SynthesizerCore {
+        let mut core = SynthesizerCore::new(|_| {}, 44100.0, SynthProcessorOptions::default());
         core.create_midi_channel(false);
-        (core, events)
+        core.create_midi_channel(false);
+        core
     }
 
-    fn default_patch_named(name: &str) -> MidiPatchFull {
-        MidiPatchFull {
-            patch: MidiPatch {
-                program: 0,
-                bank_msb: 0,
-                bank_lsb: 0,
-                is_gm_gs_drum: false,
-            },
-            name: name.to_string(),
-            is_drum: false,
+    fn apply(core: &mut SynthesizerCore, channel: usize, snapshot: &ChannelSnapshot) {
+        let current_system = core.midi_parameters.system;
+        let locks = DrumLocks::of(&core.system_parameters);
+        let current_time = core.current_time;
+        core.midi_channels[channel].apply_snapshot(
+            snapshot,
+            &mut core.voices,
+            &core.sound_bank_manager,
+            current_system,
+            locks,
+            false,
+            current_time,
+        );
+    }
+
+    #[test]
+    fn test_get_snapshot_without_preset_has_no_patch() {
+        let core = make_core();
+        let snap = core.midi_channels[1].get_snapshot();
+        assert!(snap.patch.is_none());
+        assert_eq!(snap.channel, 1);
+    }
+
+    #[test]
+    fn test_round_trip_restores_parameters_and_tables() {
+        let mut core = make_core();
+        {
+            let ch = &mut core.midi_channels[0];
+            ch.midi_controllers[7] = 100 << 7;
+            ch.locked_controllers[7] = true;
+            ch.pitch_wheels[60] = 1234;
+            ch.per_note_pitch = true;
+            ch.channel_octave_tuning[3] = -5;
+            ch.channel_vibrato.depth = 30.0;
+            ch.generator_offsets[8] = 300;
+            ch.generator_offsets_enabled = true;
+            ch.drum_params[36].pitch_fine = 7.0;
+            ch.set_midi_parameter(ChannelMidiParameterValue::PitchWheelRange(12.0));
+            ch.set_midi_parameter(ChannelMidiParameterValue::FineTune(-20.0));
+            ch.lock_midi_parameter(ChannelMidiParameterKey::FineTune, true);
+            ch.set_system_parameter(ChannelSystemParameterValue::Gain(0.5), &mut [], 0.0);
         }
+        let snap = core.midi_channels[0].get_snapshot();
+        apply(&mut core, 1, &snap);
+
+        let ch = &core.midi_channels[1];
+        assert_eq!(ch.midi_controllers[7], 100 << 7);
+        assert!(ch.locked_controllers[7]);
+        assert_eq!(ch.pitch_wheels[60], 1234);
+        assert!(ch.per_note_pitch);
+        assert_eq!(ch.channel_octave_tuning[3], -5);
+        assert_eq!(ch.channel_vibrato.depth, 30.0);
+        assert_eq!(ch.generator_offsets[8], 300);
+        assert!(ch.generator_offsets_enabled);
+        assert_eq!(ch.drum_params[36].pitch_fine, 7.0);
+        assert_eq!(ch.midi_parameters, snap.midi_parameters);
+        assert!(ch.locked_midi_parameters[ChannelMidiParameterKey::FineTune as usize]);
+        assert_eq!(ch.system_parameters.gain, 0.5);
     }
 
-    // -----------------------------------------------------------------------
-    // ChannelSnapshot::new — field storage
-    // -----------------------------------------------------------------------
-
+    /// The locks are cleared before the parameters are set and restored afterwards, so a
+    /// locked parameter on the target channel does not block the restore.
     #[test]
-    fn test_new_stores_all_fields() {
-        let patch = default_patch_named("Piano");
-        let midi_ctrl = [1i16; CONTROLLER_TABLE_SIZE];
-        let locked = vec![false; CONTROLLER_TABLE_SIZE];
-        let custom = [0.5f32; CUSTOM_CONTROLLER_TABLE_SIZE];
-        let vibrato = ChannelVibrato {
-            delay: 0.1,
-            depth: 2.0,
-            rate: 5.0,
-        };
-        let octave = [3i8; 128];
-
-        let snap = ChannelSnapshot::new(
-            patch.clone(),
-            true,
-            MIDISystem::Gm,
-            midi_ctrl,
-            locked.clone(),
-            custom,
-            true,
-            vibrato.clone(),
-            12,
-            octave,
-            true,
-            false,
-            3,
-            (0..128).map(|_| DrumParameters::default()).collect(),
-        );
-
-        assert_eq!(snap.patch.name, "Piano");
-        assert!(snap.lock_preset);
-        assert_eq!(snap.locked_system, MIDISystem::Gm);
-        assert_eq!(snap.midi_controllers[0], 1);
-        assert_eq!(snap.locked_controllers.len(), CONTROLLER_TABLE_SIZE);
-        assert!((snap.custom_controllers[0] - 0.5).abs() < 1e-6);
-        assert!(snap.lock_vibrato);
-        assert!((snap.channel_vibrato.delay - 0.1).abs() < 1e-9);
-        assert_eq!(snap.channel_transpose_key_shift, 12);
-        assert_eq!(snap.channel_octave_tuning[0], 3);
-        assert!(snap.is_muted);
-        assert!(!snap.drum_channel);
-        assert_eq!(snap.channel_number, 3);
+    fn test_apply_overrides_target_locks() {
+        let mut core = make_core();
+        core.midi_channels[0].set_midi_parameter(ChannelMidiParameterValue::KeyShift(3.0));
+        let snap = core.midi_channels[0].get_snapshot();
+        core.midi_channels[1].lock_midi_parameter(ChannelMidiParameterKey::KeyShift, true);
+        apply(&mut core, 1, &snap);
+        let ch = &core.midi_channels[1];
+        assert_eq!(ch.midi_parameters.key_shift, 3.0);
+        assert!(!ch.locked_midi_parameters[ChannelMidiParameterKey::KeyShift as usize]);
     }
 
-    // -----------------------------------------------------------------------
-    // ChannelSnapshot::copy_from — deep copy
-    // -----------------------------------------------------------------------
-
+    /// The system parameters are restored last: `presetLock` records the current MIDI
+    /// system as the locked system, overwriting the snapshot's `lockedSystem`.
     #[test]
-    fn test_copy_from_is_independent() {
-        let patch = default_patch_named("Violin");
-        let snap = ChannelSnapshot::new(
-            patch,
-            false,
-            MIDISystem::Gs,
-            [0i16; CONTROLLER_TABLE_SIZE],
-            vec![false; CONTROLLER_TABLE_SIZE],
-            [0.0f32; CUSTOM_CONTROLLER_TABLE_SIZE],
-            false,
-            ChannelVibrato::default(),
-            0,
-            [0i8; 128],
-            false,
-            false,
-            0,
-            (0..128).map(|_| DrumParameters::default()).collect(),
-        );
-        let mut copy = ChannelSnapshot::copy_from(&snap);
-
-        // Mutate the copy; original must be unaffected
-        copy.lock_preset = true;
-        copy.channel_number = 5;
-        copy.midi_controllers[0] = 99;
-        copy.locked_controllers[0] = true;
-
-        assert!(!snap.lock_preset);
-        assert_eq!(snap.channel_number, 0);
-        assert_eq!(snap.midi_controllers[0], 0);
-        assert!(!snap.locked_controllers[0]);
-    }
-
-    #[test]
-    fn test_copy_from_preserves_values() {
-        let patch = default_patch_named("Bass");
-        let snap = ChannelSnapshot::new(
-            patch,
-            true,
-            MIDISystem::Xg,
-            [7i16; CONTROLLER_TABLE_SIZE],
-            vec![true; CONTROLLER_TABLE_SIZE],
-            [1.0f32; CUSTOM_CONTROLLER_TABLE_SIZE],
-            true,
-            ChannelVibrato {
-                delay: 0.2,
-                depth: 3.0,
-                rate: 6.0,
-            },
-            -5,
-            [1i8; 128],
-            true,
-            true,
-            9,
-            (0..128).map(|_| DrumParameters::default()).collect(),
-        );
-        let copy = ChannelSnapshot::copy_from(&snap);
-
-        assert_eq!(copy.patch.name, snap.patch.name);
-        assert_eq!(copy.lock_preset, snap.lock_preset);
-        assert_eq!(copy.locked_system, snap.locked_system);
-        assert_eq!(copy.midi_controllers, snap.midi_controllers);
-        assert_eq!(copy.locked_controllers, snap.locked_controllers);
-        assert_eq!(copy.custom_controllers, snap.custom_controllers);
-        assert_eq!(copy.lock_vibrato, snap.lock_vibrato);
-        assert!((copy.channel_vibrato.delay - snap.channel_vibrato.delay).abs() < 1e-9);
-        assert_eq!(copy.channel_transpose_key_shift, snap.channel_transpose_key_shift);
-        assert_eq!(copy.channel_octave_tuning, snap.channel_octave_tuning);
-        assert_eq!(copy.is_muted, snap.is_muted);
-        assert_eq!(copy.drum_channel, snap.drum_channel);
-        assert_eq!(copy.channel_number, snap.channel_number);
-    }
-
-    // -----------------------------------------------------------------------
-    // ChannelSnapshot::create — reads from SynthesizerCore
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_create_channel_number() {
-        let (mut core, _) = make_core();
-        core.create_midi_channel(false);
-        core.create_midi_channel(false);
-        // Snapshot of channel 1 must store channel_number = 1
-        let snap = ChannelSnapshot::create(&core, 1);
-        assert_eq!(snap.channel_number, 1);
-    }
-
-    #[test]
-    fn test_create_preset_name_undefined_when_no_preset() {
-        let (mut core, _) = make_core_with_channel();
-        // No sound bank is loaded → preset is None
-        assert!(core.midi_channels[0].preset.is_none());
-        let snap = ChannelSnapshot::create(&core, 0);
-        assert_eq!(snap.patch.name, "undefined");
-    }
-
-    #[test]
-    fn test_create_captures_mute_state() {
-        let (mut core, _) = make_core_with_channel();
-        core.midi_channels[0].is_muted = true;
-        let snap = ChannelSnapshot::create(&core, 0);
-        assert!(snap.is_muted);
-    }
-
-    #[test]
-    fn test_create_captures_drum_channel() {
-        let (mut core, _) = make_core_with_channel();
-        core.midi_channels[0].drum_channel = true;
-        let snap = ChannelSnapshot::create(&core, 0);
-        assert!(snap.drum_channel);
-    }
-
-    #[test]
-    fn test_create_captures_transpose_key_shift() {
-        let (mut core, _) = make_core_with_channel();
-        core.midi_channels[0].channel_transpose_key_shift = 7;
-        let snap = ChannelSnapshot::create(&core, 0);
-        assert_eq!(snap.channel_transpose_key_shift, 7);
-    }
-
-    #[test]
-    fn test_create_captures_lock_preset() {
-        let (mut core, _) = make_core_with_channel();
-        core.midi_channels[0].lock_preset = true;
+    fn test_preset_lock_restored_last_records_current_system() {
+        let mut core = make_core();
         core.midi_channels[0].locked_system = MIDISystem::Xg;
-        let snap = ChannelSnapshot::create(&core, 0);
-        assert!(snap.lock_preset);
-        assert_eq!(snap.locked_system, MIDISystem::Xg);
-    }
-
-    #[test]
-    fn test_create_captures_lock_vibrato() {
-        let (mut core, _) = make_core_with_channel();
-        core.midi_channels[0].lock_gs_nrpn_params = true;
-        let snap = ChannelSnapshot::create(&core, 0);
-        assert!(snap.lock_vibrato);
-    }
-
-    #[test]
-    fn test_create_captures_vibrato_params() {
-        let (mut core, _) = make_core_with_channel();
-        core.midi_channels[0].channel_vibrato = ChannelVibrato {
-            delay: 1.5,
-            depth: 10.0,
-            rate: 4.0,
-        };
-        let snap = ChannelSnapshot::create(&core, 0);
-        assert!((snap.channel_vibrato.delay - 1.5).abs() < 1e-9);
-        assert!((snap.channel_vibrato.depth - 10.0).abs() < 1e-9);
-        assert!((snap.channel_vibrato.rate - 4.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn test_create_captures_controllers() {
-        let (mut core, _) = make_core_with_channel();
-        core.midi_channels[0].midi_controllers[7] = 9000; // main volume (14-bit)
-        let snap = ChannelSnapshot::create(&core, 0);
-        assert_eq!(snap.midi_controllers[7], 9000);
-    }
-
-    #[test]
-    fn test_create_captures_locked_controllers() {
-        let (mut core, _) = make_core_with_channel();
-        core.midi_channels[0].locked_controllers[10] = true;
-        let snap = ChannelSnapshot::create(&core, 0);
-        assert!(snap.locked_controllers[10]);
-    }
-
-    // -----------------------------------------------------------------------
-    // ChannelSnapshot::apply — writes back to SynthesizerCore
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_apply_restores_mute_state() {
-        let (mut core, _) = make_core_with_channel();
-        core.midi_channels[0].is_muted = false;
-
-        let mut snap = ChannelSnapshot::create(&core, 0);
-        snap.is_muted = true;
-        snap.apply(&mut core);
-
-        assert!(core.midi_channels[0].is_muted);
-    }
-
-    #[test]
-    fn test_apply_restores_transpose_key_shift() {
-        let (mut core, _) = make_core_with_channel();
-        let mut snap = ChannelSnapshot::create(&core, 0);
-        snap.channel_transpose_key_shift = -12;
-        snap.apply(&mut core);
-        assert_eq!(core.midi_channels[0].channel_transpose_key_shift, -12);
-    }
-
-    #[test]
-    fn test_apply_restores_lock_vibrato() {
-        let (mut core, _) = make_core_with_channel();
-        let mut snap = ChannelSnapshot::create(&core, 0);
-        snap.lock_vibrato = true;
-        snap.apply(&mut core);
-        assert!(core.midi_channels[0].lock_gs_nrpn_params);
-    }
-
-    #[test]
-    fn test_apply_restores_vibrato_params() {
-        let (mut core, _) = make_core_with_channel();
-        let mut snap = ChannelSnapshot::create(&core, 0);
-        snap.channel_vibrato = ChannelVibrato {
-            delay: 0.3,
-            depth: 5.0,
-            rate: 2.0,
-        };
-        snap.apply(&mut core);
-        assert!((core.midi_channels[0].channel_vibrato.delay - 0.3).abs() < 1e-9);
-        assert!((core.midi_channels[0].channel_vibrato.depth - 5.0).abs() < 1e-9);
-        assert!((core.midi_channels[0].channel_vibrato.rate - 2.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn test_apply_restores_locked_controllers() {
-        let (mut core, _) = make_core_with_channel();
-        let mut snap = ChannelSnapshot::create(&core, 0);
-        snap.locked_controllers[5] = true;
-        snap.apply(&mut core);
-        assert!(core.midi_channels[0].locked_controllers[5]);
-    }
-
-    #[test]
-    fn test_apply_restores_midi_controllers() {
-        let (mut core, _) = make_core_with_channel();
-        let mut snap = ChannelSnapshot::create(&core, 0);
-        snap.midi_controllers[7] = 8000;
-        snap.apply(&mut core);
-        assert_eq!(core.midi_channels[0].midi_controllers[7], 8000);
-    }
-
-    #[test]
-    fn test_apply_restores_lock_preset_and_locked_system() {
-        let (mut core, _) = make_core_with_channel();
-        let mut snap = ChannelSnapshot::create(&core, 0);
-        snap.lock_preset = true;
-        snap.locked_system = MIDISystem::Gm2;
-        snap.apply(&mut core);
-        assert!(core.midi_channels[0].lock_preset);
-        assert_eq!(core.midi_channels[0].locked_system, MIDISystem::Gm2);
-    }
-
-    #[test]
-    fn test_apply_restores_octave_tuning() {
-        let (mut core, _) = make_core_with_channel();
-        let mut snap = ChannelSnapshot::create(&core, 0);
-        snap.channel_octave_tuning[60] = 10;
-        snap.apply(&mut core);
-        assert_eq!(core.midi_channels[0].channel_octave_tuning[60], 10);
-    }
-
-    // -----------------------------------------------------------------------
-    // create → apply round-trip
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_create_apply_round_trip_mute() {
-        let (mut core, _) = make_core_with_channel();
-        core.midi_channels[0].is_muted = true;
-        let snap = ChannelSnapshot::create(&core, 0);
-
-        // Reset, then restore
-        core.midi_channels[0].is_muted = false;
-        snap.apply(&mut core);
-
-        assert!(core.midi_channels[0].is_muted);
-    }
-
-    #[test]
-    fn test_create_apply_round_trip_transpose() {
-        let (mut core, _) = make_core_with_channel();
-        core.midi_channels[0].channel_transpose_key_shift = 5;
-        let snap = ChannelSnapshot::create(&core, 0);
-
-        core.midi_channels[0].channel_transpose_key_shift = 0;
-        snap.apply(&mut core);
-
-        assert_eq!(core.midi_channels[0].channel_transpose_key_shift, 5);
+        core.midi_channels[0].system_parameters.preset_lock = true;
+        let snap = core.midi_channels[0].get_snapshot();
+        apply(&mut core, 1, &snap);
+        let ch = &core.midi_channels[1];
+        assert!(ch.system_parameters.preset_lock);
+        assert_eq!(ch.locked_system, core.midi_parameters.system);
     }
 }

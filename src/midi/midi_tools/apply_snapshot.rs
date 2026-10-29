@@ -1,38 +1,15 @@
-/// apply_snapshot.rs
-/// purpose: Modifies a MIDI sequence according to the locked presets and controllers in a
-///          SynthesizerSnapshot, by translating the snapshot into `ModifyMidiOptions` and
-///          delegating to `modify_midi_internal`.
-/// Ported from: src/midi/midi_tools/apply_snapshot.ts (spessasynth_core 4.3.0)
-/// (split out of `midi_editor.ts`'s `applySnapshotInternal` in 4.2.0)
-///
-/// # Snapshot type bridge
-///
-/// TS 4.3.0's `SynthesizerSnapshot` is fully ported (`system_parameters: GlobalSystemParameter`,
-/// `midi_parameters: GlobalMIDIParameter`, effect processor snapshots stored as
-/// `reverb_processor`/`chorus_processor`/`delay_processor`/`insertion_processor`), so the
-/// snapshot-level reads here match TS directly:
-///
-/// - `snapshot.systemParameters.keyShift`/`fineTune` (global) -> `system_parameters.key_shift`
-///   (semitones) / `system_parameters.fine_tune` (cents)
-/// - `snapshot.systemParameters.drumLock`/`reverbLock`/`chorusLock`/`delayLock` -> the matching
-///   `system_parameters.*_lock` flags, wired through to `ModifyMidiOptions`
-/// - `snapshot.reverbProcessor`/`chorusProcessor`/`delayProcessor` -> the matching
-///   `reverb_processor`/`chorus_processor`/`delay_processor` snapshots
-///
-/// `ChannelSnapshot` is still 4.2.0-shaped (flat fields, not the 4.3.0 `systemParameters`
-/// sub-struct — that restructuring lands in Task 21), so the per-channel reads use the bridge:
-///
-/// - `channelSnapshot.systemParameters.isMuted` -> `ChannelSnapshot::is_muted`
-/// - `channelSnapshot.systemParameters.presetLock` -> `ChannelSnapshot::lock_preset`
-/// - `channelSnapshot.systemParameters.keyShift` (semitones) ->
-///   `ChannelSnapshot::channel_transpose_key_shift`
-/// - `channelSnapshot.systemParameters.fineTune` (cents) ->
-///   `ChannelSnapshot::custom_controllers[CHANNEL_TRANSPOSE_FINE]`
-///
-/// The one remaining gap is `insertionParams`: TS passes `snapshot.insertionProcessor`
-/// (`InsertionProcessorSnapshot`), but `ModifyMidiOptions.insertion_params` expects
-/// `InsertionEffectParams`. Unifying those two effect types is deferred to Task 26 (effects);
-/// it is not WAV-relevant, since the render path never applies snapshots.
+//! apply_snapshot.rs
+//! purpose: Modifies a MIDI sequence according to the locked presets and controllers in a
+//!          SynthesizerSnapshot, by translating the snapshot into `ModifyMidiOptions` and
+//!          delegating to `modify_midi_internal`.
+//! Ported from: src/midi/midi_tools/apply_snapshot.ts
+//!
+//! The snapshot side follows TS 4.4.1. The MIDI editor it hands the changes to
+//! (`modify_midi.rs`) is still the 4.3.0 `modifyMIDIInternal`, not the 4.4.1 `MIDIEditor`
+//! (midi_editor.ts), so only the changes that editor accepts are passed on.
+//! Not ported (MIDI editing only, no effect on the MIDI-to-WAV output): the per-channel
+//! `midiParams` (locked Channel MIDI Parameters), the global `midiParams`, `userDrumParams`,
+//! `gsInsertionParams` and the `xg*Params` blocks of `ModifyMIDIOptions`.
 use std::collections::HashMap;
 
 use crate::midi::basic_midi::BasicMidi;
@@ -41,58 +18,46 @@ use crate::midi::midi_tools::modify_midi::{
     modify_midi_internal, ChannelModification, ClearableParameter, ModifyMidiOptions,
 };
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
-use crate::synthesizer::audio_engine::channel::parameters::midi::CONTROLLER_TABLE_SIZE;
+use crate::synthesizer::audio_engine::synth_constants::CONTROLLER_TABLE_SIZE;
 use crate::synthesizer::audio_engine::synthesizer_snapshot::SynthesizerSnapshot;
-use crate::synthesizer::enums::custom_controllers;
 
-/// Modifies the sequence according to the locked presets and controllers in the given snapshot.
-/// Note that this ignores the MIDI parameters and only applies system parameter tuning.
+/// Modifies the sequence *in-place* according to the locked presets and controllers in the
+/// given snapshot.
+///
+/// Note that System Parameters `fineTune` and `keyShift` are passed to the relative tuning
+/// parameters of the channels.
+/// Only locked MIDI parameters and controllers are applied.
 ///
 /// Equivalent to: applySnapshotInternal(midi, snapshot)
 pub fn apply_snapshot_internal(midi: &mut BasicMidi, snapshot: &SynthesizerSnapshot) {
     let mut channels: HashMap<u8, ClearableParameter<ChannelModification>> = HashMap::new();
-
-    // TS 4.3.0: global key shift / fine tune come from the system parameters
-    // (keyShift in semitones, fineTune in cents).
     let global_key_shift = snapshot.system_parameters.key_shift;
     let global_fine_tune = snapshot.system_parameters.fine_tune;
-
     for (channel_number, channel_snapshot) in snapshot.midi_channels.iter().enumerate() {
-        if channel_snapshot.is_muted {
+        if channel_snapshot.system_parameters.is_muted {
             channels.insert(channel_number as u8, ClearableParameter::Clear);
             continue;
         }
-
         let drum = channel_snapshot.drum_channel;
-        let key_shift = channel_snapshot.channel_transpose_key_shift as f64
-            + if drum { 0.0 } else { global_key_shift };
-        let fine_tune = channel_snapshot.custom_controllers
-            [custom_controllers::CHANNEL_TRANSPOSE_FINE as usize] as f64
-            + if drum { 0.0 } else { global_fine_tune };
-
-        let patch: Option<ClearableParameter<MidiPatch>> = if channel_snapshot.lock_preset {
-            Some(ClearableParameter::Value(channel_snapshot.patch.patch))
-        } else {
-            None
-        };
+        let key_shift =
+            channel_snapshot.system_parameters.key_shift + if drum { 0.0 } else { global_key_shift };
+        let fine_tune =
+            channel_snapshot.system_parameters.fine_tune + if drum { 0.0 } else { global_fine_tune };
+        let mut patch: Option<ClearableParameter<MidiPatch>> = None;
+        if channel_snapshot.system_parameters.preset_lock
+            && let Some(p) = &channel_snapshot.patch
+        {
+            patch = Some(ClearableParameter::Value(p.patch));
+        }
 
         let mut controllers: Vec<(u8, ClearableParameter<u8>)> = Vec::new();
         for cc_number in 0..CONTROLLER_TABLE_SIZE {
-            if !channel_snapshot
-                .locked_controllers
-                .get(cc_number)
-                .copied()
-                .unwrap_or(false)
+            if !channel_snapshot.locked_controllers[cc_number]
                 || cc_number as u8 == midi_controllers::BANK_SELECT
-                // TS 4.3.0 puts >127 entries in the map too, but they can never match a real
-                // MIDI CC event (data bytes are 7-bit); Rust's `u8` controller key makes the
-                // impossibility explicit by filtering them here.
-                || cc_number > 127
             {
                 continue;
             }
-            // Channel controllers are stored as 14-bit values.
-            let target_value = (channel_snapshot.midi_controllers[cc_number] >> 7) as u8;
+            let target_value = (channel_snapshot.midi_controllers[cc_number] >> 7) as u8; // Channel controllers are stored as 14 bit values
             controllers.push((cc_number as u8, ClearableParameter::Value(target_value)));
         }
 
@@ -107,37 +72,23 @@ pub fn apply_snapshot_internal(midi: &mut BasicMidi, snapshot: &SynthesizerSnaps
         );
     }
 
-    // TS 4.3.0: locked GS effect parameters are baked into the sequence when their
-    // corresponding `*Lock` system parameter is set.
     let sys = &snapshot.system_parameters;
-    let reverb_params = if sys.reverb_lock {
-        Some(ClearableParameter::Value(snapshot.reverb_processor.clone()))
-    } else {
-        None
-    };
-    let chorus_params = if sys.chorus_lock {
-        Some(ClearableParameter::Value(snapshot.chorus_processor.clone()))
-    } else {
-        None
-    };
-    let delay_params = if sys.delay_lock {
-        Some(ClearableParameter::Value(snapshot.delay_processor.clone()))
-    } else {
-        None
-    };
-
     modify_midi_internal(
         midi,
         &ModifyMidiOptions {
             channels: Some(channels),
+            // Drum lock clears all drum edits for every channel
             drum_setup_params_clear: sys.drum_lock,
-            reverb_params,
-            chorus_params,
-            delay_params,
-            // TODO(Task 26, effects): TS passes `snapshot.insertionProcessor`
-            // (InsertionProcessorSnapshot) here, but `ModifyMidiOptions.insertion_params`
-            // expects `InsertionEffectParams`. Wiring this requires unifying those two
-            // effect types (not WAV-relevant: the render path never applies snapshots).
+            reverb_params: sys
+                .gs_reverb_lock
+                .then(|| ClearableParameter::Value(snapshot.gs_reverb_processor.clone())),
+            chorus_params: sys
+                .gs_chorus_lock
+                .then(|| ClearableParameter::Value(snapshot.gs_chorus_processor.clone())),
+            delay_params: sys
+                .gs_delay_lock
+                .then(|| ClearableParameter::Value(snapshot.gs_delay_processor.clone())),
+            // Not ported (see the module doc)
             insertion_params: None,
         },
     );
@@ -153,6 +104,7 @@ mod tests {
     use crate::midi::enums::midi_message_types;
     use crate::midi::midi_message::MidiMessage;
     use crate::midi::midi_track::MidiTrack;
+    use crate::soundbank::basic_soundbank::midi_patch::MidiPatchFull;
     use crate::synthesizer::audio_engine::channel::channel_snapshot::ChannelSnapshot;
     use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
     use crate::synthesizer::audio_engine::synthesizer_snapshot::get_synthesizer_snapshot;
@@ -210,7 +162,7 @@ mod tests {
     #[test]
     fn test_muted_channel_cleared() {
         let mut snapshot = make_snapshot(1);
-        ch(&mut snapshot, 0).is_muted = true;
+        ch(&mut snapshot, 0).system_parameters.is_muted = true;
 
         let mut midi = simple_midi(vec![
             make_msg(0, 0x90, vec![60, 100]),
@@ -230,7 +182,7 @@ mod tests {
     #[test]
     fn test_channel_key_shift_transposes_notes() {
         let mut snapshot = make_snapshot(1);
-        ch(&mut snapshot, 0).channel_transpose_key_shift = 2;
+        ch(&mut snapshot, 0).system_parameters.key_shift = 2.0;
 
         let mut midi = simple_midi(vec![
             make_msg(0, 0x90, vec![60, 100]),
@@ -300,13 +252,17 @@ mod tests {
         let mut snapshot = make_snapshot(1);
         {
             let c = ch(&mut snapshot, 0);
-            c.lock_preset = true;
-            c.patch.patch = MidiPatch {
-                program: 25,
-                bank_msb: 0,
-                bank_lsb: 0,
-                is_gm_gs_drum: false,
-            };
+            c.system_parameters.preset_lock = true;
+            c.patch = Some(MidiPatchFull {
+                patch: MidiPatch {
+                    program: 25,
+                    bank_msb: 0,
+                    bank_lsb: 0,
+                    is_gm_gs_drum: false,
+                },
+                name: String::new(),
+                is_drum: false,
+            });
         }
 
         let mut midi = simple_midi(vec![

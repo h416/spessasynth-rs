@@ -5,7 +5,7 @@
 /// Changes from 4.2.0 (reviewed against the 4.3.0 diff):
 /// - `findFirstEventIndex()` (called twice per loop iteration: once to find the event to
 ///   process, once more to find the *next* event to process) is gone entirely. The single
-///   `index` cursor into `BasicMIDI.timeline` (ported in Task 18) replaces the per-track
+///   `index` cursor into `BasicMIDI.timeline` replaces the per-track
 ///   `eventIndexes` array: `timeline[index++]` directly gives the event to process, and
 ///   `timeline[index]` (no further increment) gives the next one — same two-event-lookahead
 ///   shape as before, just without the linear track scan.
@@ -29,7 +29,12 @@ impl SpessaSynthSequencer {
         while self.played_time < current_time {
             // Find the next event and process it
             let timeline_len = self.songs[song_idx].timeline.len();
-            let e = self.songs[song_idx].timeline[self.index];
+            let Some(&e) = self.songs[song_idx].timeline.get(self.index) else {
+                // Past the end (for example, after jumping beyond the last event)
+                self.index += 1;
+                self.song_is_finished();
+                return;
+            };
             self.index += 1;
             let event = self.songs[song_idx].tracks[e.tr].events[e.ev].clone();
             let event_ticks = event.ticks;

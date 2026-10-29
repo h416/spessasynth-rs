@@ -14,7 +14,7 @@
 ///   (pure rename with an identical default system parameter — see `sequencer.rs`'s module doc
 ///   comment for details). This Rust file keeps calling the existing
 ///   `reset_all_controllers(DEFAULT_SYNTH_MODE)` (out of scope: `processor.rs`).
-/// - `SpessaSynthInfo` → `SpessaLog::info` (Task 18 API; behavior-identical).
+/// - `SpessaSynthInfo` → `SpessaLog::info` (behavior-identical).
 /// - The 4.3.0 top-of-function `if (this.externalMIDIPlayback && event.statusByte >= 0x80) { ...
 ///   return; }` early-out is not reachable in this port: `externalMIDIPlayback` is out of scope
 ///   for this offline-WAV-rendering project and was never implemented (see `sequencer.rs`'s
@@ -128,9 +128,8 @@ impl SpessaSynthSequencer {
             }
 
             midi_message_types::RESET => {
-                self.synth.stop_all_channels(false);
-                self.synth
-                    .reset();
+                // 4.4.0 dropped the separate stopAllChannels(); reset() stops all notes itself.
+                self.synth.reset();
             }
 
             // Recognized but ignored

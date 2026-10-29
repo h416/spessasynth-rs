@@ -5,7 +5,7 @@
 /// Changes from 4.2.0 (reviewed against the 4.3.0 diff):
 /// - `eventIndexes: number[]` (one cursor per track, resolved via `findFirstEventIndex()`) was
 ///   replaced by a single `index: number` cursor into `BasicMIDI.timeline` (a flattened,
-///   time-sorted `{tr, ev}` list computed once when the MIDI is flushed — ported in Task 18).
+///   time-sorted `{tr, ev}` list computed once when the MIDI is flushed).
 ///   `findFirstEventIndex()`/`find_first_event_index()` no longer exists.
 /// - `playingNotes: {midiNote, channel, velocity}[]` (a flat array, linearly scanned by
 ///   `findIndex`/`splice` on every note on/off) became `playingNotes: Map<number, number>[]`
@@ -33,7 +33,7 @@
 ///   to real/virtual hardware) is out of scope for this offline-WAV-rendering project and was
 ///   never implemented — every `sendMIDI*` wrapper below only has the internal-synth branch.
 /// - `SpessaSynthWarn`/`SpessaSynthGroup`/`SpessaSynthGroupEnd` calls became
-///   `SpessaLog::warn`/`SpessaLog::group`/`SpessaLog::group_end` (Task 18 API; behavior-identical
+///   `SpessaLog::warn`/`SpessaLog::group`/`SpessaLog::group_end` (behavior-identical
 ///   thin wrappers, see `utils/loggin.rs`).
 /// - Cosmetic-only: doc comment wording ("shuffleMode" → "shuffle mode"), `midiControllers` /
 ///   `midiMessageTypes` → `MIDIControllers` / `MIDIMessageTypes` (TS casing convention change;
@@ -211,15 +211,13 @@ impl SpessaSynthSequencer {
     /// Sets the song index and loads the song.
     /// Equivalent to: set songIndex(value)
     pub fn set_song_index(&mut self, value: usize) {
-        // TS has no empty-list guard: there `value % 0` is NaN, which it happily
-        // assigns. Rust panics on `% 0`, so bail out instead.
+        // No songs to select
         if self.songs.is_empty() {
             return;
         }
         // TS: `this._songIndex = Math.max(0, value % this.songs.length)`.
         // `value` is usize, so the remainder is already non-negative and the
-        // Math.max is a no-op. (The preceding `this._songIndex = value` in the
-        // TS setter is a dead store, overwritten on the next line.)
+        // Math.max is a no-op.
         self.song_index = value % self.songs.len();
         self.load_current_song();
     }
@@ -345,7 +343,8 @@ impl SpessaSynthSequencer {
         }
         self.song_index = 0;
         self.shuffle_song_indexes();
-        // TODO: preloadSynth for songs without embedded sound bank
+        // preloadSynth is not ported: it only fills the voice cache ahead of time
+        // (getVoicesForPreset), which does not change the rendered output.
         self.load_current_song();
     }
 
@@ -409,12 +408,13 @@ impl SpessaSynthSequencer {
     /// Sends all-off to all channels.
     /// Equivalent to: sendMIDIAllOff() (internal-synth branch only; see module doc comment)
     pub(crate) fn send_midi_all_off(&mut self) {
-        // Disable sustain on first 16 channels
-        for i in 0..16 {
+        // Disable sustain on every port
+        let channel_count = self.synth.synth_core.midi_channels.len();
+        for i in 0..channel_count {
             self.synth
                 .controller_change(i, midi_controllers::SUSTAIN_PEDAL, 0);
         }
-        self.synth.stop_all_channels(false);
+        self.synth.stop_all(false);
     }
 
     /// Resets all controllers.

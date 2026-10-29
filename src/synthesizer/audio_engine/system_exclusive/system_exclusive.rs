@@ -7,7 +7,7 @@ use crate::utils::other::array_to_hex_string;
 /// Outputs an informational log for a SysEx operation.
 /// TypeScript's `SysExAcceptedArray` is a union of various typed arrays,
 /// but in Rust it is unified as raw bytes `&[u8]`.
-/// Equivalent to: sysExLogging
+/// Rust-only helper (4.2.0 `sysExLogging`; TS 4.3.0+ logs inline). Logging only.
 pub fn sys_ex_logging(
     syx: &[u8],
     channel: u8,
@@ -26,7 +26,7 @@ pub fn sys_ex_logging(
 }
 
 /// Outputs an informational log for an unrecognized SysEx message.
-/// Equivalent to: sysExNotRecognized
+/// Rust-only helper (4.2.0 `sysExNotRecognized`; TS 4.3.0+ logs inline). Logging only.
 pub fn sys_ex_not_recognized(syx: &[u8], what: &str) {
     spessa_synth_info(&format!(
         "Unrecognized {} SysEx: {}",

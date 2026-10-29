@@ -59,10 +59,10 @@ use crate::midi::midi_tools::parameter_tracker::ParameterTracker;
 use crate::midi::midi_track::MidiTrack;
 use crate::soundbank::basic_soundbank::midi_patch::{self, MidiPatch};
 use crate::soundbank::types::MIDISystem;
-use crate::synthesizer::audio_engine::effects::chorus::ChorusSnapshot;
-use crate::synthesizer::audio_engine::effects::delay::DelaySnapshot;
-use crate::synthesizer::audio_engine::effects::reverb::ReverbSnapshot;
-use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
+use crate::synthesizer::audio_engine::effects::gs::implementation::chorus::ChorusSnapshot;
+use crate::synthesizer::audio_engine::effects::gs::implementation::delay::DelaySnapshot;
+use crate::synthesizer::audio_engine::effects::gs::implementation::reverb::ReverbSnapshot;
+use crate::synthesizer::audio_engine::synth_constants::MIDI_DRUM_CHANNEL;
 use crate::utils::loggin::SpessaLog;
 use crate::utils::midi_hacks::BankSelectHacks;
 
@@ -149,16 +149,12 @@ pub struct ChannelModification {
     pub fine_tune: f64,
 }
 
-/// A local reshaping of TS 4.3.0's `InsertionProcessorSnapshot` (`type`/`params`/`channels`),
-/// used only by `modify_midi`/`apply_snapshot`.
+/// TS 4.3.0's `InsertionProcessorSnapshot` (`type`/`params`/`channels`), the shape the 4.3.0
+/// `modifyMIDIInternal` ported here takes for `insertionParams`.
 ///
-/// This intentionally does *not* reuse `synthesizer_snapshot::InsertionSnapshot` (the current
-/// Rust engine-state type, 4.2.0-shaped): that type has no `channels: Vec<bool>` (per-channel
-/// insertion-enabled flags — tracked per-`ChannelSnapshot` instead in the current Rust engine)
-/// and packs only 20 raw parameter bytes, whereas TS 4.3.0's `params` is 23 bytes wide (20
-/// parameters + 3 trailing effect-send slots, indices 20-22). Reconciling the two engine-state
-/// shapes is left to Task 20; `apply_snapshot.rs` bridges between them with a documented,
-/// best-effort field mapping.
+/// The synthesizer snapshot now holds the 4.4.1 `GSInsertionProcessorSnapshot`, which has no
+/// `channels` (the per-channel flag is the channel's `efxAssign` MIDI parameter), so
+/// `apply_snapshot.rs` does not pass it on (see its module doc).
 #[derive(Clone, Debug)]
 pub struct InsertionEffectParams {
     /// The EFX type of this processor, stored as `MSB << 8 | LSB`.
@@ -652,7 +648,7 @@ pub fn modify_midi_internal(midi: &mut BasicMidi, opts: &ModifyMidiOptions) {
 
                         if patch.is_gm_gs_drum
                             && !BankSelectHacks::is_system_xg(system)
-                            && midi_channel != DEFAULT_PERCUSSION
+                            && midi_channel != MIDI_DRUM_CHANNEL
                         {
                             SpessaLog::info(&format!("Adding GS Drum change on track {}", track_num));
                             add_event_before(
@@ -864,119 +860,122 @@ pub fn modify_midi_internal(midi: &mut BasicMidi, opts: &ModifyMidiOptions) {
             }
 
             s if s == midi_message_types::SYSTEM_EXCLUSIVE => {
-                let syx = MidiUtils::analyze_sysex(&e_data);
-                match syx {
-                    AnalyzedMidiMessage::XgReset => {
-                        SpessaLog::info("XG system on detected");
-                        system = MIDISystem::Xg;
-                        added_gs = true; // Flag as true so GS won't get added.
-                        reset_track = track_num;
-                        reset_index = index;
-                        for ch in channel_statuses.iter_mut() {
-                            ch.param.reset();
-                            ch.cleared_params = ClearedParams {
-                                p_lsb: true,
-                                p_msb: true,
-                                data: true,
-                            };
+                let syxs = MidiUtils::analyze_sysex(&e_data);
+                for syx in syxs {
+                    match syx {
+                        AnalyzedMidiMessage::XgReset => {
+                            SpessaLog::info("XG system on detected");
+                            system = MIDISystem::Xg;
+                            added_gs = true; // Flag as true so GS won't get added.
+                            reset_track = track_num;
+                            reset_index = index;
+                            for ch in channel_statuses.iter_mut() {
+                                ch.param.reset();
+                                ch.cleared_params = ClearedParams {
+                                    p_lsb: true,
+                                    p_msb: true,
+                                    data: true,
+                                };
+                            }
                         }
-                    }
 
-                    AnalyzedMidiMessage::Gm2On => {
-                        SpessaLog::info("GM2 system on detected");
-                        system = MIDISystem::Gm2;
-                        added_gs = true;
-                        reset_track = track_num;
-                        reset_index = index;
-                        for ch in channel_statuses.iter_mut() {
-                            ch.param.reset();
-                            ch.cleared_params = ClearedParams {
-                                p_lsb: true,
-                                p_msb: true,
-                                data: true,
-                            };
+                        AnalyzedMidiMessage::Gm2On => {
+                            SpessaLog::info("GM2 system on detected");
+                            system = MIDISystem::Gm2;
+                            added_gs = true;
+                            reset_track = track_num;
+                            reset_index = index;
+                            for ch in channel_statuses.iter_mut() {
+                                ch.param.reset();
+                                ch.cleared_params = ClearedParams {
+                                    p_lsb: true,
+                                    p_msb: true,
+                                    data: true,
+                                };
+                            }
                         }
-                    }
 
-                    AnalyzedMidiMessage::GsReset => {
-                        SpessaLog::info("GS on detected!");
-                        added_gs = true;
-                        reset_track = track_num;
-                        reset_index = index;
-                        for ch in channel_statuses.iter_mut() {
-                            ch.param.reset();
-                            ch.cleared_params = ClearedParams {
-                                p_lsb: true,
-                                p_msb: true,
-                                data: true,
-                            };
+                        AnalyzedMidiMessage::GsReset => {
+                            SpessaLog::info("GS on detected!");
+                            added_gs = true;
+                            reset_track = track_num;
+                            reset_index = index;
+                            for ch in channel_statuses.iter_mut() {
+                                ch.param.reset();
+                                ch.cleared_params = ClearedParams {
+                                    p_lsb: true,
+                                    p_msb: true,
+                                    data: true,
+                                };
+                            }
                         }
-                    }
 
-                    AnalyzedMidiMessage::GmOff | AnalyzedMidiMessage::GmOn => {
-                        SpessaLog::info("GM on detected, removing!");
-                        delete_this_event(midi, &mut event_indexes, track_num, index);
-                        added_gs = false;
-                        break 'process;
-                    }
-
-                    AnalyzedMidiMessage::DrumSetup => {
-                        if clear_drum_params {
+                        AnalyzedMidiMessage::GmOff | AnalyzedMidiMessage::GmOn => {
+                            SpessaLog::info("GM on detected, removing!");
                             delete_this_event(midi, &mut event_indexes, track_num, index);
+                            added_gs = false;
                             break 'process;
                         }
-                    }
 
-                    AnalyzedMidiMessage::ReverbParam => {
-                        if opts.reverb_params.is_some() {
-                            delete_this_event(midi, &mut event_indexes, track_num, index);
-                            break 'process;
+                        AnalyzedMidiMessage::DrumSetup => {
+                            if clear_drum_params {
+                                delete_this_event(midi, &mut event_indexes, track_num, index);
+                                break 'process;
+                            }
                         }
-                    }
 
-                    AnalyzedMidiMessage::ChorusParam => {
-                        if opts.chorus_params.is_some() {
-                            delete_this_event(midi, &mut event_indexes, track_num, index);
-                            break 'process;
+                        AnalyzedMidiMessage::ReverbParam => {
+                            if opts.reverb_params.is_some() {
+                                delete_this_event(midi, &mut event_indexes, track_num, index);
+                                break 'process;
+                            }
                         }
-                    }
 
-                    AnalyzedMidiMessage::DelayParam => {
-                        if opts.delay_params.is_some() {
-                            delete_this_event(midi, &mut event_indexes, track_num, index);
-                            break 'process;
+                        AnalyzedMidiMessage::ChorusParam => {
+                            if opts.chorus_params.is_some() {
+                                delete_this_event(midi, &mut event_indexes, track_num, index);
+                                break 'process;
+                            }
                         }
-                    }
 
-                    AnalyzedMidiMessage::InsertionParam => {
-                        if opts.insertion_params.is_some() {
-                            delete_this_event(midi, &mut event_indexes, track_num, index);
-                            break 'process;
+                        AnalyzedMidiMessage::DelayParam => {
+                            if opts.delay_params.is_some() {
+                                delete_this_event(midi, &mut event_indexes, track_num, index);
+                                break 'process;
+                            }
                         }
-                    }
 
-                    AnalyzedMidiMessage::ProgramChange {
-                        channel: syx_channel,
-                        ..
-                    } => {
-                        let target = syx_channel as u32 + port_offset;
-                        if channel_changes
-                            .get(&(target as u8))
-                            .is_some_and(|c| c.patch.is_some())
-                        {
-                            delete_this_event(midi, &mut event_indexes, track_num, index);
-                            break 'process;
+                        AnalyzedMidiMessage::InsertionParam => {
+                            if opts.insertion_params.is_some() {
+                                delete_this_event(midi, &mut event_indexes, track_num, index);
+                                break 'process;
+                            }
                         }
-                    }
 
-                    AnalyzedMidiMessage::FineTune {
-                        channel: syx_channel,
-                        value: cents,
-                    } => {
-                        let target = (syx_channel as u32 + port_offset) as u8;
-                        let has_change = channel_changes.contains_key(&target);
-                        if let Some(syx_status) = channel_statuses.get_mut(target as usize) {
-                            if syx_status.is_first_note_on && has_change {
+                        AnalyzedMidiMessage::ProgramChange {
+                            channel: syx_channel,
+                            ..
+                        } => {
+                            let target = syx_channel as u32 + port_offset;
+                            if channel_changes
+                                .get(&(target as u8))
+                                .is_some_and(|c| c.patch.is_some())
+                            {
+                                delete_this_event(midi, &mut event_indexes, track_num, index);
+                                break 'process;
+                            }
+                        }
+
+                        AnalyzedMidiMessage::FineTune {
+                            channel: syx_channel,
+                            value: cents,
+                        } => {
+                            let target = (syx_channel as u32 + port_offset) as u8;
+                            let has_change = channel_changes.contains_key(&target);
+                            if let Some(syx_status) = channel_statuses.get_mut(target as usize)
+                                && syx_status.is_first_note_on
+                                && has_change
+                            {
                                 // No note-on yet. Then use it as relative!
                                 let new_tune = syx_status.fine_tune + cents;
                                 syx_status.key_shift += (new_tune / 100.0).trunc();
@@ -985,32 +984,32 @@ pub fn modify_midi_internal(midi: &mut BasicMidi, opts: &ModifyMidiOptions) {
                                 break 'process;
                             }
                         }
-                    }
 
-                    AnalyzedMidiMessage::ControllerChange {
-                        channel: syx_channel,
-                        controller: cc_num,
-                        ..
-                    } => {
-                        let target = syx_channel as u32 + port_offset;
-                        let syx_change = channel_changes.get(&(target as u8));
-                        let locked = syx_change
-                            .and_then(|c| c.controllers.as_ref())
-                            .and_then(|controllers| controllers.iter().find(|(cc, _)| *cc == cc_num));
-                        if locked.is_some() {
-                            delete_this_event(midi, &mut event_indexes, track_num, index);
-                            break 'process;
+                        AnalyzedMidiMessage::ControllerChange {
+                            channel: syx_channel,
+                            controller: cc_num,
+                            ..
+                        } => {
+                            let target = syx_channel as u32 + port_offset;
+                            let syx_change = channel_changes.get(&(target as u8));
+                            let locked = syx_change
+                                .and_then(|c| c.controllers.as_ref())
+                                .and_then(|controllers| controllers.iter().find(|(cc, _)| *cc == cc_num));
+                            if locked.is_some() {
+                                delete_this_event(midi, &mut event_indexes, track_num, index);
+                                break 'process;
+                            }
+                            if (cc_num == midi_controllers::BANK_SELECT
+                                || cc_num == midi_controllers::BANK_SELECT_LSB)
+                                && syx_change.is_some_and(|c| c.patch.is_some())
+                            {
+                                delete_this_event(midi, &mut event_indexes, track_num, index);
+                                break 'process;
+                            }
                         }
-                        if (cc_num == midi_controllers::BANK_SELECT
-                            || cc_num == midi_controllers::BANK_SELECT_LSB)
-                            && syx_change.is_some_and(|c| c.patch.is_some())
-                        {
-                            delete_this_event(midi, &mut event_indexes, track_num, index);
-                            break 'process;
-                        }
-                    }
 
-                    _ => {}
+                        _ => {}
+                    }
                 }
             }
 

@@ -58,7 +58,7 @@ pub struct VolumeEnvelope {
     sample_rate: f64,
     /// The sample count between updates of the volume envelope (= render buffer size).
     /// Since the envelope calculation runs once per rendering quantum, this is effectively
-    /// the buffer size. For the WAV pipeline this is fixed at `SPESSA_BUFSIZE`.
+    /// the buffer size (`maxBufferSize`, `SPESSA_BUFSIZE` by default).
     /// Equivalent to: updateInterval
     update_interval: f64,
 
@@ -109,17 +109,14 @@ impl VolumeEnvelope {
     ///
     /// Equivalent to: new VolumeEnvelope(sampleRate, bufferSize)
     ///
-    /// The TS constructor takes `bufferSize` (= `maxBufferSize`). For this WAV-only port the
-    /// render quantum is always `SPESSA_BUFSIZE`, so `update_interval` is fixed to it here.
-    /// This keeps the constructor signature unchanged and confines the 4.3.0 rewrite to
-    /// `volume_envelope.rs` + `render_voice.rs`.
-    pub fn new(sample_rate: f64) -> Self {
+    /// `buffer_size` is the synthesizer's `maxBufferSize`.
+    pub fn new(sample_rate: f64, buffer_size: usize) -> Self {
         Self {
             output_gain: 0.0,
             attenuation_cb: CB_SILENCE,
             state: 0,
             sample_rate,
-            update_interval: SPESSA_BUFSIZE as f64,
+            update_interval: buffer_size as f64,
             sample_time: 0.0,
             release_start_cb: CB_SILENCE,
             release_start_time_samples: 0.0,
@@ -433,7 +430,7 @@ mod tests {
     }
 
     fn new_env() -> VolumeEnvelope {
-        VolumeEnvelope::new(SAMPLE_RATE)
+        VolumeEnvelope::new(SAMPLE_RATE, SPESSA_BUFSIZE)
     }
 
     // -----------------------------------------------------------------------

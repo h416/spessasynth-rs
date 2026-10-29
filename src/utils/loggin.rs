@@ -16,9 +16,7 @@
 ///
 /// The original free functions (`spessa_synth_logging`, `spessa_synth_info`,
 /// `spessa_synth_warn`, `spessa_synth_group`, `spessa_synth_group_collapsed`,
-/// `spessa_synth_group_end`) are kept as thin backward-compatible wrappers because ~40 other
-/// files across the crate (out of scope for this task) still call them; those call sites will
-/// be migrated to `SpessaLog::...` as each file is ported in later phase-2 tasks.
+/// `spessa_synth_group_end`) are kept as thin wrappers; many call sites still use them.
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::utils::other::array_to_hex_string;

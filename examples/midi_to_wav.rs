@@ -5,6 +5,7 @@ use spessasynth_rs::midi::basic_midi::BasicMidi;
 use spessasynth_rs::midi::midi_tools::midi_builder::{MidiBuilder, MidiBuilderOptions};
 use spessasynth_rs::midi::types::MidiLoopType;
 use spessasynth_rs::midi::write::midi::write_midi_internal;
+use spessasynth_rs::synthesizer::audio_engine::parameters::system::GlobalSystemParameterChange;
 use spessasynth_rs::{render_midi_file_to_wav, RenderOptions};
 
 /// Generate a simple test MIDI file: single note C4 (note 60), 1 second, Piano.
@@ -69,6 +70,9 @@ fn print_usage() {
     println!("  -r, --sample-rate <hz>  Output sample rate (default: 44100)");
     println!("  --no-normalize       Disable audio normalization");
     println!("  --no-effects         Disable reverb/chorus/delay/insertion effects");
+    println!("  --system <name>=<value>  Set a system parameter (repeatable):");
+    println!("                       customVibrato, drumLock, userDrumLock, nrpnParamLock (true|false)");
+    println!("                       fineTune, keyShift, pan, gain (number)");
 }
 
 fn main() {
@@ -97,6 +101,7 @@ fn main() {
     let mut sample_rate: u32 = RenderOptions::default().sample_rate;
     let mut normalize: bool = true;
     let mut effects_enabled: bool = true;
+    let mut system_parameters: Vec<GlobalSystemParameterChange> = Vec::new();
     let mut positional: Vec<String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -139,6 +144,33 @@ fn main() {
             "--no-effects" => {
                 effects_enabled = false;
             }
+            "--system" => {
+                i += 1;
+                let parsed = args.get(i).and_then(|a| {
+                    let (name, value) = a.split_once('=')?;
+                    let b = || value.parse::<bool>().ok();
+                    let f = || value.parse::<f64>().ok();
+                    Some(match name {
+                        "customVibrato" => GlobalSystemParameterChange::CustomVibrato(b()?),
+                        "drumLock" => GlobalSystemParameterChange::DrumLock(b()?),
+                        "userDrumLock" => GlobalSystemParameterChange::UserDrumLock(b()?),
+                        "nrpnParamLock" => GlobalSystemParameterChange::NrpnParamLock(b()?),
+                        "fineTune" => GlobalSystemParameterChange::FineTune(f()?),
+                        "keyShift" => GlobalSystemParameterChange::KeyShift(f()?),
+                        "pan" => GlobalSystemParameterChange::Pan(f()?),
+                        "gain" => GlobalSystemParameterChange::Gain(f()?),
+                        _ => return None,
+                    })
+                });
+                match parsed {
+                    Some(p) => system_parameters.push(p),
+                    None => {
+                        eprintln!("Error: --system requires <name>=<value>");
+                        print_usage();
+                        std::process::exit(1);
+                    }
+                }
+            }
             "-h" | "--help" => {
                 print_usage();
                 std::process::exit(0);
@@ -164,6 +196,7 @@ fn main() {
             normalize,
             sample_rate,
             effects_enabled,
+            system_parameters,
             ..Default::default()
         }),
         Some(&|current, total| {

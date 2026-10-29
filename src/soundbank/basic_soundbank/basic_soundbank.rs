@@ -15,7 +15,7 @@
 /// - `get_preset` returns `Option<&BasicPreset>` (None on empty bank) to satisfy `PresetResolver`
 /// - `parentSoundBank` in `BasicPreset` is removed (circular ownership); passed as params instead
 ///
-/// ## `trim` (Task 18)
+/// ## `trim`
 ///
 /// TS 4.3.0 reworked `trimSoundBank(mid)` (which internally called `mid.getUsedProgramsAndKeys`)
 /// into `trim(presetData: PresetsWithKeyCombinations)`, taking the already-computed result so

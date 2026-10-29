@@ -8,13 +8,11 @@
 ///   `ALL_CHANNELS_OR_DIFFERENT_ACTION` (callers now use a literal -1, matching the
 ///   `deviceID: -1` default in `parameters/system.ts`).
 /// - `SYNTHESIZER_GAIN` (1) was replaced by `SPESSASYNTH_GAIN_FACTOR` (0.6), which is applied
-///   inside the channel's `updateInternalParams()` gain computation. TODO(Task 21, channel
-///   restructuring): the constant is defined here but not yet wired into the render path —
-///   doing so requires the 4.3.0 channel gain model and WILL change WAV output.
+///   inside the channel's `updateInternalParams()` gain computation.
 /// - Added: `EFX_SENDS_GAIN_CORRECTION`, `CONTROLLER_TABLE_SIZE` (128 — NOT the same constant
 ///   as the 4.2.0-era `channel/parameters/midi.rs::CONTROLLER_TABLE_SIZE` = 147, which appends
-///   non-CC modulator-source slots and remains in use by the pre-4.3.0 channel code until
-///   Task 21), and `SPESSA_BUFSIZE` documentation updates.
+///   non-CC modulator-source slots and is still used by the Rust channel's controller table),
+///   and `SPESSA_BUFSIZE` documentation updates.
 use std::sync::OnceLock;
 
 use crate::soundbank::types::MIDISystem;
@@ -25,8 +23,8 @@ use crate::synthesizer::types::SynthMethodOptions;
 pub const VOICE_CAP: u32 = 350;
 
 /// Default MIDI drum channel (0-indexed).
-/// Equivalent to: DEFAULT_PERCUSSION
-pub const DEFAULT_PERCUSSION: u8 = 9;
+/// Equivalent to: MIDI_DRUM_CHANNEL (renamed from DEFAULT_PERCUSSION in 4.4.0)
+pub const MIDI_DRUM_CHANNEL: u8 = 9;
 
 /// Default bank select and SysEx mode.
 /// Equivalent to: DEFAULT_SYNTH_MODE
@@ -69,8 +67,7 @@ pub const MIN_EXCLUSIVE_LENGTH: f64 = 0.07;
 
 /// This panning factor ensures that spessasynth doesn't stay too loud.
 /// You can set the `gain` system parameter to an inverse of it to negate the effect.
-/// Equivalent to: SPESSASYNTH_GAIN_FACTOR (new in TS 4.3.0; see module doc TODO — not yet
-/// wired into the render path)
+/// Equivalent to: SPESSASYNTH_GAIN_FACTOR (new in TS 4.3.0)
 pub const SPESSASYNTH_GAIN_FACTOR: f64 = 0.6;
 
 /// The default buffer size for the synthesizer, in samples.
@@ -80,7 +77,7 @@ pub const SPESSA_BUFSIZE: usize = 128;
 /// This is needed because effects (regular ones) are sent straight from the mono signal,
 /// whereas insertion effects receive the panned audio (twice), which reduces gain by a factor
 /// of cos(pi/4) * cos(pi/4) (master pan + voice pan). This reverses it.
-/// Equivalent to: EFX_SENDS_GAIN_CORRECTION = 1 / Math.cos(Math.PI / 4) ** 2 (= 2.0)
+/// Equivalent to: EFX_SENDS_GAIN_CORRECTION = 2 (4.4.0; was `1 / Math.cos(Math.PI / 4) ** 2`)
 pub const EFX_SENDS_GAIN_CORRECTION: f64 = 2.0;
 
 /// The amount of MIDI controllers (the 128 real MIDI CCs).
@@ -92,9 +89,15 @@ pub const CONTROLLER_TABLE_SIZE: usize = 128;
 /// Equivalent to: DEFAULT_RPN
 pub const DEFAULT_RPN: u8 = 0x7f;
 
-/// No NRPN is bound to 0 0, while 0x7f MSB is AWE32!
+/// NRPN NULL (4.4.0; was 0 in 4.3.x). data_entry ignores 0x7f 0x7f explicitly so that
+/// it does not reach the AWE32 handler (0x7f MSB).
 /// Equivalent to: DEFAULT_NRPN
-pub const DEFAULT_NRPN: u8 = 0;
+pub const DEFAULT_NRPN: u8 = 127;
+
+/// GS User Drum Set programs.
+/// Equivalent to: GS_USER_DRUM_1, GS_USER_DRUM_2
+pub const GS_USER_DRUM_1: u8 = 64;
+pub const GS_USER_DRUM_2: u8 = 65;
 
 #[cfg(test)]
 mod tests {
@@ -107,11 +110,11 @@ mod tests {
         assert_eq!(VOICE_CAP, 350);
     }
 
-    // --- DEFAULT_PERCUSSION ---
+    // --- MIDI_DRUM_CHANNEL ---
 
     #[test]
     fn test_default_percussion() {
-        assert_eq!(DEFAULT_PERCUSSION, 9);
+        assert_eq!(MIDI_DRUM_CHANNEL, 9);
     }
 
     // --- DEFAULT_SYNTH_MODE ---
@@ -208,14 +211,14 @@ mod tests {
 
     #[test]
     fn test_default_nrpn() {
-        assert_eq!(DEFAULT_NRPN, 0);
+        assert_eq!(DEFAULT_NRPN, 127);
     }
 
     // --- consistency checks ---
 
     #[test]
     fn test_default_percussion_within_16_channels() {
-        assert!((DEFAULT_PERCUSSION as u32) < 16);
+        assert!((MIDI_DRUM_CHANNEL as u32) < 16);
     }
 
     #[test]

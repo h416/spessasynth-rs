@@ -70,6 +70,26 @@ pub enum ChannelSystemParameterValue {
     MonophonicRetrigger(Option<bool>),
 }
 
+impl ChannelSystemParameter {
+    /// All parameters with their values, in the key order of
+    /// `DEFAULT_CHANNEL_SYSTEM_PARAMETERS`.
+    /// Equivalent to: Object.entries(systemParameters)
+    pub fn entries(&self) -> [ChannelSystemParameterValue; 9] {
+        use ChannelSystemParameterValue as V;
+        [
+            V::PresetLock(self.preset_lock),
+            V::IsMuted(self.is_muted),
+            V::Gain(self.gain),
+            V::Pan(self.pan),
+            V::KeyShift(self.key_shift),
+            V::FineTune(self.fine_tune),
+            V::InterpolationType(self.interpolation_type),
+            V::NrpnParamLock(self.nrpn_param_lock),
+            V::MonophonicRetrigger(self.monophonic_retrigger),
+        ]
+    }
+}
+
 /// The default system parameters of a channel.
 /// Equivalent to: DEFAULT_CHANNEL_SYSTEM_PARAMETERS
 pub const DEFAULT_CHANNEL_SYSTEM_PARAMETERS: ChannelSystemParameter = ChannelSystemParameter {

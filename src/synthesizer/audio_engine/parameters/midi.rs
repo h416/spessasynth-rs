@@ -8,17 +8,9 @@
 /// (this file — parameters editable only via MIDI messages) and `GlobalSystemParameter`
 /// (`parameters/system.rs` — parameters editable only via the API).
 ///
-/// TS 4.3.14 renamed `gain` to `volume` and squares it when folding it into the channel's
-/// gain (`Math.pow(globalMIDI.volume, 2)` — "it corresponds to CC volume, so volume is
-/// squared"). See `SynthesizerCore::set_midi_volume` for where the squaring is applied.
-///
-/// TODO(Task 21, channel restructuring): TS's `setMIDIParameterInternal` calls
-/// `ch.updateInternalParams()` on every channel; that channel method (which folds
-/// global MIDI volume/pan/keyShift/fineTune into per-channel gain/pan/tuning) does not exist
-/// in the current (pre-4.3.0) Rust channel architecture. Until it lands, each setter below
-/// also updates the equivalent legacy plumbing (`midi_volume`, `pan_left`/`pan_right`, the
-/// per-channel transpose loop, and the MASTER_TUNING custom controller) so that the audible
-/// behavior matches the current 4.2.0-era render path.
+/// TS 4.3.14 renamed `gain` to `volume`; the channels square it when folding it into
+/// their gain (`Math.pow(globalMIDI.volume, 2)` in `updateInternalParams` — "it corresponds
+/// to CC volume, so volume is squared").
 use crate::soundbank::types::MIDISystem;
 use crate::synthesizer::audio_engine::synth_constants::DEFAULT_SYNTH_MODE;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
@@ -42,7 +34,7 @@ pub struct GlobalMIDIParameter {
     /// From 0 (silent) to 1 (full volume).
     ///
     /// This differs from the `gain` system parameter in that it is squared internally
-    /// (see `SynthesizerCore::set_midi_volume`).
+    /// (see `MidiChannel::update_internal_params`).
     pub volume: f64,
     /// The master pan.
     /// From -1 (left) to 1 (right). 0 is center.
@@ -66,10 +58,58 @@ impl Default for GlobalMIDIParameter {
     }
 }
 
+/// The keys of [`GlobalMIDIParameter`], used to lock a parameter.
+/// Equivalent to: keyof GlobalMIDIParameter
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GlobalMidiParameterKey {
+    Volume,
+    Pan,
+    KeyShift,
+    FineTune,
+    System,
+}
+
+/// The number of [`GlobalMidiParameterKey`]s.
+pub const GLOBAL_MIDI_PARAMETER_COUNT: usize = 5;
+
+impl GlobalMIDIParameterChangeCallback {
+    /// The parameter this value is for.
+    pub fn key(&self) -> GlobalMidiParameterKey {
+        use GlobalMIDIParameterChangeCallback as V;
+        use GlobalMidiParameterKey as K;
+        match self {
+            V::Volume(_) => K::Volume,
+            V::Pan(_) => K::Pan,
+            V::KeyShift(_) => K::KeyShift,
+            V::FineTune(_) => K::FineTune,
+            V::System(_) => K::System,
+        }
+    }
+}
+
+impl GlobalMIDIParameter {
+    /// All parameters with their values, in the key order of
+    /// `DEFAULT_GLOBAL_MIDI_PARAMETERS`.
+    /// Equivalent to: Object.entries(midiParameters)
+    pub fn entries(&self) -> [GlobalMIDIParameterChangeCallback; GLOBAL_MIDI_PARAMETER_COUNT] {
+        use GlobalMIDIParameterChangeCallback as V;
+        [
+            V::Volume(self.volume),
+            V::Pan(self.pan),
+            V::KeyShift(self.key_shift),
+            V::FineTune(self.fine_tune),
+            V::System(self.system),
+        ]
+    }
+}
+
 impl SynthesizerCore {
     /// Sets a global MIDI parameter of the synthesizer.
     /// Equivalent to: setMIDIParameterInternal(parameter, value)
     pub fn set_midi_parameter(&mut self, change: GlobalMIDIParameterChangeCallback) {
+        if self.locked_midi_parameters[change.key() as usize] {
+            return;
+        }
         match change {
             GlobalMIDIParameterChangeCallback::System(system) => {
                 self.midi_parameters.system = system;
@@ -77,43 +117,32 @@ impl SynthesizerCore {
 
             GlobalMIDIParameterChangeCallback::KeyShift(semitones) => {
                 self.midi_parameters.key_shift = semitones;
-                // TS 4.3.14: setMIDIParameter("keyShift") folds the global key shift into
-                // each channel's `currentKeyShift` via `updateInternalParams`, changing the
-                // sound-bank note chosen at the NEXT note-on (sample selection + root key) —
-                // it is NOT a real-time transpose of currently-playing notes. Mirror the
-                // global value onto every channel and recompute its cached key shift so the
-                // live consumer (`current_key_shift()` in note_on) sees it. Drum channels
-                // ignore the global key shift (handled in `update_internal_params`).
-                for ch in self.midi_channels.iter_mut() {
-                    ch.set_global_key_shift(semitones);
-                }
             }
 
             GlobalMIDIParameterChangeCallback::FineTune(cents) => {
                 self.midi_parameters.fine_tune = cents;
-                // Legacy plumbing: the 4.2.0 setMasterTuning custom-controller loop.
-                self.set_master_tuning(cents);
             }
 
             GlobalMIDIParameterChangeCallback::Volume(volume) => {
                 self.midi_parameters.volume = volume;
-                // Legacy plumbing (see module doc TODO): `set_midi_volume` applies the
-                // `Math.pow(volume, 2)` squaring that TS 4.3.14 performs in
-                // `updateInternalParams`.
-                self.set_midi_volume(volume);
             }
 
             GlobalMIDIParameterChangeCallback::Pan(pan) => {
                 self.midi_parameters.pan = pan;
-                // Legacy plumbing: recompute the shared stereo pan from the sum of the
-                // system and MIDI pans (TS 4.3.0 adds them in updateInternalParams).
-                self.update_legacy_pan();
             }
         }
 
-        // TODO(Task 21): for (const ch of this.midiChannels) ch.updateInternalParams();
+        // for (const ch of this.midiChannels) ch.updateInternalParams();
+        self.update_channels_internal_params();
 
         self.call_event(SynthProcessorEvent::GlobalParamChange(change));
+    }
+
+    /// Locks or unlocks a given Global MIDI Parameter.
+    /// This prevents any changes to it until it's unlocked.
+    /// Equivalent to: lockMIDIParameterInternal(parameter, isLocked)
+    pub fn lock_midi_parameter(&mut self, parameter: GlobalMidiParameterKey, is_locked: bool) {
+        self.locked_midi_parameters[parameter as usize] = is_locked;
     }
 
     /// Resets all global MIDI parameters to their default values.
@@ -190,22 +219,39 @@ mod tests {
     }
 
     #[test]
-    fn test_set_volume_updates_legacy_midi_volume() {
+    fn test_set_volume_updates_channel_gain() {
         let (mut core, _) = make_core();
+        for _ in 0..16 {
+            core.create_midi_channel(false);
+        }
+        let before = core.midi_channels[0].current_gain();
         core.set_midi_parameter(GlobalMIDIParameterChangeCallback::Volume(0.5));
         assert!((core.midi_parameters.volume - 0.5).abs() < 1e-12);
-        // 4.3.14: the global MIDI volume is squared when folded into the channel gain
-        // (`Math.pow(volume, 2)`), so midi_volume == volume^2.
-        assert!((core.midi_volume - 0.25).abs() < 1e-12);
+        // The global MIDI volume is squared when folded into the channel gain
+        // (`Math.pow(volume, 2)`).
+        assert!((core.midi_channels[0].current_gain() - before * 0.25).abs() < 1e-12);
     }
 
     #[test]
-    fn test_set_pan_updates_legacy_pan() {
+    fn test_set_pan_updates_channel_pan() {
         let (mut core, _) = make_core();
+        for _ in 0..16 {
+            core.create_midi_channel(false);
+        }
         core.set_midi_parameter(GlobalMIDIParameterChangeCallback::Pan(1.0));
-        // pan 1.0 → p = 1.0 → left 0, right 1
-        assert!((core.pan_left - 0.0).abs() < 1e-12);
-        assert!((core.pan_right - 1.0).abs() < 1e-12);
+        assert!((core.midi_channels[0].current_pan() - 500.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_set_fine_tune_skips_drum_channel() {
+        let (mut core, _) = make_core();
+        for _ in 0..16 {
+            core.create_midi_channel(false);
+        }
+        core.set_midi_parameter(GlobalMIDIParameterChangeCallback::FineTune(25.0));
+        assert!((core.midi_channels[0].current_tuning() - 25.0).abs() < 1e-12);
+        assert!(core.midi_channels[9].drum_channel);
+        assert!((core.midi_channels[9].current_tuning() - 0.0).abs() < 1e-12);
     }
 
     #[test]
@@ -230,15 +276,15 @@ mod tests {
     #[test]
     fn test_reset_restores_defaults() {
         let (mut core, _) = make_core();
+        for _ in 0..16 {
+            core.create_midi_channel(false);
+        }
         core.set_midi_parameter(GlobalMIDIParameterChangeCallback::Volume(0.5));
         core.set_midi_parameter(GlobalMIDIParameterChangeCallback::Pan(-1.0));
         core.set_midi_parameter(GlobalMIDIParameterChangeCallback::System(MIDISystem::Xg));
         core.reset_midi_parameters(MIDISystem::Gs);
         assert_eq!(core.midi_parameters, DEFAULT_GLOBAL_MIDI_PARAMETERS);
-        // Legacy plumbing reset too
-        assert!((core.midi_volume - 1.0).abs() < 1e-12);
-        assert!((core.pan_left - 0.5).abs() < 1e-12);
-        assert!((core.pan_right - 0.5).abs() < 1e-12);
+        assert!((core.midi_channels[0].current_pan() - 0.0).abs() < 1e-12);
     }
 
     #[test]

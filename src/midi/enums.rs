@@ -12,7 +12,7 @@
 /// the old name.
 ///
 /// TS 4.3.0 also added `RegisteredParameterTypes`, `NonRegisteredMSB`, and `NonRegisteredLSB`
-/// (used by `midi_tools/midi_utils.ts`'s `analyzeRPN`/`analyzeNRPN`, not yet ported).
+/// (used by `midi_tools/midi_utils.ts`'s `analyzeRPN`/`analyzeNRPN`).
 /// MIDI message type constants.
 /// Equivalent to: midiMessageTypes
 pub mod midi_message_types {
@@ -31,6 +31,8 @@ pub mod midi_message_types {
     pub const SONG_POSITION: u8 = 0xF2;
     pub const SONG_SELECT: u8 = 0xF3;
     pub const TUNE_REQUEST: u8 = 0xF6;
+    /// Equivalent to: systemExclusiveEscape
+    pub const SYSTEM_EXCLUSIVE_ESCAPE: u8 = 0xF7;
     pub const CLOCK: u8 = 0xF8;
     pub const START: u8 = 0xFA;
     pub const CONTINUE: u8 = 0xFB;

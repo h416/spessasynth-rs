@@ -44,10 +44,10 @@ fn read_pcm(data: &[u8], bytes_per_sample: usize) -> Vec<f32> {
             sample_data.push((s16 as f64 / 32_768.0) as f32);
         }
     } else if bytes_per_sample == 1 {
-        // 8-bit unsigned: normalize [0, 255] → [-0.5, 0.5]
-        let normalization_factor: f64 = 255.0;
+        // 8-bit is unsigned, 128 is the center
+        let normalization_factor: f64 = 128.0;
         for &byte in data {
-            sample_data.push((byte as f64 / normalization_factor - 0.5) as f32);
+            sample_data.push(((byte as f64 - 128.0) / normalization_factor) as f32);
         }
     } else {
         // General path for other bit depths
@@ -403,24 +403,23 @@ mod tests {
 
     #[test]
     fn test_read_pcm_u8_min_value() {
-        // 0 / 255 - 0.5 = -0.5
+        // (0 - 128) / 128 = -1
         let result = read_pcm(&[0], 1);
-        assert!((result[0] - (-0.5)).abs() < 1e-6);
+        assert_eq!(result[0], -1.0);
     }
 
     #[test]
     fn test_read_pcm_u8_max_value() {
-        // 255 / 255 - 0.5 = 0.5
+        // (255 - 128) / 128 = 0.9921875
         let result = read_pcm(&[255], 1);
-        assert!((result[0] - 0.5).abs() < 1e-6);
+        assert_eq!(result[0], 127.0 / 128.0);
     }
 
     #[test]
     fn test_read_pcm_u8_midpoint() {
-        // 128 / 255 - 0.5 ≈ 0.00196
+        // 128 is the center
         let result = read_pcm(&[128], 1);
-        let expected = 128.0f32 / 255.0 - 0.5;
-        assert!((result[0] - expected).abs() < 1e-6);
+        assert_eq!(result[0], 0.0);
     }
 
     #[test]

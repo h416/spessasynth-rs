@@ -1,11 +1,10 @@
-/// modulator_source.rs
-/// purpose: ModulatorSource struct - parses SF2 modulator source enums and computes curve values.
-/// Ported from: src/soundbank/basic_soundbank/modulator_source.ts
-///
-/// Note: TS 4.3.0 changed `getValue()` to take an `SF2Channel` object (separate
-/// `midiParameters.pressure` / `pitchWheelRange` fields, fractional pitch-wheel-range
-/// support). Rust keeps the 4.2.0 flat `midi_controllers` table signature until the
-/// channel-engine rework is ported (later task).
+//! modulator_source.rs
+//! purpose: ModulatorSource struct - parses SF2 modulator source enums and computes curve values.
+//! Ported from: src/soundbank/basic_soundbank/modulator_source.ts
+//!
+//! `getValue()` takes an `SF2Channel` (`midiControllers`, `polyPressures`,
+//! `midiParameters.pressure` / `pitchWheelRange`). Rust passes [`SF2Channel`] without the
+//! poly pressures: those are copied to the voice before the modulators are computed.
 use std::fmt;
 use std::sync::LazyLock;
 
@@ -15,20 +14,29 @@ use crate::soundbank::basic_soundbank::modulator_curves::{
 };
 use crate::soundbank::enums::{ModulatorCurveType, modulator_curve_types, modulator_sources};
 use crate::soundbank::types::ModulatorSourceIndex;
-use crate::synthesizer::audio_engine::channel::parameters::midi::NON_CC_INDEX_OFFSET;
 use crate::utils::byte_functions::bit_mask::{bit_mask_to_bool, to_numeric_bool};
 
 // ---------------------------------------------------------------------------
-// VoiceModInputs
+// SF2Channel / VoiceModInputs
 // ---------------------------------------------------------------------------
+
+/// The channel state read by [`ModulatorSource::get_value`].
+/// Equivalent to: SF2Channel (soundbank/types.ts; `polyPressures` is read through
+/// [`VoiceModInputs::pressure`])
+pub struct SF2Channel<'a> {
+    /// All MIDI controller values (14-bit).
+    /// Equivalent to: midiControllers
+    pub midi_controllers: &'a [i16],
+    /// Equivalent to: midiParameters.pressure
+    pub pressure: i32,
+    /// Equivalent to: midiParameters.pitchWheelRange
+    pub pitch_wheel_range: f64,
+}
 
 /// Minimal voice data needed by [`ModulatorSource::get_value`].
 ///
-/// Placeholder until `voice.ts` is ported. Only the three fields that
-/// `getValue()` actually reads are included: `midiNote`, `velocity`, and
-/// `pressure`.
-///
-/// When `voice.ts` is ported, callers can switch to the real `Voice` type.
+/// Only the fields that `getValue()` actually reads are included, so the caller can
+/// pass them without borrowing the whole `Voice`.
 /// Equivalent to the subset of `Voice` used in `getValue()`.
 pub struct VoiceModInputs {
     /// MIDI note number (0–127) — the raw pressed key.
@@ -158,37 +166,41 @@ impl ModulatorSource {
 
     /// Computes the current float value from this source.
     ///
-    /// * `midi_controllers` – the MIDI controller + modulator-source array
-    ///   (must have at least `NON_CC_INDEX_OFFSET + 19` elements).
+    /// * `channel` – the channel controllers and MIDI parameters.
     /// * `pitch_wheel` – current pitch-wheel raw value (0–16 383).
     /// * `voice` – per-note data (note number, velocity, pressure).
     ///
     /// Returns a value in the range `[0.0, 1.0]` (unipolar) or `[-1.0, 1.0]`
     /// (bipolar) according to the configured curve and polarity.
     ///
-    /// Equivalent to: getValue(midiControllers, pitchWheel, voice)
+    /// Equivalent to: getValue(channel, pitchWheel, voice)
     pub fn get_value(
         &self,
-        midi_controllers: &[i16],
+        channel: &SF2Channel,
         pitch_wheel: i32,
         voice: &VoiceModInputs,
     ) -> f32 {
         // Compute the raw 14-bit value (0 – 16 383).
         let raw_value: usize = if self.is_cc {
-            midi_controllers[self.index as usize].max(0) as usize
+            channel.midi_controllers[self.index as usize].max(0) as usize
         } else {
             match self.index {
-                modulator_sources::NO_CONTROLLER => 16_383,
                 // TS 4.3.0: voice.targetKey << 7 (effective key, not the raw pressed note).
                 modulator_sources::NOTE_ON_KEY_NUM => (voice.target_key.max(0) as usize) << 7,
                 modulator_sources::NOTE_ON_VELOCITY => (voice.velocity as usize) << 7,
                 modulator_sources::POLY_PRESSURE => (voice.pressure as usize) << 7,
                 modulator_sources::PITCH_WHEEL => pitch_wheel.max(0) as usize,
-                _ => {
-                    // Pitch wheel range and other non-CC sources are stored in the cc table
-                    // at index + NON_CC_INDEX_OFFSET.
-                    midi_controllers[self.index as usize + NON_CC_INDEX_OFFSET].max(0) as usize
+                modulator_sources::CHANNEL_PRESSURE => (channel.pressure.max(0) as usize) << 7,
+                // Pitch wheel range may be a floating point number!
+                // Therefore, something like "0.5 << 7" won't work,
+                // So we multiply it by 128 which is essentially the same here
+                // But it allows for fractional pitch wheel range!
+                modulator_sources::PITCH_WHEEL_RANGE => {
+                    (channel.pitch_wheel_range * 128.0).floor().max(0.0) as usize
                 }
+                // `default:` falls through to noController: any undefined non-CC index
+                // (e.g. the SF2.04 link source 127) equals 1
+                _ => 16_383,
             }
         };
 
@@ -300,9 +312,8 @@ fn curve_type_name(curve_type: ModulatorCurveType) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::synthesizer::audio_engine::channel::parameters::midi::{
-        CONTROLLER_TABLE_SIZE, DEFAULT_MIDI_CONTROLLER_VALUES,
-    };
+    use crate::synthesizer::audio_engine::channel::reset::DEFAULT_MIDI_CONTROLLERS;
+    use crate::synthesizer::audio_engine::synth_constants::CONTROLLER_TABLE_SIZE;
 
     const EPS: f32 = 1e-4;
 
@@ -311,7 +322,12 @@ mod tests {
     }
 
     fn make_controllers() -> Vec<i16> {
-        DEFAULT_MIDI_CONTROLLER_VALUES.to_vec()
+        DEFAULT_MIDI_CONTROLLERS.to_vec()
+    }
+
+    /// A channel with the default pressure (0) and pitch wheel range (2).
+    fn chan(midi_controllers: &[i16]) -> SF2Channel<'_> {
+        SF2Channel { midi_controllers, pressure: 0, pitch_wheel_range: 2.0 }
     }
 
     fn voice(midi_note: u8, velocity: u8, pressure: u8) -> VoiceModInputs {
@@ -479,7 +495,7 @@ mod tests {
         let s = ModulatorSource::default(); // no_controller, linear, unipolar positive
         let cc = make_controllers();
         let v = voice(60, 100, 0);
-        let val = s.get_value(&cc, 0, &v);
+        let val = s.get_value(&chan(&cc), 0, &v);
         assert!(val > 0.999, "expected ≈1.0, got {}", val);
     }
 
@@ -495,7 +511,7 @@ mod tests {
         );
         let cc = make_controllers();
         let v = voice(64, 100, 0);
-        let val = s.get_value(&cc, 0, &v);
+        let val = s.get_value(&chan(&cc), 0, &v);
         assert!(approx_eq(val, 0.5), "expected 0.5, got {}", val);
     }
 
@@ -511,7 +527,7 @@ mod tests {
         );
         let cc = make_controllers();
         let v = voice(60, 64, 0);
-        let val = s.get_value(&cc, 0, &v);
+        let val = s.get_value(&chan(&cc), 0, &v);
         assert!(approx_eq(val, 0.5), "expected 0.5, got {}", val);
     }
 
@@ -527,7 +543,7 @@ mod tests {
         );
         let cc = make_controllers();
         let v = voice(60, 100, 64);
-        let val = s.get_value(&cc, 0, &v);
+        let val = s.get_value(&chan(&cc), 0, &v);
         assert!(approx_eq(val, 0.5), "expected 0.5, got {}", val);
     }
 
@@ -543,7 +559,7 @@ mod tests {
         );
         let cc = make_controllers();
         let v = voice(60, 100, 0);
-        let val = s.get_value(&cc, 8192, &v);
+        let val = s.get_value(&chan(&cc), 8192, &v);
         assert!(approx_eq(val, 0.5), "expected 0.5, got {}", val);
     }
 
@@ -551,12 +567,12 @@ mod tests {
 
     #[test]
     fn test_get_value_cc_main_volume_default() {
-        // main_volume default = 100 (from DEFAULT_MIDI_CONTROLLER_VALUES),
+        // main_volume default = 100 (from DEFAULT_MIDI_CONTROLLERS),
         // stored as 100 << 7 = 12800; 12800/16384 ≈ 0.78125 (linear)
         let s = ModulatorSource::new(7, modulator_curve_types::LINEAR, true, false, false);
         let cc = make_controllers();
         let v = voice(60, 100, 0);
-        let val = s.get_value(&cc, 0, &v);
+        let val = s.get_value(&chan(&cc), 0, &v);
         // Main volume default is 100, stored as 100 << 7 = 12800
         let expected = 12800.0f32 / MODULATOR_RESOLUTION as f32;
         assert!(
@@ -574,7 +590,7 @@ mod tests {
         let mut cc = vec![0i16; CONTROLLER_TABLE_SIZE];
         cc[0] = 0;
         let v = voice(60, 100, 0);
-        let val = s.get_value(&cc, 0, &v);
+        let val = s.get_value(&chan(&cc), 0, &v);
         assert!(approx_eq(val, 0.0), "expected 0.0, got {}", val);
     }
 
@@ -592,7 +608,7 @@ mod tests {
         );
         let cc = make_controllers();
         let v = voice(60, 100, 0);
-        let val = s.get_value(&cc, 8192, &v);
+        let val = s.get_value(&chan(&cc), 8192, &v);
         assert!(
             approx_eq(val, 0.0),
             "expected 0.0 (bipolar center), got {}",
@@ -612,7 +628,7 @@ mod tests {
         );
         let cc = make_controllers();
         let v = voice(60, 100, 0);
-        let val = s.get_value(&cc, 0, &v);
+        let val = s.get_value(&chan(&cc), 0, &v);
         assert!(
             approx_eq(val, 1.0),
             "expected 1.0 (negative direction), got {}",
@@ -632,7 +648,7 @@ mod tests {
         );
         let cc = make_controllers();
         let v = voice(60, 100, 0);
-        let val = s.get_value(&cc, 0, &v);
+        let val = s.get_value(&chan(&cc), 0, &v);
         // 16383/16384 * 2 - 1 ≈ 0.9998
         assert!(val > 0.999, "expected ≈1.0 (bipolar max), got {}", val);
     }
@@ -686,7 +702,7 @@ mod tests {
     #[test]
     fn test_precomputed_table_size() {
         // Force table initialization
-        let _ = ModulatorSource::default().get_value(&make_controllers(), 0, &voice(60, 100, 0));
+        let _ = ModulatorSource::default().get_value(&chan(&make_controllers()), 0, &voice(60, 100, 0));
         assert_eq!(
             MODULATOR_TRANSFORMS.len(),
             MODULATOR_RESOLUTION * MOD_SOURCE_TRANSFORM_POSSIBILITIES * MOD_CURVE_TYPES_AMOUNT

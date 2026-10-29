@@ -138,7 +138,7 @@ impl DownloadableSoundsInstrument {
             if let Some(info_chunk) = RIFFChunk::find_list_type(&mut chunks, "INFO") {
                 // RIFFChunk::find_list_type sets current_index = 4 (past the "INFO" list type FourCC).
                 while info_chunk.data.current_index < info_chunk.data.len() {
-                    let mut sub = RIFFChunk::read(&mut info_chunk.data, true, false);
+                    let mut sub = RIFFChunk::read(&mut info_chunk.data, false, true);
                     if sub.header == "INAM" {
                         let len = sub.data.len();
                         name = read_binary_string_indexed(&mut sub.data, len)
@@ -192,7 +192,7 @@ impl DownloadableSoundsInstrument {
                 if lrgn.data.current_index >= lrgn.data.len() {
                     break;
                 }
-                let mut region_chunk = RIFFChunk::read(&mut lrgn.data, true, false);
+                let mut region_chunk = RIFFChunk::read(&mut lrgn.data, false, true);
                 if let Some(region) = DownloadableSoundsRegion::read(samples, &mut region_chunk) {
                     instrument.regions.push(region);
                 }
@@ -307,12 +307,15 @@ impl DownloadableSoundsInstrument {
         let mut sf_instrument = BasicInstrument::new();
         sf_instrument.name = self.name.clone();
 
-        // Apply DLS global articulation to the SF2 instrument global zone.
-        self.articulation.to_sf_zone(&mut sf_instrument.global_zone);
-
-        // Add each DLS region as an SF2 instrument zone.
+        // Each zone gets its effective articulation (DLS region articulation replaces the instrument one),
+        // Then globalize moves the common values to the global zone
         for region in &self.regions {
-            let _ = region.to_sf_zone(&mut sf_instrument, instrument_idx, &mut sound_bank.samples);
+            let _ = region.to_sf_zone(
+                &mut sf_instrument,
+                instrument_idx,
+                &mut sound_bank.samples,
+                Some(&self.articulation),
+            );
         }
 
         // Move common generators/modulators from all zones to the global zone.
@@ -430,7 +433,7 @@ mod tests {
         let s: &[u8] = &bytes;
         let size = u32::from_le_bytes([s[4], s[5], s[6], s[7]]);
         let data = IndexedByteArray::from_slice(&s[8..]);
-        RIFFChunk::new("LIST".to_string(), size, data)
+        RIFFChunk::new("LIST".to_string(), size as usize, data)
     }
 
     /// Finds the offset of `needle` (4-byte pattern) in `haystack`.

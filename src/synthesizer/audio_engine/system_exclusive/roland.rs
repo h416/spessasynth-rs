@@ -8,7 +8,6 @@ use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::generator_types;
 use crate::soundbank::enums::modulator_sources;
 use crate::synthesizer::audio_engine::channel::parameters::midi::ChannelMidiParameterValue;
-use crate::synthesizer::enums::custom_controllers;
 use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::{
     sys_ex_logging, sys_ex_not_recognized,
 };
@@ -18,10 +17,12 @@ use crate::synthesizer::types::GlobalMIDIParameterChangeCallback;
 use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::spessa_synth_info;
 use crate::utils::byte_functions::string::read_binary_string;
+use crate::midi::midi_tools::sysex_data::{DEFAULT_GS_DRUM_MAP, MELODIC_MAP};
+use crate::midi::drum_parameters::UserDrumSetParameterChange;
 
 impl SynthesizerCore {
     /// Handles a GS system exclusive message.
-    /// Equivalent to: handleGS(syx, channelOffset)
+    /// Equivalent to: rolandSystemExclusive(syx, channelOffset)
     pub fn handle_gs(&mut self, syx: &[u8], channel_offset: usize) {
         // Mutable copy: a1 === 0x50 (BLOCK B) adds 16 to reach the second bank of channels.
         let mut channel_offset = channel_offset;
@@ -80,20 +81,70 @@ impl SynthesizerCore {
                                 );
                             }
 
-                            0x15 => {
-                                // Use for Drum Part sysex (multiple drums)
-                                let is_drums = message_value > 0 && (syx[5] >> 4) > 0;
-                                self.midi_channels[channel].set_gs_drums(is_drums);
-                                spessa_synth_info(&format!(
-                                    "Channel {} {} via: {:02X?}",
+                            0x00 => {
+                                // Tone number (program change)
+                                self.controller_change_channel(
                                     channel,
-                                    if is_drums {
-                                        "is now a drum channel"
-                                    } else {
-                                        "now isn't a drum channel"
-                                    },
-                                    syx
+                                    midi_controllers::BANK_SELECT,
+                                    message_value,
+                                );
+                                self.program_change_channel(channel, syx[8]);
+                            }
+
+                            0x02 => {
+                                // Rx. channel (0x10 is OFF)
+                                let rx_channel = if message_value == 0x10 {
+                                    -1
+                                } else {
+                                    message_value as i32 + channel_offset as i32
+                                };
+                                self.midi_channels[channel]
+                                    .set_midi_parameter(ChannelMidiParameterValue::RxChannel(rx_channel));
+                                self.custom_channel_numbers |=
+                                    rx_channel != self.midi_channels[channel].channel as i32;
+                                spessa_synth_info(&format!(
+                                    "GS Rx. Channel on {}: {}",
+                                    channel, rx_channel
                                 ));
+                            }
+
+                            0x13 => {
+                                // Mono/poly
+                                self.midi_channels[channel].set_midi_parameter(
+                                    ChannelMidiParameterValue::PolyMode(message_value == 1),
+                                );
+                                spessa_synth_info(&format!(
+                                    "GS Mono/poly on {}: {}",
+                                    channel,
+                                    if message_value == 1 { "POLY" } else { "MONO" }
+                                ));
+                            }
+
+                            0x15 => {
+                                // This is the Use for Rhythm Part sysex (multiple drums)
+                                let prev_map = self.midi_channels[channel].midi_parameters.drum_map;
+                                self.midi_channels[channel]
+                                    .set_midi_parameter(ChannelMidiParameterValue::DrumMap(message_value));
+                                let new_map = self.midi_channels[channel].midi_parameters.drum_map;
+                                // Non-melodic means a drum channel
+                                let is_drums = message_value > MELODIC_MAP;
+                                // Testcase: gs_drum_change_test
+                                // GS resets to the default kit not only when toggling drums,
+                                // But on any map change too.
+                                let ch = &mut self.midi_channels[channel];
+                                if !ch.system_parameters.preset_lock
+                                    && (is_drums != ch.patch.is_gm_gs_drum || new_map != prev_map)
+                                {
+                                    ch.patch.bank_msb = 0;
+                                    ch.patch.bank_lsb = 0;
+                                    ch.patch.is_gm_gs_drum = is_drums;
+                                    self.program_change_channel(channel, 0);
+                                }
+                                spessa_synth_info(&format!(
+                                    "GS Drums on {}: {}",
+                                    channel, is_drums
+                                ));
+                                return;
                             }
 
                             0x16 => {
@@ -103,6 +154,16 @@ impl SynthesizerCore {
                                     ChannelMidiParameterValue::KeyShift(key_shift as f64),
                                 );
                                 sys_ex_logging(syx, channel as u8, &key_shift, "key shift", "keys");
+                            }
+
+                            0x19 => {
+                                // Part level (cc#7)
+                                self.controller_change_channel(
+                                    channel,
+                                    midi_controllers::MAIN_VOLUME,
+                                    message_value,
+                                );
+                                return;
                             }
 
                             0x1a => {
@@ -161,6 +222,26 @@ impl SynthesizerCore {
                                 }
                             }
 
+                            0x1f => {
+                                // CC1 controller number
+                                self.midi_channels[channel]
+                                    .set_midi_parameter(ChannelMidiParameterValue::Cc1(message_value));
+                                spessa_synth_info(&format!(
+                                    "GS CC1 Controller Number for {}: {}",
+                                    channel, message_value
+                                ));
+                            }
+
+                            0x20 => {
+                                // CC2 controller number
+                                self.midi_channels[channel]
+                                    .set_midi_parameter(ChannelMidiParameterValue::Cc2(message_value));
+                                spessa_synth_info(&format!(
+                                    "GS CC2 Controller Number for {}: {}",
+                                    channel, message_value
+                                ));
+                            }
+
                             0x21 => {
                                 // Chorus send
                                 let voices = &mut self.voices;
@@ -199,14 +280,8 @@ impl SynthesizerCore {
                                 // cents = (tune - 8192) / 81.92.
                                 let tune = ((message_value as i32) << 7) | syx[8] as i32;
                                 let cents = (tune as f64 - 8192.0) / 81.92;
-                                // TS 4.3.14 setMIDIParameter("fineTune", cents) folds into the
-                                // channel tuning consumed by render_voice. Route the full float
-                                // value into the live CHANNEL_TUNING custom controller (mirrors
-                                // the RPN fine-tune fix in channel/data_entry.rs); the previous
-                                // FineTune parameter path wrote a `current_tuning` field that no
-                                // render code reads.
                                 self.midi_channels[channel]
-                                    .set_custom_controller(custom_controllers::CHANNEL_TUNING, cents);
+                                    .set_midi_parameter(ChannelMidiParameterValue::FineTune(cents));
                                 sys_ex_logging(
                                     syx,
                                     channel as u8,
@@ -216,7 +291,90 @@ impl SynthesizerCore {
                                 );
                             }
 
-                            0x40..=0x4b => {
+                            0x2c => {
+                                // Delay send
+                                self.controller_change_channel(
+                                    channel,
+                                    midi_controllers::VARIATION_DEPTH,
+                                    message_value,
+                                );
+                            }
+
+                            0x30 => {
+                                // Vibrato rate
+                                self.controller_change_channel(
+                                    channel,
+                                    midi_controllers::VIBRATO_RATE,
+                                    message_value,
+                                );
+                            }
+
+                            0x31 => {
+                                // Vibrato depth
+                                self.controller_change_channel(
+                                    channel,
+                                    midi_controllers::VIBRATO_DEPTH,
+                                    message_value,
+                                );
+                            }
+
+                            0x32 => {
+                                // Filter cutoff
+                                // It's so out of order, Roland...
+                                self.controller_change_channel(
+                                    channel,
+                                    midi_controllers::BRIGHTNESS,
+                                    message_value,
+                                );
+                            }
+
+                            0x33 => {
+                                // Filter resonance
+                                self.controller_change_channel(
+                                    channel,
+                                    midi_controllers::FILTER_RESONANCE,
+                                    message_value,
+                                );
+                            }
+
+                            0x34 => {
+                                // Attack time
+                                self.controller_change_channel(
+                                    channel,
+                                    midi_controllers::ATTACK_TIME,
+                                    message_value,
+                                );
+                            }
+
+                            0x35 => {
+                                // Decay time
+                                self.controller_change_channel(
+                                    channel,
+                                    midi_controllers::DECAY_TIME,
+                                    message_value,
+                                );
+                            }
+
+                            0x36 => {
+                                // Release time
+                                self.controller_change_channel(
+                                    channel,
+                                    midi_controllers::RELEASE_TIME,
+                                    message_value,
+                                );
+                            }
+
+                            0x37 => {
+                                // Vibrato delay
+                                // It seems that they forgot about it and put it last...
+                                self.controller_change_channel(
+                                    channel,
+                                    midi_controllers::VIBRATO_DELAY,
+                                    message_value,
+                                );
+                            }
+
+                            0x40 => {
                                 // Scale tuning: up to 12 bytes
                                 let tuning_bytes = syx.len().saturating_sub(9); // Data starts at 7, minus checksum and f7
                                 let mut new_tuning = [0i8; 12];
@@ -268,7 +426,7 @@ impl SynthesizerCore {
                                     let cents = (data as f64 / 127.0) * 600.0;
                                     self.midi_channels[channel].set_modulation_depth(cents);
                                 } else {
-                                    self.midi_channels[channel].sys_ex_modulators.setup_receiver(
+                                    self.midi_channels[channel].sys_ex_modulators.setup_receiver_gs(
                                         a3,
                                         data,
                                         midi_controllers::MODULATION_WHEEL as usize,
@@ -291,7 +449,7 @@ impl SynthesizerCore {
                                         ),
                                     );
                                 } else {
-                                    self.midi_channels[channel].sys_ex_modulators.setup_receiver(
+                                    self.midi_channels[channel].sys_ex_modulators.setup_receiver_gs(
                                         a3,
                                         data,
                                         modulator_sources::PITCH_WHEEL as usize,
@@ -303,7 +461,7 @@ impl SynthesizerCore {
                             }
                             0x20 => {
                                 // Channel pressure
-                                self.midi_channels[channel].sys_ex_modulators.setup_receiver(
+                                self.midi_channels[channel].sys_ex_modulators.setup_receiver_gs(
                                     a3,
                                     data,
                                     modulator_sources::CHANNEL_PRESSURE as usize,
@@ -314,7 +472,7 @@ impl SynthesizerCore {
                             }
                             0x30 => {
                                 // Poly pressure
-                                self.midi_channels[channel].sys_ex_modulators.setup_receiver(
+                                self.midi_channels[channel].sys_ex_modulators.setup_receiver_gs(
                                     a3,
                                     data,
                                     modulator_sources::POLY_PRESSURE as usize,
@@ -326,14 +484,14 @@ impl SynthesizerCore {
                             0x40 => {
                                 // CC1
                                 let cc1 = self.midi_channels[channel].midi_parameters.cc1 as usize;
-                                self.midi_channels[channel].sys_ex_modulators.setup_receiver(
+                                self.midi_channels[channel].sys_ex_modulators.setup_receiver_gs(
                                     a3, data, cc1, true, "CC1", false,
                                 );
                             }
                             0x50 => {
                                 // CC2
                                 let cc2 = self.midi_channels[channel].midi_parameters.cc2 as usize;
-                                self.midi_channels[channel].sys_ex_modulators.setup_receiver(
+                                self.midi_channels[channel].sys_ex_modulators.setup_receiver_gs(
                                     a3, data, cc2, true, "CC2", false,
                                 );
                             }
@@ -448,12 +606,12 @@ impl SynthesizerCore {
                             0x00 => {
                                 // EFX Type selection (16-bit: data << 8 | syx[8])
                                 let efx_type = (data as u16) << 8 | syx.get(8).copied().unwrap_or(0) as u16;
-                                if let Some(proc) = crate::synthesizer::audio_engine::effects::insertion::create_insertion_processor(efx_type, self.sample_rate, self.max_buffer_size) {
+                                if self.has_gs_insertion_processor(efx_type) {
                                     spessa_synth_info(&format!("GS EFX Type: {:04X}", efx_type));
-                                    self.insertion_processor = proc;
+                                    self.select_gs_insertion_processor(Some(efx_type));
                                 } else {
+                                    self.select_gs_insertion_processor(None);
                                     spessa_synth_info(&format!("Unsupported EFX processor: {:04X}, using Thru", efx_type));
-                                    self.insertion_processor = Box::new(crate::synthesizer::audio_engine::effects::insertion::thru::ThruFx::new(self.sample_rate));
                                 }
                                 self.reset_insertion_params();
                                 self.insertion_processor.reset();
@@ -481,7 +639,7 @@ impl SynthesizerCore {
                                 self.insertion_processor.set_send_level_to_delay(
                                     (data as f64 / 127.0) * EFX_SENDS_GAIN_CORRECTION,
                                 );
-                                self.update_active_effects();
+                                self.update_active_gs_effects();
                                 spessa_synth_info(&format!("GS EFX Send Level to Delay: {}", data));
                             }
 
@@ -583,7 +741,7 @@ impl SynthesizerCore {
                                 // Chorus send level to delay — may activate delay
                                 spessa_synth_info(&format!("GS Chorus Send To Delay: {}", message_value));
                                 self.chorus_processor.set_send_level_to_delay(message_value);
-                                self.update_active_effects();
+                                self.update_active_gs_effects();
                             }
 
                             // --- Delay parameters (0x50-0x5A) ---
@@ -680,13 +838,24 @@ impl SynthesizerCore {
                                     channel,
                                     if efx { "ON" } else { "OFF" }
                                 ));
-                                self.update_active_effects();
+                                self.update_active_gs_effects();
                             }
                             _ => {
                                 sys_ex_not_recognized(syx, "Roland GS Patch Part Parameter");
                             }
                         }
                     }
+                } else if syx[4] == 0x41 || syx[4] == 0x51 {
+                    // Drum Setup
+                    // 51 means BLOCK B (+16 channels)
+                    // Testcase: 95043-2.KYC.mid
+                    self.handle_gs_drum_setup(syx);
+                } else if syx[4] == 0x21 {
+                    // User Drum Set
+                    self.handle_user_drum(syx[5], syx[6], syx[7].min(127), syx);
+                } else if syx[4] == 0x29 {
+                    // User Drum Set Bulk Dump
+                    self.handle_user_drum_bulk_dump(syx);
                 } else {
                     // This is some other GS sysex...
                     sys_ex_not_recognized(syx, "Roland GS");
@@ -723,7 +892,9 @@ impl SynthesizerCore {
                 // Some Roland
                 if syx[4] == 0x10 {
                     // This is a roland master volume message
-                    self.set_midi_volume(syx[7] as f64 / 100.0);
+                    self.set_midi_parameter(GlobalMIDIParameterChangeCallback::Volume(
+                        syx[7] as f64 / 100.0,
+                    ));
                     spessa_synth_info(&format!(
                         "Roland Master Volume control set to: {} via: {:02X?}",
                         syx[7], syx
@@ -733,5 +904,187 @@ impl SynthesizerCore {
 
             _ => {}
         }
+    }
+}
+
+impl SynthesizerCore {
+    /// GS User Drum Set parameter (a1 = 0x21).
+    /// Equivalent to: handleUserDrum(a2, a3, data, syx)
+    fn handle_user_drum(&mut self, a2: u8, a3: u8, data: u8, syx: &[u8]) {
+        use UserDrumSetParameterChange as C;
+        if self.system_parameters.user_drum_lock {
+            return;
+        }
+        let drum_set = (a2 >> 4) as usize;
+        let midi_note = a3 as usize;
+        let command = a2 & 0xf;
+        let change = match command {
+            // User drum set name
+            0x0 => {
+                let new_name = read_binary_string(syx, 12, 7);
+                spessa_synth_info(&format!(
+                    "GS User Drum Set {} Name: {}",
+                    drum_set,
+                    new_name.trim()
+                ));
+                return;
+            }
+            // Here it's relative to 60, not 64 like NRPN. For some reason...
+            // Use the full 100 cents here as we choose the correct pitch (50 or 100 cents)
+            // when committing changes
+            0x1 => C::PitchCoarse(data as f64 - 60.0),
+            // Drum Level
+            0x2 => C::Level(data),
+            // Drum Assign Group (exclusive class)
+            0x3 => C::AssignGroup(data),
+            // Pan
+            0x4 => C::Pan(data),
+            // Reverb
+            0x5 => C::ReverbSend(data),
+            // Chorus
+            0x6 => C::ChorusSend(data),
+            // Receive Note Off
+            0x7 => C::RxNoteOff(data == 1),
+            // Receive Note On
+            0x8 => C::RxNoteOn(data == 1),
+            // Delay
+            0x9 => C::VariationSend(data),
+            // Source drum set
+            0xa => C::SourceDrumSet(data),
+            // Program number
+            0xb => C::Program(data),
+            // Source note number
+            0xc => C::SourceNoteNumber(data),
+            _ => {
+                sys_ex_not_recognized(syx, "GS User Drum set");
+                return;
+            }
+        };
+        self.set_user_drum_set_param(drum_set, midi_note, change);
+    }
+
+    /// GS User Drum Set bulk dump (a1 = 0x29).
+    /// Top half of a2 stays the same (indicates which user drum)
+    /// While the bottom param is something else
+    /// Guessed by analyzing 95043-2.KYC.mid
+    /// Equivalent to: the `a1 === 0x29` branch of rolandSystemExclusive
+    fn handle_user_drum_bulk_dump(&mut self, syx: &[u8]) {
+        let a2 = syx[5];
+        let data_length = syx.len().saturating_sub(9);
+        spessa_synth_info(&format!(
+            "User Drum Set Bulk Dump detected! Keys: {}",
+            data_length
+        ));
+
+        let actual_drum_param = match a2 & 0x0f {
+            // Most at 60 = play note?
+            0x0 => 1,
+            // Level?
+            0x1 => 2,
+            // Matches gm.dls exclusive class pretty well, assign group?
+            0x2 => 3,
+            // Most at 64, so pan?
+            0x3 => 4,
+            // 0 on bass, so reverb?
+            0x4 => 5,
+            // 0 on all, so chorus?
+            0x5 => 6,
+            0x6 => {
+                // 16 on all
+                // In the order, rx notes should be here, it's 0x10, so maybe
+                // It's both? on << 4 | off?
+                // Special handling is needed
+                let address2_off = (a2 & 0xf0) | 7;
+                let address2_on = (a2 & 0xf0) | 8;
+                for midi_note in 0..data_length {
+                    let v = syx[midi_note + 7];
+                    self.handle_user_drum(address2_off, midi_note as u8, v & 0xf, syx);
+                    self.handle_user_drum(address2_on, midi_note as u8, v >> 4, syx);
+                }
+                return;
+            }
+            // All 0, so delay
+            0x7 => 9,
+            // All 2 and this is a 88pro midi, so the map is 2
+            0x8 => 0xa,
+            // 0xA matches note number so the only one left is the program
+            0x9 => 0xb,
+            // Drum numbers increase so source note
+            0xa => 0xc,
+            // 16 chars, seems to be a name (spec is wrong? says 12)
+            0xb => 0,
+            _ => {
+                sys_ex_not_recognized(syx, "User Drum Bulk Dump System Exclusive");
+                return;
+            }
+        };
+
+        let address2 = (a2 & 0xf0) | actual_drum_param;
+        for midi_note in 0..data_length {
+            self.handle_user_drum(address2, midi_note as u8, syx[midi_note + 7], syx);
+        }
+    }
+
+    /// GS Drum Setup (a1 = 0x41 / 0x51).
+    /// Applies to every channel whose drum map matches.
+    /// Equivalent to: the `a1 === 0x41 || a1 === 0x51` branch of rolandSystemExclusive
+    fn handle_gs_drum_setup(&mut self, syx: &[u8]) {
+        if self.system_parameters.drum_lock {
+            return;
+        }
+        let a2 = syx[5];
+        let a3 = syx[6];
+        // Sanity check
+        let data = syx[7].min(127);
+        // In gs, the map is offset by the default (e.g. 1)
+        // So 0 means drum map 1, 1 means drum map 1, etc.
+        let map = (a2 >> 4) + DEFAULT_GS_DRUM_MAP;
+        let drum_key = a3 as usize;
+        let param = a2 & 0xf;
+        if param == 0x0 {
+            // Drum map name
+            let patch_name = read_binary_string(syx, 12, 7);
+            spessa_synth_info(&format!("GS Drum Map Name for MAP{}: {}", map, patch_name));
+            return;
+        }
+        if !(0x1..=0x9).contains(&param) {
+            sys_ex_not_recognized(&[param], "GS Drum Setup");
+            return;
+        }
+        for ch in self.midi_channels.iter_mut() {
+            if ch.midi_parameters.drum_map != map {
+                continue;
+            }
+            let p = &mut ch.drum_params[drum_key];
+            match param {
+                0x1 => {
+                    // Here it's relative to 60, not 64 like NRPN. For some reason...
+                    let pitch = data as f64 - 60.0;
+                    // Apply same thing: SC-55 uses 100 cents, SC-88 and above is 50
+                    p.pitch_coarse = pitch * if ch.patch.bank_lsb == 1 { 1.0 } else { 0.5 };
+                }
+                // Drum Level
+                0x2 => p.level = data,
+                // Drum Assign Group (exclusive class)
+                0x3 => p.assign_group = data,
+                // Pan
+                0x4 => p.pan = data,
+                // Reverb
+                0x5 => p.reverb_send = data,
+                // Chorus
+                0x6 => p.chorus_send = data,
+                // Receive Note Off
+                0x7 => p.rx_note_off = data == 1,
+                // Receive Note On
+                0x8 => p.rx_note_on = data == 1,
+                // Delay
+                0x9 => p.variation_send = data,
+                _ => unreachable!(),
+            }
+        }
+        spessa_synth_info(&format!(
+            "GS Drum Setup param {} for MAP{}, key {}: {}",
+            param, map, drum_key, data
+        ));
     }
 }

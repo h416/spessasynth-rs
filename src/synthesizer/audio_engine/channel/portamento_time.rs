@@ -1,19 +1,19 @@
-/// portamento_time.rs
-/// purpose: Converts MIDI portamento time (CC#5) to seconds using a PCHIP cubic spline.
-/// Ported from: src/synthesizer/audio_engine/engine_methods/portamento_time.ts
-///
-/// Reference measurements by John Novak:
-/// https://github.com/dosbox-staging/dosbox-staging/pull/2705
-/// PCHIP function by Benjamin Rosseaux (Sobanth SF2 synthesizer).
+//! portamento_time.rs
+//! purpose: Converts MIDI portamento time (CC#5) to seconds using a PCHIP cubic spline.
+//! Ported from: src/synthesizer/audio_engine/channel/portamento_time.ts
+//!
+//! Reference measurements by John Novak:
+//! <https://github.com/dosbox-staging/dosbox-staging/pull/2705>
+//! PCHIP function by Benjamin Rosseaux (Sobanth SF2 synthesizer).
 const PORTA_DIVISION_CONSTANT: f64 = 40.0;
 
 /// Left endpoints of each spline segment.
-const X0: [f64; 12] = [
+const SEGMENT_START: [f64; 12] = [
     1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 80.0, 96.0, 112.0, 120.0, 124.0,
 ];
 
-/// Reciprocals of segment widths (1 / (x0[i+1] - x0[i])).
-const IH: [f64; 12] = [
+/// Reciprocals of segment widths (1 / (SEGMENT_START[i+1] - SEGMENT_START[i])).
+const SEGMENT_INVERSE_LENGTH: [f64; 12] = [
     1.0,
     0.5,
     0.25,
@@ -29,7 +29,7 @@ const IH: [f64; 12] = [
 ];
 
 /// PCHIP cubic coefficients – degree-3 term.
-const A: [f64; 12] = [
+const COEFF_A: [f64; 12] = [
     -0.166_531_273_825_012_15,
     0.118_638_752_182_994_08,
     0.029_479_047_361_245_264,
@@ -45,7 +45,7 @@ const A: [f64; 12] = [
 ];
 
 /// PCHIP cubic coefficients – degree-2 term.
-const B: [f64; 12] = [
+const COEFF_B: [f64; 12] = [
     0.028_212_773_333_433_472,
     -0.338_850_206_499_284_7,
     -0.158_395_298_909_297_13,
@@ -61,7 +61,7 @@ const B: [f64; 12] = [
 ];
 
 /// PCHIP cubic coefficients – degree-1 term.
-const C: [f64; 12] = [
+const COEFF_C: [f64; 12] = [
     0.721_895_086_125_528_3,
     0.557_453_622_634_716_8,
     0.471_338_932_370_258_26,
@@ -77,7 +77,7 @@ const C: [f64; 12] = [
 ];
 
 /// PCHIP cubic coefficients – degree-0 term (log10 of rate at left endpoint).
-const D: [f64; 12] = [
+const COEFF_D: [f64; 12] = [
     -2.221_848_749_616_356_6,
     -1.638_272_163_982_407_2,
     -1.301_029_995_663_981_3,
@@ -93,8 +93,8 @@ const D: [f64; 12] = [
 ];
 
 /// Thresholds used to select the spline segment.
-/// Equivalent to: thresholds = [2, 4, 8, 16, 32, 64, 80, 96, 112, 120, 124]
-const THRESHOLDS: [u8; 11] = [2, 4, 8, 16, 32, 64, 80, 96, 112, 120, 124];
+/// Equivalent to: SEGMENT_THRESHOLDS
+const SEGMENT_THRESHOLDS: [u8; 11] = [2, 4, 8, 16, 32, 64, 80, 96, 112, 120, 124];
 
 /// Returns the portamento rate (seconds per semitone) for a given CC#5 value.
 /// Equivalent to: portaTimeToRate (private)
@@ -104,8 +104,8 @@ fn porta_time_to_rate(cc: u8) -> f64 {
     }
 
     // Find the spline segment index.
-    // Equivalent to: thresholds.findLastIndex(t => t < cc) + 1
-    let s = THRESHOLDS
+    // Equivalent to: SEGMENT_THRESHOLDS.findLastIndex(t => t < cc) + 1
+    let s = SEGMENT_THRESHOLDS
         .iter()
         .enumerate()
         .rev()
@@ -114,11 +114,11 @@ fn porta_time_to_rate(cc: u8) -> f64 {
         .unwrap_or(0);
 
     // Normalised position within the segment [0, 1].
-    let t = (cc as f64 - X0[s]) * IH[s];
+    let t = (cc as f64 - SEGMENT_START[s]) * SEGMENT_INVERSE_LENGTH[s];
 
     // Evaluate the cubic polynomial in log10 space, then exponentiate.
     // 2.302_585_092_994_046 = ln(10), so exp(ln(10) * x) = 10^x.
-    (std::f64::consts::LN_10 * (((A[s] * t + B[s]) * t + C[s]) * t + D[s])).exp()
+    (std::f64::consts::LN_10 * (((COEFF_A[s] * t + COEFF_B[s]) * t + COEFF_C[s]) * t + COEFF_D[s])).exp()
         / PORTA_DIVISION_CONSTANT
 }
 
@@ -143,12 +143,12 @@ mod tests {
     }
 
     // --- reference values at knot endpoints ---
-    // At knot left-endpoints (t=0), the spline evaluates to 10^(D[s]) / 40.
+    // At knot left-endpoints (t=0), the spline evaluates to 10^(COEFF_D[s]) / 40.
     // At cc=1 (s=0, t=0):
 
     #[test]
     fn test_cc_1_matches_d0() {
-        let expected = (2.302_585_092_994_046 * D[0]).exp() / PORTA_DIVISION_CONSTANT;
+        let expected = (2.302_585_092_994_046 * COEFF_D[0]).exp() / PORTA_DIVISION_CONSTANT;
         let got = portamento_time_to_seconds(1, 1.0);
         assert!(
             (got - expected).abs() < 1e-12,
@@ -161,7 +161,7 @@ mod tests {
 
     #[test]
     fn test_cc_32_matches_poly_at_t1() {
-        let poly = A[4] + B[4] + C[4] + D[4];
+        let poly = COEFF_A[4] + COEFF_B[4] + COEFF_C[4] + COEFF_D[4];
         let expected = (2.302_585_092_994_046 * poly).exp() / PORTA_DIVISION_CONSTANT;
         let got = portamento_time_to_seconds(32, 1.0);
         assert!(
@@ -253,14 +253,14 @@ mod tests {
     }
 
     // --- segment boundary C0 continuity ---
-    // PCHIP guarantees: A[i]+B[i]+C[i]+D[i] == D[i+1] at each internal knot.
+    // PCHIP guarantees: COEFF_A[i]+COEFF_B[i]+COEFF_C[i]+COEFF_D[i] == COEFF_D[i+1] at each internal knot.
     // We verify the stored coefficients satisfy this property.
 
     #[test]
     fn test_spline_c0_continuity_at_knots() {
         for i in 0..11 {
-            let left_val = A[i] + B[i] + C[i] + D[i];
-            let right_val = D[i + 1];
+            let left_val = COEFF_A[i] + COEFF_B[i] + COEFF_C[i] + COEFF_D[i];
+            let right_val = COEFF_D[i + 1];
             assert!(
                 (left_val - right_val).abs() < 1e-10,
                 "C0 discontinuity at knot {i}: left={left_val:.15}, right={right_val:.15}"

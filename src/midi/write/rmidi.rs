@@ -38,7 +38,7 @@ use crate::midi::write::midi::write_midi_internal;
 use crate::midi::types::{RMIDInfoDataPartial, RMIDIWriteOptions};
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::soundbank::basic_soundbank::preset_resolver::PresetResolver;
-use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
+use crate::synthesizer::audio_engine::synth_constants::MIDI_DRUM_CHANNEL;
 use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::SpessaLog;
 use crate::utils::midi_hacks::BankSelectHacks;
@@ -132,7 +132,7 @@ fn correct_bank_offset_internal(
     let mut channels_info: Vec<ChannelInfo> = (0..channels_amount)
         .map(|i| ChannelInfo {
             program: 0,
-            drums: i % 16 == DEFAULT_PERCUSSION as usize,
+            drums: i % 16 == MIDI_DRUM_CHANNEL as usize,
             last_bank_idx: None,
             last_bank_lsb_idx: None,
             has_bank_select: false,
@@ -197,7 +197,12 @@ fn correct_bank_offset_internal(
 
         // ── SysEx ────────────────────────────────────────────────────────────
         if event_status == midi_message_types::SYSTEM_EXCLUSIVE {
-            match MidiUtils::analyze_sysex(&event_data) {
+            // RMIDI writing is outside the MIDI-to-WAV scope. TS 4.4.1 replaces the event once
+            // per analysis result (inserting the extra ones after it) and continues with the last
+            // replacement; only the last result is used here. The only multi-result message is the
+            // GS tone number (bank select + program change), so the bank select is not inserted.
+            let analyzed = MidiUtils::analyze_sysex(&event_data);
+            match analyzed[analyzed.len() - 1] {
                 // Check for drum sysex
                 AnalyzedMidiMessage::DrumsOn { channel, is_drum } => {
                     let sysex_channel = channel as usize + port_offset;
@@ -471,7 +476,7 @@ fn correct_bank_offset_internal(
             track.events.retain(|e| {
                 !(e.status_byte == midi_message_types::SYSTEM_EXCLUSIVE
                     && matches!(
-                        MidiUtils::analyze_sysex(&e.data),
+                        MidiUtils::analyze_sysex(&e.data)[0],
                         AnalyzedMidiMessage::GmOn | AnalyzedMidiMessage::GmOff
                     ))
             });
@@ -1083,7 +1088,7 @@ mod tests {
         // GM ON sysex should be gone
         let has_gm_on = mid.tracks[0].events.iter().any(|e| {
             e.status_byte == midi_message_types::SYSTEM_EXCLUSIVE
-                && MidiUtils::analyze_sysex(&e.data) == AnalyzedMidiMessage::GmOn
+                && MidiUtils::analyze_sysex(&e.data)[0] == AnalyzedMidiMessage::GmOn
         });
         assert!(!has_gm_on, "GM ON sysex should have been removed");
 
@@ -1259,7 +1264,7 @@ mod tests {
         let has_xg_cc_sysex = mid.tracks[0].events.iter().any(|e| {
             e.status_byte == midi_message_types::SYSTEM_EXCLUSIVE
                 && matches!(
-                    MidiUtils::analyze_sysex(&e.data),
+                    MidiUtils::analyze_sysex(&e.data)[0],
                     AnalyzedMidiMessage::ControllerChange { .. }
                 )
         });
@@ -1301,10 +1306,9 @@ mod tests {
         // see the "GM → GS switch" note in the XG test above.)
         let has_gs_program_change_sysex = mid.tracks[0].events.iter().any(|e| {
             e.status_byte == midi_message_types::SYSTEM_EXCLUSIVE
-                && matches!(
-                    MidiUtils::analyze_sysex(&e.data),
-                    AnalyzedMidiMessage::ProgramChange { .. }
-                )
+                && MidiUtils::analyze_sysex(&e.data)
+                    .iter()
+                    .any(|a| matches!(a, AnalyzedMidiMessage::ProgramChange { .. }))
         });
         assert!(
             !has_gs_program_change_sysex,
@@ -1344,13 +1348,13 @@ mod tests {
 
         let has_gm_off = mid.tracks[0].events.iter().any(|e| {
             e.status_byte == midi_message_types::SYSTEM_EXCLUSIVE
-                && MidiUtils::analyze_sysex(&e.data) == AnalyzedMidiMessage::GmOff
+                && MidiUtils::analyze_sysex(&e.data)[0] == AnalyzedMidiMessage::GmOff
         });
         assert!(!has_gm_off, "GM Off sysex should have been removed");
         // A GS ON should have been inserted since the system stayed GM.
         let has_gs_on = mid.tracks[0].events.iter().any(|e| {
             e.status_byte == midi_message_types::SYSTEM_EXCLUSIVE
-                && MidiUtils::analyze_sysex(&e.data) == AnalyzedMidiMessage::GsReset
+                && MidiUtils::analyze_sysex(&e.data)[0] == AnalyzedMidiMessage::GsReset
         });
         assert!(has_gs_on, "GS ON sysex should have been added");
     }
@@ -1382,7 +1386,7 @@ mod tests {
         let has_drums_on_sysex = mid.tracks[0].events.iter().any(|e| {
             e.status_byte == midi_message_types::SYSTEM_EXCLUSIVE
                 && matches!(
-                    MidiUtils::analyze_sysex(&e.data),
+                    MidiUtils::analyze_sysex(&e.data)[0],
                     AnalyzedMidiMessage::DrumsOn { .. }
                 )
         });

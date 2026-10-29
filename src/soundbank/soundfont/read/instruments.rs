@@ -93,8 +93,10 @@ impl SoundFontInstrumentZoneSink for SoundFontInstrument {
 /// `zones_count` for each instrument is calculated as the difference between
 /// the next instrument's `zone_start_index` and the current one's.
 ///
-/// Equivalent to: function readInstruments(instrumentChunk: RIFFChunk): SoundFontInstrument[]
-pub fn read_instruments(chunk: &mut RIFFChunk) -> Vec<SoundFontInstrument> {
+/// `keep_terminal` keeps the EOI record (needed when extending with xdta).
+///
+/// Equivalent to: function readInstruments(instrumentChunk: RIFFChunk, keepTerminal = false): SoundFontInstrument[]
+pub fn read_instruments(chunk: &mut RIFFChunk, keep_terminal: bool) -> Vec<SoundFontInstrument> {
     let mut instruments: Vec<SoundFontInstrument> = Vec::new();
 
     while chunk.data.len() > chunk.data.current_index {
@@ -110,7 +112,9 @@ pub fn read_instruments(chunk: &mut RIFFChunk) -> Vec<SoundFontInstrument> {
     }
 
     // Remove EOI (End Of Instruments sentinel record)
-    instruments.pop();
+    if !keep_terminal {
+        instruments.pop();
+    }
 
     instruments
 }
@@ -144,7 +148,7 @@ mod tests {
         let len = data.len();
         RIFFChunk::new(
             "inst".to_string(),
-            len as u32,
+            len,
             IndexedByteArray::from_vec(data),
         )
     }
@@ -216,7 +220,7 @@ mod tests {
     #[test]
     fn test_read_instruments_empty_chunk_returns_empty() {
         let mut chunk = make_chunk(vec![]);
-        let instruments = read_instruments(&mut chunk);
+        let instruments = read_instruments(&mut chunk, false);
         assert!(instruments.is_empty());
     }
 
@@ -224,7 +228,7 @@ mod tests {
     fn test_read_instruments_single_record_is_eoi_returns_empty() {
         // A single record = EOI sentinel → removed → empty result
         let mut chunk = make_chunk(make_inst_bytes("EOS", 0));
-        let instruments = read_instruments(&mut chunk);
+        let instruments = read_instruments(&mut chunk, false);
         assert!(instruments.is_empty());
     }
 
@@ -233,7 +237,7 @@ mod tests {
         let mut data = make_inst_bytes("Piano", 0);
         data.extend(make_inst_bytes("EOS", 3)); // EOI
         let mut chunk = make_chunk(data);
-        let instruments = read_instruments(&mut chunk);
+        let instruments = read_instruments(&mut chunk, false);
         assert_eq!(instruments.len(), 1);
         assert_eq!(instruments[0].instrument.name, "Piano");
     }
@@ -243,7 +247,7 @@ mod tests {
         let mut data = make_inst_bytes("Piano", 0);
         data.extend(make_inst_bytes("EOS", 0));
         let mut chunk = make_chunk(data);
-        let instruments = read_instruments(&mut chunk);
+        let instruments = read_instruments(&mut chunk, false);
         assert_eq!(instruments.len(), 1);
         assert_ne!(instruments[0].instrument.name, "EOS");
     }
@@ -256,7 +260,7 @@ mod tests {
         data.extend(make_inst_bytes("Organ", 3));
         data.extend(make_inst_bytes("EOS", 8));
         let mut chunk = make_chunk(data);
-        let instruments = read_instruments(&mut chunk);
+        let instruments = read_instruments(&mut chunk, false);
         assert_eq!(instruments.len(), 2);
         assert_eq!(instruments[0].zones_count, 3);
         assert_eq!(instruments[1].zones_count, 5);
@@ -269,7 +273,7 @@ mod tests {
         data.extend(make_inst_bytes("Organ", 5));
         data.extend(make_inst_bytes("EOS", 5));
         let mut chunk = make_chunk(data);
-        let instruments = read_instruments(&mut chunk);
+        let instruments = read_instruments(&mut chunk, false);
         assert_eq!(instruments[0].zones_count, 0);
     }
 
@@ -280,7 +284,7 @@ mod tests {
         data.extend(make_inst_bytes("Guitar", 10));
         data.extend(make_inst_bytes("EOS", 15));
         let mut chunk = make_chunk(data);
-        let instruments = read_instruments(&mut chunk);
+        let instruments = read_instruments(&mut chunk, false);
         assert_eq!(instruments.len(), 3);
         assert_eq!(instruments[0].instrument.name, "Piano");
         assert_eq!(instruments[1].instrument.name, "Organ");
@@ -295,7 +299,7 @@ mod tests {
         data.extend(make_inst_bytes("Guitar", 10));
         data.extend(make_inst_bytes("EOS", 15));
         let mut chunk = make_chunk(data);
-        let instruments = read_instruments(&mut chunk);
+        let instruments = read_instruments(&mut chunk, false);
         assert_eq!(instruments[0].zones_count, 5);
         assert_eq!(instruments[1].zones_count, 5);
         assert_eq!(instruments[2].zones_count, 5);

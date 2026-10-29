@@ -149,6 +149,32 @@ impl ParameterTracker {
         self.reset_data();
     }
 
+    /// Reset All Controllers (RP-15) sets the selection to null.
+    /// Mirrors the synth, which sends a controller change for every changed selection
+    /// controller, so the last changed one decides if the parameter is registered.
+    /// Equivalent to: public resetAllControllers()
+    pub fn reset_all_controllers(&mut self) {
+        for (index, is_registered, default_value) in [
+            (0, true, DEFAULT_RPN),
+            (1, true, DEFAULT_RPN),
+            (2, false, DEFAULT_NRPN),
+            (3, false, DEFAULT_NRPN),
+        ] {
+            let param = match index {
+                0 => &mut self.rpn_msb,
+                1 => &mut self.rpn_lsb,
+                2 => &mut self.nrpn_msb,
+                _ => &mut self.nrpn_lsb,
+            };
+            if param.v == default_value {
+                continue;
+            }
+            param.v = default_value;
+            self.is_registered = is_registered;
+            self.reset_data();
+        }
+    }
+
     /// Feeds a single MIDI Controller Change (`cc`, `v`) into the tracker.
     ///
     /// `track`/`event` identify where this Controller Change event lives, cached for later

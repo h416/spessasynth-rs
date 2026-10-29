@@ -5,25 +5,24 @@
 /// # TypeScript vs Rust design differences
 ///
 /// ## this: MIDIChannel → ChannelContext trait
-/// TypeScript's `this: MIDIChannel` is abstracted into a `ChannelContext` trait in Rust.
-/// Implement this trait when `MIDIChannel` is ported.
+/// TypeScript's `this: MIDIChannel` is abstracted into a `ChannelContext` trait in Rust
+/// (implemented by `MidiChannel`).
 ///
 /// ## Voice → VoiceContext trait
-/// `Voice` is also not yet ported, so it is abstracted into a `VoiceContext` trait.
+/// `Voice` is abstracted into a `VoiceContext` trait (implemented by `Voice`).
 ///
 /// ## Separation of modulated_generators
 /// TypeScript: directly overwrites `voice.modulatedGenerators`.
 /// Rust: since `voice.compute_single_modulator(&mut self)` requires the same `&mut Voice` borrow,
 /// `modulated_generators` is passed separately as `&mut [i16]` by the caller.
-/// When Voice is ported, extract via `voice.modulated_generators_mut()` before calling this function.
 ///
 /// ## generator_offsets (Mode 2)
 /// TypeScript: creates an offset-applied copy with `generators = new Int16Array(generators)`.
 /// Rust: uses the helper function `effective_base` to compute offsets per index.
 use crate::soundbank::basic_soundbank::generator_types::GENERATOR_LIMITS;
 use crate::soundbank::basic_soundbank::modulator::DecodedModulator;
+use crate::soundbank::basic_soundbank::modulator_source::SF2Channel;
 use crate::soundbank::enums::modulator_sources;
-use crate::synthesizer::audio_engine::channel::parameters::midi::NON_CC_INDEX_OFFSET;
 
 // ---------------------------------------------------------------------------
 // SourceFilter
@@ -53,11 +52,11 @@ pub enum SourceFilter {
 /// Implement this trait when porting `MIDIChannel`.
 pub trait ChannelContext {
     /// Whether generator offsets are enabled.
-    /// Equivalent to: `this.generatorOffsetsEnabled`
+    /// Equivalent to: `this.generators.offsetsEnabled`
     fn generator_offsets_enabled(&self) -> bool;
 
     /// Per-channel generator offsets (same size as the number of generators).
-    /// Equivalent to: `this.generatorOffsets`
+    /// Equivalent to: `this.generators.offsets`
     fn generator_offsets(&self) -> &[i16];
 
     /// Whether to use per-note pitch wheels.
@@ -68,7 +67,7 @@ pub trait ChannelContext {
     /// Equivalent to: `this.pitchWheels`
     fn pitch_wheels(&self) -> &[i16];
 
-    /// MIDI controller table (14-bit, `CONTROLLER_TABLE_SIZE` size).
+    /// MIDI controller table (14-bit, `CONTROLLER_TABLE_SIZE` = 128 entries).
     /// Equivalent to: `this.midiControllers`
     fn midi_controllers(&self) -> &[i16];
 
@@ -80,6 +79,20 @@ pub trait ChannelContext {
     /// Converted to a multiplier by dividing by 50 at the point of use.
     /// Equivalent to: `this._midiParameters.modulationDepth`
     fn modulation_depth(&self) -> f64;
+
+    /// Channel pressure (7-bit).
+    /// Equivalent to: `this._midiParameters.pressure`
+    fn channel_pressure(&self) -> i32;
+
+    /// Pitch wheel range in semitones.
+    /// Equivalent to: `this._midiParameters.pitchWheelRange`
+    fn pitch_wheel_range(&self) -> f64;
+
+    /// Poly pressure of a key (persists across notes, like per-note pitch wheels).
+    /// Equivalent to: `this.polyPressures[midiNote]` (new in 4.4.0)
+    fn poly_pressure(&self, _midi_note: usize) -> u8 {
+        0
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -104,10 +117,10 @@ pub trait VoiceContext {
     /// Computes the modulator at the specified index, caches and returns the value.
     /// Also writes the result to `modulator_values()[index]`.
     ///
-    /// Equivalent to: `voice.computeModulator(midiControllers, pitch, i)`
+    /// Equivalent to: `this.computeModulator(voice, pitch, i)`
     fn compute_single_modulator(
         &mut self,
-        midi_controllers: &[i16],
+        channel: &SF2Channel,
         pitch: i16,
         modulation_depth: f64,
         index: usize,
@@ -117,6 +130,11 @@ pub trait VoiceContext {
     /// Stored as i16 to match TypeScript's `Int16Array`.
     /// Equivalent to: `voice.modulatorValues`
     fn modulator_values(&self) -> &[i16];
+
+    /// Sets the poly pressure the polyPressure modulator source reads.
+    /// TS 4.4.0 reads `channel.polyPressures[voice.midiNote]` directly; Rust copies it
+    /// into the voice at the start of every `compute_modulators` call instead.
+    fn set_pressure(&mut self, _pressure: u8) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -189,8 +207,14 @@ pub fn compute_modulators<C: ChannelContext, V: VoiceContext>(
         channel.pitch_wheel()
     };
 
-    let midi_controllers = channel.midi_controllers();
+    let sf2_channel = SF2Channel {
+        midi_controllers: channel.midi_controllers(),
+        pressure: channel.channel_pressure(),
+        pitch_wheel_range: channel.pitch_wheel_range(),
+    };
     let modulation_depth = channel.modulation_depth();
+    // Use MIDI Note here as key shift is internal
+    voice.set_pressure(channel.poly_pressure(voice.midi_note()));
 
     match filter {
         // ---------------------------------------------------------------
@@ -229,7 +253,7 @@ pub fn compute_modulators<C: ChannelContext, V: VoiceContext>(
                 let dest = dest_raw as usize;
 
                 // Compute modulator value (separate borrow needed for &mut self)
-                let mod_val = voice.compute_single_modulator(midi_controllers, pitch, modulation_depth, i);
+                let mod_val = voice.compute_single_modulator(&sf2_channel, pitch, modulation_depth, i);
 
                 // Clamp and add (prevent i16 overflow)
                 // TS: modulatedGenerators[mod.destination] + voice.computeModulator(...)
@@ -302,7 +326,7 @@ pub fn compute_modulators<C: ChannelContext, V: VoiceContext>(
 
                 // Compute modulator (also writes to voice.modulatorValues[i])
                 // Equivalent to: voice.computeModulator(this.midiControllers, pitch, i)
-                voice.compute_single_modulator(midi_controllers, pitch, modulation_depth, i);
+                voice.compute_single_modulator(&sf2_channel, pitch, modulation_depth, i);
 
                 // Sum all modulator values for this destination
                 // Equivalent to:
@@ -329,9 +353,13 @@ pub fn compute_modulators<C: ChannelContext, V: VoiceContext>(
                 // Equivalent to:
                 //   modulatedGenerators[destination] = Math.max(limits.min,
                 //       Math.min(outputValue, limits.max))
-                if let Some(Some(limit)) = GENERATOR_LIMITS.get(dest) {
-                    modulated_generators[dest] = output.max(limit.min).min(limit.max) as i16;
-                }
+                // Apply the limits instantly to prevent -32k overflow
+                // Testcase: gm.dls polysynth
+                modulated_generators[dest] = match GENERATOR_LIMITS.get(dest) {
+                    Some(Some(limit)) => output.min(limit.max).max(limit.min) as i16,
+                    // Unused generator, only prevent the overflow
+                    _ => output.min(32_767).max(-32_768) as i16,
+                };
             }
         }
     }
@@ -346,6 +374,7 @@ mod tests {
     use super::*;
     use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
     use crate::soundbank::basic_soundbank::modulator::DecodedModulator;
+use crate::soundbank::basic_soundbank::modulator_source::SF2Channel;
 
     // -----------------------------------------------------------------------
     // Mock implementations
@@ -357,6 +386,7 @@ mod tests {
         per_note_pitch: bool,
         pitch_wheels: Vec<i16>,
         midi_controllers: Vec<i16>,
+        pitch_wheel: i16,
     }
 
     impl MockChannel {
@@ -367,15 +397,20 @@ mod tests {
                 per_note_pitch: false,
                 pitch_wheels: vec![0; 128],
                 midi_controllers,
+                pitch_wheel: 8192,
             }
         }
     }
 
     impl ChannelContext for MockChannel {
         fn pitch_wheel(&self) -> i16 {
-            // Preserve the pre-4.3.0 test behavior: global pitch came from the controller table.
-            let idx = modulator_sources::PITCH_WHEEL as usize + NON_CC_INDEX_OFFSET;
-            self.midi_controllers.get(idx).copied().unwrap_or(0)
+            self.pitch_wheel
+        }
+        fn channel_pressure(&self) -> i32 {
+            0
+        }
+        fn pitch_wheel_range(&self) -> f64 {
+            2.0
         }
         fn modulation_depth(&self) -> f64 {
             1.0
@@ -436,7 +471,7 @@ mod tests {
         }
         fn compute_single_modulator(
             &mut self,
-            _midi_controllers: &[i16],
+            _channel: &SF2Channel,
             _pitch: i16,
             _modulation_depth: f64,
             index: usize,
@@ -468,7 +503,7 @@ mod tests {
 
     #[test]
     fn test_all_copies_generators_to_modulated() {
-        let mut ch = MockChannel::simple(vec![0; 147]);
+        let mut ch = MockChannel::simple(vec![0; 128]);
         let mut voice = MockVoice::new(vec![100, 200, 300]);
         let mut modulated = vec![0i16; 3];
 
@@ -482,7 +517,7 @@ mod tests {
 
     #[test]
     fn test_all_applies_generator_offsets() {
-        let mut ch = MockChannel::simple(vec![0; 147]);
+        let mut ch = MockChannel::simple(vec![0; 128]);
         ch.offsets_enabled = true;
         ch.offsets = vec![10, -5, 0];
         let mut voice = MockVoice::new(vec![100, 200, 300]);
@@ -501,7 +536,7 @@ mod tests {
 
     #[test]
     fn test_all_adds_modulator_value_to_destination() {
-        let ch = MockChannel::simple(vec![0; 147]);
+        let ch = MockChannel::simple(vec![0; 128]);
         // Modulator targeting PAN (17), value +50.0
         let mod_ = make_mod(gt::PAN, 0, 0);
         let mut voice = MockVoice::new(vec![0; 63]).with_modulators(vec![mod_], 50.0);
@@ -516,7 +551,7 @@ mod tests {
 
     #[test]
     fn test_all_clamps_modulator_sum_to_i16_range() {
-        let ch = MockChannel::simple(vec![0; 147]);
+        let ch = MockChannel::simple(vec![0; 128]);
         // Verify large value added to PAN is clamped to i16 range
         let mod_ = make_mod(gt::PAN, 0, 0);
         let mut voice = MockVoice::new(vec![0; 63]).with_modulators(vec![mod_], 40_000.0); // exceeds i16::MAX
@@ -530,7 +565,7 @@ mod tests {
 
     #[test]
     fn test_all_clamps_to_generator_limits() {
-        let ch = MockChannel::simple(vec![0; 147]);
+        let ch = MockChannel::simple(vec![0; 128]);
         // Case where initial value exceeds limit.max
         let mut voice = MockVoice::new(vec![0; 63]);
         let mut modulated = vec![0i16; 63];
@@ -546,7 +581,7 @@ mod tests {
 
     #[test]
     fn test_all_applies_generator_limits_from_generators() {
-        let ch = MockChannel::simple(vec![0; 147]);
+        let ch = MockChannel::simple(vec![0; 128]);
         // PAN limit: min=-500, max=500
         // generators[17] = 600 → clamped to limit.max=500
         let mut gens = vec![0i16; 63];
@@ -561,7 +596,7 @@ mod tests {
 
     #[test]
     fn test_all_skips_invalid_modulator_destination() {
-        let ch = MockChannel::simple(vec![0; 147]);
+        let ch = MockChannel::simple(vec![0; 128]);
         // destination = -1 (INVALID) → skip
         let mod_ = make_mod(gt::INVALID, 0, 0);
         let mut voice = MockVoice::new(vec![0; 63]).with_modulators(vec![mod_], 100.0);
@@ -576,15 +611,12 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_all_uses_midi_controllers_pitch_when_per_note_off() {
-        // per_note_pitch = false → uses midiControllers[PITCH_WHEEL + OFFSET]
+    fn test_all_uses_midi_parameters_pitch_when_per_note_off() {
+        // per_note_pitch = false → uses midiParameters.pitchWheel
         // No modulators here so pitch isn't used, but verify no panic
-        let mut ch = MockChannel::simple(vec![0; 147]);
+        let mut ch = MockChannel::simple(vec![0; 128]);
         ch.per_note_pitch = false;
-        // pitch_wheel index = 14 + 128 = 142
-        if let Some(v) = ch.midi_controllers.get_mut(142) {
-            *v = 1000;
-        }
+        ch.pitch_wheel = 1000;
         let mut voice = MockVoice::new(vec![0; 63]);
         let mut modulated = vec![0i16; 63];
 
@@ -594,7 +626,7 @@ mod tests {
 
     #[test]
     fn test_all_uses_per_note_pitch_wheels_when_enabled() {
-        let mut ch = MockChannel::simple(vec![0; 147]);
+        let mut ch = MockChannel::simple(vec![0; 128]);
         ch.per_note_pitch = true;
         ch.pitch_wheels = vec![500; 128];
         let mut voice = MockVoice::new(vec![0; 63]);
@@ -611,7 +643,7 @@ mod tests {
 
     #[test]
     fn test_cc_mode_updates_matching_destination() {
-        let ch = MockChannel::simple(vec![0; 147]);
+        let ch = MockChannel::simple(vec![0; 128]);
         // CC7 (main volume) source → CC flag bit7=1, index=7
         let mod_ = make_mod(gt::PAN, CC7_SOURCE, 0);
         let mut voice = MockVoice::new(vec![0; 63]).with_modulators(vec![mod_], 30.0);
@@ -625,7 +657,7 @@ mod tests {
 
     #[test]
     fn test_cc_mode_skips_non_matching_source() {
-        let ch = MockChannel::simple(vec![0; 147]);
+        let ch = MockChannel::simple(vec![0; 128]);
         // source_index = 1 vs mod index=7 → skip
         let mod_ = make_mod(gt::PAN, CC7_SOURCE, 0);
         let mut voice = MockVoice::new(vec![0; 63]).with_modulators(vec![mod_], 30.0);
@@ -642,7 +674,7 @@ mod tests {
 
     #[test]
     fn test_noncc_mode_matches_pitch_wheel_source() {
-        let ch = MockChannel::simple(vec![0; 147]);
+        let ch = MockChannel::simple(vec![0; 128]);
         // non-CC, index=14 (pitchWheel)
         let mod_ = make_mod(gt::PAN, PITCH_WHEEL_SOURCE, 0);
         let mut voice = MockVoice::new(vec![0; 63]).with_modulators(vec![mod_], 20.0);
@@ -655,7 +687,7 @@ mod tests {
 
     #[test]
     fn test_cc_mode_skips_noncc_source() {
-        let ch = MockChannel::simple(vec![0; 147]);
+        let ch = MockChannel::simple(vec![0; 128]);
         // non-CC source → does not match SourceFilter::CC
         let mod_ = make_mod(gt::PAN, PITCH_WHEEL_SOURCE, 0);
         let mut voice = MockVoice::new(vec![0; 63]).with_modulators(vec![mod_], 20.0);
@@ -672,7 +704,7 @@ mod tests {
 
     #[test]
     fn test_cc_mode_secondary_source_match() {
-        let ch = MockChannel::simple(vec![0; 147]);
+        let ch = MockChannel::simple(vec![0; 128]);
         // primary is non-CC, secondary is CC7 → matches SourceFilter::CC, source_index=7
         let mod_ = make_mod(gt::PAN, PITCH_WHEEL_SOURCE, CC7_SOURCE);
         let mut voice = MockVoice::new(vec![0; 63]).with_modulators(vec![mod_], 15.0);
@@ -685,7 +717,7 @@ mod tests {
 
     #[test]
     fn test_optimized_mode_sums_all_mods_for_destination() {
-        let ch = MockChannel::simple(vec![0; 147]);
+        let ch = MockChannel::simple(vec![0; 128]);
         // Two modulators with the same destination (PAN)
         let mod1 = make_mod(gt::PAN, CC7_SOURCE, 0);
         let mod2 = make_mod(gt::PAN, 0, 0); // secondary, non-matching
@@ -706,7 +738,7 @@ mod tests {
 
     #[test]
     fn test_optimized_mode_applies_generator_base_value() {
-        let ch = MockChannel::simple(vec![0; 147]);
+        let ch = MockChannel::simple(vec![0; 128]);
         let mod_ = make_mod(gt::PAN, CC7_SOURCE, 0);
         // PAN base value = 50
         let mut gens = vec![0i16; 63];
@@ -722,7 +754,7 @@ mod tests {
 
     #[test]
     fn test_optimized_mode_with_generator_offsets() {
-        let mut ch = MockChannel::simple(vec![0; 147]);
+        let mut ch = MockChannel::simple(vec![0; 128]);
         ch.offsets_enabled = true;
         ch.offsets = vec![5; 63];
         let mod_ = make_mod(gt::PAN, CC7_SOURCE, 0);

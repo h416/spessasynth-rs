@@ -2,7 +2,7 @@
 /// purpose: Build the SF2 shdr RIFF chunk (sample header records) from a sound bank.
 /// Ported from: src/soundbank/soundfont/write/shdr.ts (spessasynth_core 4.3.0)
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
-use crate::soundbank::soundfont::read::samples::SF3_BIT_FLIT;
+use crate::soundbank::soundfont::read::samples::SF3_BIT_FLAG;
 use crate::soundbank::soundfont::write::types::ExtendedSF2Chunks;
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::{write_dword, write_word};
@@ -27,7 +27,7 @@ use crate::utils::byte_functions::string::write_binary_string_indexed;
 /// [ 40..  41)  originalKey (u8)
 /// [ 41..  42)  pitchCorrection (i8 stored as u8)
 /// [ 42..  44)  sampleLink (u16, low 16 bits; high 16 bits go into xshdr)
-/// [ 44..  46)  sampleType (u16, with SF3_BIT_FLIT set when Vorbis-compressed)
+/// [ 44..  46)  sampleType (u16, with SF3_BIT_FLAG set when Vorbis-compressed)
 /// ```
 const SAMPLE_RECORD_SIZE: usize = 46;
 
@@ -129,10 +129,10 @@ pub fn get_shdr(
         write_word(&mut xshdr_data, (sample_link_index >> 16) as u32);
 
         // --- Sample type -------------------------------------------------------
-        // Set SF3_BIT_FLIT when the sample is Vorbis-compressed.
+        // Set SF3_BIT_FLAG when the sample is Vorbis-compressed.
         let mut sample_type = sample.sample_type;
         if is_compressed {
-            sample_type |= SF3_BIT_FLIT;
+            sample_type |= SF3_BIT_FLAG;
         }
         write_word(&mut shdr_data, sample_type as u32);
         xshdr_data.current_index += 2; // skip sampleType in xshdr
@@ -183,7 +183,7 @@ mod tests {
     use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
     use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
     use crate::soundbank::enums::sample_types;
-    use crate::soundbank::soundfont::read::samples::SF3_BIT_FLIT;
+    use crate::soundbank::soundfont::read::samples::SF3_BIT_FLAG;
     use crate::utils::byte_functions::little_endian::read_little_endian;
     use crate::utils::riff_chunk::RIFFChunk;
     use crate::utils::byte_functions::string::read_binary_string;
@@ -568,9 +568,9 @@ mod tests {
         let data = pdta_data_bytes(&chunks);
         let stype = read_little_endian(&data, 2, record_offset(0) + 44) as u16;
         assert_ne!(
-            stype & SF3_BIT_FLIT,
+            stype & SF3_BIT_FLAG,
             0,
-            "SF3_BIT_FLIT must be set for compressed samples"
+            "SF3_BIT_FLAG must be set for compressed samples"
         );
     }
 
@@ -581,7 +581,7 @@ mod tests {
         let chunks = get_shdr(&bank, &[0], &[10]);
         let data = pdta_data_bytes(&chunks);
         let stype = read_little_endian(&data, 2, record_offset(0) + 44) as u16;
-        assert_eq!(stype & SF3_BIT_FLIT, 0);
+        assert_eq!(stype & SF3_BIT_FLAG, 0);
     }
 
     #[test]
@@ -683,7 +683,7 @@ mod tests {
         let chunks = get_shdr(&bank, &[0], &[10]);
         let raw = pdta_data_bytes(&chunks);
         let mut arr = IndexedByteArray::from_vec(raw);
-        let chunk = RIFFChunk::read(&mut arr, true, false);
+        let chunk = RIFFChunk::read(&mut arr, false, true);
         assert_eq!(chunk.header, "shdr");
         assert_eq!(chunk.size as usize, 2 * SAMPLE_RECORD_SIZE);
     }

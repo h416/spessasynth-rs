@@ -42,8 +42,9 @@ pub struct BasicInstrumentZone {
 impl BasicInstrumentZone {
     /// Creates a new instrument zone.
     ///
-    /// The TypeScript constructor calls `sample.linkTo(parentInstrument)`, which
-    /// is implemented after `BasicSample` porting (currently TODO).
+    /// The TypeScript constructor calls `sample.linkTo(parentInstrument)`. Not done here (the
+    /// zone holds an index, not the sample): the link tracking is only used by sound bank
+    /// editing (trim / remove unused), which is outside the MIDI-to-WAV scope.
     ///
     /// `use_count` is initialized from the instrument's `useCount` at creation time
     /// (i.e., the number of presets referencing that instrument). This corresponds
@@ -54,7 +55,6 @@ impl BasicInstrumentZone {
     /// constructor(instrument: BasicInstrument, sample: BasicSample)
     /// ```
     pub fn new(instrument_idx: usize, instrument_use_count: u32, sample_idx: usize) -> Self {
-        // TODO: Call sample.linkTo(instrument) after BasicSample porting.
         Self {
             zone: BasicZone::new(),
             parent_instrument_idx: instrument_idx,
@@ -76,12 +76,11 @@ impl BasicInstrumentZone {
 
     /// Replaces this zone's sample with a different sample (by index).
     ///
-    /// TypeScript's setter calls `unlinkFrom` on the old sample then `linkTo` on the new one,
-    /// but both operations are TODO until `BasicSample` porting is complete.
+    /// TypeScript's setter calls `unlinkFrom` on the old sample then `linkTo` on the new one;
+    /// not done here (see `new`).
     ///
     /// Equivalent to: `public set sample(sample: BasicSample)`
     pub fn set_sample(&mut self, new_sample_idx: usize) {
-        // TODO: After BasicSample porting, implement unlinkFrom on the old sample and linkTo on the new one.
         self.sample_idx = new_sample_idx;
     }
 

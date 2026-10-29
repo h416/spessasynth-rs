@@ -1,4 +1,4 @@
-use crate::soundbank::basic_soundbank::generator_types::GeneratorType;
+use crate::soundbank::basic_soundbank::generator_types::{GENERATORS_AMOUNT, GeneratorType};
 /// awe32.rs
 /// purpose: SoundBlaster AWE32 NRPN generator offset handler for MidiChannel.
 /// Ported from: src/synthesizer/audio_engine/engine_methods/controller_control/data_entry/awe32.ts
@@ -10,6 +10,26 @@ use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
 use crate::utils::loggin::spessa_synth_warn;
+
+/// Used for handling SF2/AWE32 NRPN generator adjustments.
+/// Rust keeps these as the flat `generator_*` fields of `MidiChannel`; this struct is the
+/// shape the channel snapshot stores them in.
+/// Equivalent to: interface ChannelGenerators
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChannelGenerators {
+    /// Per-generator offsets (cents/centibels, depending on the generator).
+    /// Equivalent to: offsets
+    pub offsets: [i16; GENERATORS_AMOUNT],
+    /// Whether the offsets are applied.
+    /// Equivalent to: offsetsEnabled
+    pub offsets_enabled: bool,
+    /// Per-generator overrides (`GENERATOR_OVERRIDE_NO_CHANGE_VALUE` means no override).
+    /// Equivalent to: overrides
+    pub overrides: [i16; GENERATORS_AMOUNT],
+    /// Whether the overrides are applied.
+    /// Equivalent to: overridesEnabled
+    pub overrides_enabled: bool,
+}
 
 /// AWE32 NRPN generator index → SF2 GeneratorType mapping.
 /// Equivalent to: AWE_NRPN_GENERATOR_MAPPINGS
@@ -54,8 +74,8 @@ fn ms_to_timecents(ms: f64) -> i16 {
 }
 
 #[inline]
-fn hz_to_cents(hz: f64) -> i16 {
-    (6900.0 + 1200.0 * (hz / 440.0).log2()) as i16
+fn hz_to_cents(hz: f64) -> f64 {
+    6900.0 + 1200.0 * (hz / 440.0).log2()
 }
 
 impl MidiChannel {
@@ -103,7 +123,12 @@ impl MidiChannel {
             // LFO frequencies (realtime)
             gt::FREQ_VIB_LFO | gt::FREQ_MOD_LFO => {
                 let hz = 0.084 * data_lsb as f64;
-                self.set_generator_override(generator, hz_to_cents(hz), true, voices);
+                self.set_generator_override(
+                    generator,
+                    hz_to_cents(hz).max(-16_000.0) as i16,
+                    true,
+                    voices,
+                );
             }
 
             // Sustains

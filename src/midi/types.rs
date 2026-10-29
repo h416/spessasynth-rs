@@ -8,7 +8,7 @@
 ///
 /// TS 4.3.0 also *removed* `DesiredProgramChange`, `DesiredControllerChange`, and
 /// `DesiredChannelTranspose` from this file — folded into `midi_tools/modify_midi.ts`'s
-/// restructured `ModifyMIDIOptions`. The Rust equivalents were deleted in Task 18 along with the
+/// restructured `ModifyMIDIOptions`. The Rust equivalents were deleted along with the
 /// `modify_midi.rs` 4.3.0 port (see `midi_tools::modify_midi::{ModifyMidiOptions,
 /// ChannelModification, ClearableParameter}`).
 use chrono::NaiveDateTime;
@@ -95,7 +95,7 @@ pub struct TempoChange {
 /// - `Soft`: Immediately jumps the playback position to the loop start point (Touhou / GameMaker style).
 /// - `Hard`: Reprocesses messages up to the loop start to restore the synth state (default).
 ///
-/// Equivalent to: MIDILoopType ("soft" | "hard")
+/// Equivalent to: MIDILoop.type ("soft" | "hard"; the `MIDILoopType` alias was inlined in 4.4.0)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum MidiLoopType {
     Soft,

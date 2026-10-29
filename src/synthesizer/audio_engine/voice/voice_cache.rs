@@ -8,8 +8,8 @@ use crate::soundbank::types::VoiceParameters as BankVoiceParameters;
 use crate::synthesizer::types::SampleLoopingMode;
 
 /// Minimal sample data needed by CachedVoice construction.
-/// TODO: Replace with crate::soundbank::basic_soundbank::basic_sample::BasicSample
-///       when basic_sample.ts is ported.
+/// The caller copies these out of the sound bank's `BasicSample` so the cache does not
+/// borrow the sound bank.
 /// Equivalent to: BasicSample (fields consumed in voice_cache.ts)
 pub struct BasicSample {
     /// Original pitch as a MIDI note number.
@@ -35,7 +35,7 @@ impl BasicSample {
 }
 
 /// Input parameters for creating a CachedVoice.
-/// TODO: Move to soundbank/types.rs when soundbank/types.ts is ported.
+/// (TS defines it in soundbank/types.ts; kept next to its only user.)
 /// Equivalent to: VoiceParameters
 pub struct VoiceParameters {
     /// SoundFont2 generator values (Int16Array in TypeScript).

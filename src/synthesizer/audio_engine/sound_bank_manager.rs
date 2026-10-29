@@ -26,6 +26,8 @@ use crate::synthesizer::types::PresetListEntry;
 use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::spessa_synth_warn;
 use crate::utils::midi_hacks::BankSelectHacks;
+use crate::synthesizer::audio_engine::synth_constants::{GS_USER_DRUM_1, GS_USER_DRUM_2};
+use crate::synthesizer::audio_engine::user_drum_set::UserDrumSet;
 
 // ---------------------------------------------------------------------------
 // SoundBankManagerListEntry
@@ -76,7 +78,15 @@ pub struct SoundBankManager {
     /// The public preset list entries derived from `selectable_preset_list`.
     /// Equivalent to: private _presetList
     _preset_list: Vec<PresetListEntry>,
+
+    /// The GS User Drum Sets (programs 64 and 65).
+    /// Equivalent to: userDrumSets
+    pub user_drum_sets: [UserDrumSet; 2],
 }
+
+/// `selectable_bank_idxs` value of the placeholder preset of user drum set `i` is
+/// `USER_DRUM_BANK_IDX - i`. It never indexes `sound_bank_list`.
+const USER_DRUM_BANK_IDX: usize = usize::MAX;
 
 impl SoundBankManager {
     /// Creates a new SoundBankManager with the supplied preset list change callback.
@@ -89,6 +99,29 @@ impl SoundBankManager {
             selectable_bank_idxs: Vec::new(),
             selectable_is_drum: Vec::new(),
             _preset_list: Vec::new(),
+            user_drum_sets: [
+                UserDrumSet::new(GS_USER_DRUM_1, "User Drum Set 1"),
+                UserDrumSet::new(GS_USER_DRUM_2, "User Drum Set 2"),
+            ],
+        }
+    }
+
+    /// The bank index used for the placeholder preset of a user drum set.
+    pub fn user_drum_bank_idx(drum_set: usize) -> usize {
+        USER_DRUM_BANK_IDX - drum_set
+    }
+
+    /// If `bank_idx` belongs to a user drum set, its index (0 or 1).
+    /// Equivalent to: `preset instanceof UserDrumSet`
+    pub fn user_drum_set_of(bank_idx: usize) -> Option<usize> {
+        (USER_DRUM_BANK_IDX - bank_idx < 2).then(|| USER_DRUM_BANK_IDX - bank_idx)
+    }
+
+    /// `isDrum` of a selected preset (user drum sets are always drums).
+    pub fn is_drum(&self, preset: &BasicPreset, bank_idx: usize) -> bool {
+        match Self::user_drum_set_of(bank_idx) {
+            Some(_) => true,
+            None => preset.is_drum(self.sound_bank_list[bank_idx].sound_bank.is_xg_bank()),
         }
     }
 
@@ -176,6 +209,10 @@ impl SoundBankManager {
             .iter()
             .position(|p| std::ptr::eq(p, preset))?;
         let bank_idx = self.selectable_bank_idxs[idx];
+        // A user drum set has no source bank of its own.
+        if Self::user_drum_set_of(bank_idx).is_some() {
+            return None;
+        }
         Some((preset, &self.sound_bank_list[bank_idx].sound_bank))
     }
 
@@ -227,6 +264,26 @@ impl SoundBankManager {
         let mut pairs: Vec<(BasicPreset, usize)> = Vec::new();
         let mut added: HashSet<String> = HashSet::new();
 
+        let total_presets: usize =
+            self.sound_bank_list.iter().map(|s| s.sound_bank.presets.len()).sum();
+
+        // If there are no presets, don't report as having GS user drums
+        if total_presets > 0 {
+            // Add custom drum sets first so they take priority
+            for (i, drum_set) in self.user_drum_sets.iter().enumerate() {
+                let mut placeholder = BasicPreset::with_name(drum_set.name.clone());
+                placeholder.program = drum_set.program;
+                placeholder.bank_msb = 0;
+                placeholder.bank_lsb = 0;
+                placeholder.is_gm_gs_drum = true;
+                let key = placeholder.to_midi_string();
+                if !added.contains(&key) {
+                    added.insert(key);
+                    pairs.push((placeholder, Self::user_drum_bank_idx(i)));
+                }
+            }
+        }
+
         for (bank_idx, entry) in self.sound_bank_list.iter().enumerate() {
             let bank = &entry.sound_bank;
             let bank_offset = entry.bank_offset;
@@ -274,7 +331,7 @@ impl SoundBankManager {
         let is_drum_flags: Vec<bool> = selectable_list
             .iter()
             .zip(bank_idxs.iter())
-            .map(|(p, &bi)| p.is_drum(self.sound_bank_list[bi].sound_bank.is_xg_bank()))
+            .map(|(p, &bi)| self.is_drum(p, bi))
             .collect();
         self._preset_list = selectable_list
             .iter()
@@ -383,7 +440,8 @@ mod tests {
         let bank = make_bank(vec![melodic_preset(10, 0), melodic_preset(20, 0)]);
         mgr.add_sound_bank(bank, "sf1".to_string(), 0);
         let pl = mgr.preset_list();
-        assert_eq!(pl.len(), 2);
+        // + the two GS user drum sets
+        assert_eq!(pl.len(), 2 + 2);
     }
 
     #[test]
@@ -395,8 +453,8 @@ mod tests {
         mgr.add_sound_bank(bank2, "sf1".to_string(), 0);
         // Still one entry, replaced.
         assert_eq!(mgr.sound_bank_list.len(), 1);
-        // Preset list now has 2 presets from the replaced bank.
-        assert_eq!(mgr.preset_list().len(), 2);
+        // Preset list now has 2 presets from the replaced bank (+ the two GS user drum sets).
+        assert_eq!(mgr.preset_list().len(), 2 + 2);
         // Callback called twice (once per add_sound_bank).
         assert_eq!(callback_count(&counter), 2);
     }
@@ -530,8 +588,8 @@ mod tests {
         let bank2 = make_bank(vec![melodic_preset(0, 0)]);
         mgr.add_sound_bank(bank1, "sf1".to_string(), 0);
         mgr.add_sound_bank(bank2, "sf2".to_string(), 0);
-        // After dedup: only one preset should appear.
-        assert_eq!(mgr.preset_list().len(), 1);
+        // After dedup: only one preset should appear (+ the two GS user drum sets).
+        assert_eq!(mgr.preset_list().len(), 1 + 2);
     }
 
     #[test]
@@ -555,7 +613,8 @@ mod tests {
         let bank2 = make_bank(vec![melodic_preset(1, 0)]);
         mgr.add_sound_bank(bank1, "sf1".to_string(), 0);
         mgr.add_sound_bank(bank2, "sf2".to_string(), 0);
-        assert_eq!(mgr.preset_list().len(), 2);
+        // + the two GS user drum sets
+        assert_eq!(mgr.preset_list().len(), 2 + 2);
     }
 
     // -----------------------------------------------------------------------
@@ -569,9 +628,12 @@ mod tests {
         let bank = make_bank(vec![drum_preset(0), melodic_preset(0, 0)]);
         mgr.add_sound_bank(bank, "sf1".to_string(), 0);
         let pl = mgr.preset_list();
-        assert_eq!(pl.len(), 2);
+        // The user drum sets (GS drum programs 64, 65) sort after the drum at program 0.
+        assert_eq!(pl.len(), 2 + 2);
         assert!(!pl[0].patch.is_gm_gs_drum);
         assert!(pl[1].patch.is_gm_gs_drum);
+        assert_eq!(pl[1].patch.program, 0);
+        assert_eq!((pl[2].patch.program, pl[3].patch.program), (64, 65));
     }
 
     // -----------------------------------------------------------------------

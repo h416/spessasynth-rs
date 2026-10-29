@@ -259,12 +259,16 @@ impl DownloadableSoundsRegion {
     ///
     /// Returns `Err` if `self.wave_link.table_index` is out of bounds in `samples`.
     ///
-    /// Equivalent to: toSFZone(instrument: BasicInstrument, samples: BasicSample[])
+    /// `instrument_articulation` is used when the region has no articulation of its own,
+    /// since in DLS a region articulation replaces the instrument one instead of adding to it.
+    ///
+    /// Equivalent to: toSFZone(instrument: BasicInstrument, samples: BasicSample[], instrumentArticulation?: DownloadableSoundsArticulation)
     pub fn to_sf_zone(
         &self,
         instrument: &mut BasicInstrument,
         instrument_idx: usize,
         samples: &mut [BasicSample],
+        instrument_articulation: Option<&DownloadableSoundsArticulation>,
     ) -> Result<usize, String> {
         let sample_idx = self.wave_link.table_index as usize;
         if sample_idx >= samples.len() {
@@ -302,8 +306,11 @@ impl DownloadableSoundsRegion {
         // borrowed mutably – safe because they are separate allocations.
         self.wave_sample
             .to_sf_zone(&mut instrument.zones[zone_idx].zone, &samples[sample_idx]);
-        self.articulation
-            .to_sf_zone(&mut instrument.zones[zone_idx].zone);
+        let articulation = match instrument_articulation {
+            Some(a) if self.articulation.is_empty() => a,
+            _ => &self.articulation,
+        };
+        articulation.to_sf_zone(&mut instrument.zones[zone_idx].zone);
 
         // Remove generators whose value equals the SF2 default
         instrument.zones[zone_idx].zone.generators.retain(|g| {
@@ -436,7 +443,7 @@ mod tests {
         for (i, &b) in body.iter().enumerate() {
             arr[i] = b;
         }
-        RIFFChunk::new("LIST".to_string(), size, arr)
+        RIFFChunk::new("LIST".to_string(), size as usize, arr)
     }
 
     /// Builds minimal wlnk bytes for a given table index (mono sample → channel = 1).
@@ -920,7 +927,7 @@ mod tests {
         let region = DownloadableSoundsRegion::new(WaveLink::new(5), WaveSample::new());
         let mut instrument = BasicInstrument::new();
         let mut samples: Vec<BasicSample> = vec![];
-        let result = region.to_sf_zone(&mut instrument, 0, &mut samples);
+        let result = region.to_sf_zone(&mut instrument, 0, &mut samples, None);
         assert!(result.is_err());
     }
 
@@ -929,7 +936,7 @@ mod tests {
         let region = DownloadableSoundsRegion::new(WaveLink::new(0), WaveSample::new());
         let mut instrument = BasicInstrument::new();
         let mut samples = vec![make_basic_sample(60)];
-        let zone_idx = region.to_sf_zone(&mut instrument, 0, &mut samples).unwrap();
+        let zone_idx = region.to_sf_zone(&mut instrument, 0, &mut samples, None).unwrap();
         assert_eq!(zone_idx, 0);
         assert_eq!(instrument.zones.len(), 1);
     }
@@ -943,7 +950,7 @@ mod tests {
         };
         let mut instrument = BasicInstrument::new();
         let mut samples = vec![make_basic_sample(60)];
-        let zone_idx = region.to_sf_zone(&mut instrument, 0, &mut samples).unwrap();
+        let zone_idx = region.to_sf_zone(&mut instrument, 0, &mut samples, None).unwrap();
         assert_eq!(instrument.zones[zone_idx].zone.key_range.min, 36.0);
         assert_eq!(instrument.zones[zone_idx].zone.key_range.max, 60.0);
     }
@@ -955,7 +962,7 @@ mod tests {
         // key_range is already 0-127 by default
         let mut instrument = BasicInstrument::new();
         let mut samples = vec![make_basic_sample(60)];
-        let zone_idx = region.to_sf_zone(&mut instrument, 0, &mut samples).unwrap();
+        let zone_idx = region.to_sf_zone(&mut instrument, 0, &mut samples, None).unwrap();
         assert_eq!(instrument.zones[zone_idx].zone.key_range.min, -1.0);
     }
 
@@ -964,7 +971,7 @@ mod tests {
         let region = DownloadableSoundsRegion::new(WaveLink::new(0), WaveSample::new());
         let mut instrument = BasicInstrument::new();
         let mut samples = vec![make_basic_sample(60)];
-        let zone_idx = region.to_sf_zone(&mut instrument, 0, &mut samples).unwrap();
+        let zone_idx = region.to_sf_zone(&mut instrument, 0, &mut samples, None).unwrap();
         assert_eq!(instrument.zones[zone_idx].zone.vel_range.min, -1.0);
     }
 
@@ -977,7 +984,7 @@ mod tests {
         }; // max ≠ 127
         let mut instrument = BasicInstrument::new();
         let mut samples = vec![make_basic_sample(60)];
-        let zone_idx = region.to_sf_zone(&mut instrument, 0, &mut samples).unwrap();
+        let zone_idx = region.to_sf_zone(&mut instrument, 0, &mut samples, None).unwrap();
         // Should keep min = 0, not set to -1
         assert_eq!(instrument.zones[zone_idx].zone.key_range.min, 0.0);
     }
@@ -988,7 +995,7 @@ mod tests {
         region.key_group = 2;
         let mut instrument = BasicInstrument::new();
         let mut samples = vec![make_basic_sample(60)];
-        let zone_idx = region.to_sf_zone(&mut instrument, 0, &mut samples).unwrap();
+        let zone_idx = region.to_sf_zone(&mut instrument, 0, &mut samples, None).unwrap();
         let excl_class = instrument.zones[zone_idx]
             .zone
             .get_generator(gt::EXCLUSIVE_CLASS, -1);
@@ -1000,7 +1007,7 @@ mod tests {
         let region = DownloadableSoundsRegion::new(WaveLink::new(0), WaveSample::new());
         let mut instrument = BasicInstrument::new();
         let mut samples = vec![make_basic_sample(60)];
-        let zone_idx = region.to_sf_zone(&mut instrument, 0, &mut samples).unwrap();
+        let zone_idx = region.to_sf_zone(&mut instrument, 0, &mut samples, None).unwrap();
         // keyGroup=0 → should NOT set exclusiveClass
         let excl_class = instrument.zones[zone_idx]
             .zone
@@ -1013,7 +1020,7 @@ mod tests {
         let region = DownloadableSoundsRegion::new(WaveLink::new(0), WaveSample::new());
         let mut instrument = BasicInstrument::new();
         let mut samples = vec![make_basic_sample(60)];
-        region.to_sf_zone(&mut instrument, 0, &mut samples).unwrap();
+        region.to_sf_zone(&mut instrument, 0, &mut samples, None).unwrap();
         // BasicSample should be linked to instrument idx 0
         assert!(samples[0].linked_to.contains(&0));
     }
@@ -1028,7 +1035,7 @@ mod tests {
         let bytes = written.to_vec();
         let size = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
         let data = IndexedByteArray::from_slice(&bytes[8..]);
-        RIFFChunk::new("LIST".to_string(), size, data)
+        RIFFChunk::new("LIST".to_string(), size as usize, data)
     }
 
     #[test]

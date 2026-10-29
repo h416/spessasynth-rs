@@ -4,14 +4,14 @@ use crate::soundbank::basic_soundbank::generator_types::GENERATORS_AMOUNT;
 /// Ported from: src/soundbank/types.ts
 ///
 /// Skipped (out of MIDI→WAV scope or unported dependencies):
-///   - SoundBankManagerListEntry  (BasicSoundBank not yet ported)
+///   - SoundBankManagerListEntry  (defined in `synthesizer/audio_engine/sound_bank_manager.rs`)
 ///   - SampleEncodingFunction     (write-only async fn)
 ///   - ProgressFunction           (write-only)
 ///   - SoundFont2WriteOptions / DLSWriteOptions / SoundBankWriteOptions (write-only)
 ///   - SetSampleFormatOptions     (SF3/Vorbis, out of scope)
-///   - SF2Channel                 (deferred until the channel-engine rework is ported)
+///   - SF2Channel                 (not used by the MIDI-to-WAV path)
 ///
-/// `PresetsWithKeyCombinations` (Task 18): see the type below for the Rust-specific identity
+/// `PresetsWithKeyCombinations`: see the type below for the Rust-specific identity
 /// scheme used in place of TS's `Map<BasicPreset, ...>`.
 use std::collections::{HashMap, HashSet};
 

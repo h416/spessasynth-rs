@@ -1,4 +1,5 @@
 pub mod basic_midi;
+pub mod drum_parameters;
 pub mod enums;
 pub mod midi_message;
 pub mod midi_tools;

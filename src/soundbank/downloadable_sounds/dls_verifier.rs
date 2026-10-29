@@ -61,7 +61,7 @@ pub fn verify_and_read_list(
     verify_text(&list_type, types)?;
     let mut chunks: Vec<RIFFChunk> = Vec::new();
     while chunk.data.len() > chunk.data.current_index {
-        chunks.push(RIFFChunk::read(&mut chunk.data, true, false));
+        chunks.push(RIFFChunk::read(&mut chunk.data, false, true));
     }
     Ok(chunks)
 }
@@ -80,7 +80,7 @@ mod tests {
     fn make_chunk(header: &str, data: &[u8]) -> RIFFChunk {
         RIFFChunk::new(
             header.to_string(),
-            data.len() as u32,
+            data.len(),
             IndexedByteArray::from_vec(data.to_vec()),
         )
     }
@@ -104,7 +104,7 @@ mod tests {
         data.extend_from_slice(sub_chunks_bytes);
         RIFFChunk::new(
             "LIST".to_string(),
-            data.len() as u32,
+            data.len(),
             IndexedByteArray::from_vec(data),
         )
     }

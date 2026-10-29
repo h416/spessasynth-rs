@@ -5,10 +5,11 @@
 ///
 /// TS 4.3.0 introduced this file, which absorbed and replaced two 4.2.0 files:
 /// - `src/midi/midi_tools/get_gs_on.ts` (the `getGsOn` free function, now `MidiUtils::gs_reset`;
-///   the temporary Rust `get_gs_on` compatibility wrapper was removed in Task 18)
+///   the temporary Rust `get_gs_on` compatibility wrapper was removed)
 /// - `src/utils/sysex_detector.ts` (the `isXGOn`/`isGSOn`/`isGMOn`/`isGM2On`/`isGSDrumsOn`/
-///   `syxToChannel` free functions, now unified into `MidiUtils::analyze_sysex` which returns a
-///   single `AnalyzedMIDIMessage` classification instead of several independent booleans, plus
+///   `syxToChannel` free functions, now unified into `MidiUtils::analyze_sysex` which returns
+///   `AnalyzedMIDIMessage` classifications (a list since 4.4.0) instead of several
+///   independent booleans, plus
 ///   many previously-unrecognized GS/XG/GM SysEx messages: reverb/chorus/delay/variation/
 ///   insertion effect parameters, master/per-channel key-shift and fine-tune, and — notably —
 ///   GS/XG SysEx-encoded bank-select/program-change/mono-poly messages, which are now converted
@@ -16,14 +17,9 @@
 ///   uses this to replace such SysEx events with regular CC/PC events during RMIDI bank
 ///   correction; this is the "wider MIDI/SysEx support" mentioned in the 4.3.0 release notes).
 ///
-/// Task 17 ported only the subset of `MIDIUtils` consumed by `write/rmidi.rs`: `analyze_sysex`
-/// (plus its private `analyze_gm`/`analyze_gs`/`analyze_xg` helpers), `syx_to_channel`,
-/// `channel_to_syx`, `gs_data`, `gs_message`, `gs_drum_change`, and `gs_reset`.
-///
-/// Task 18 adds `analyze_rpn`/`analyze_nrpn` (channel-parameter-tracker helpers used by
-/// `parameter_tracker.rs` / `modify_midi.rs` / `used_programs_and_keys.rs`), completing the
-/// `MIDIUtils` port and letting those three files drop their dependency on the pre-4.3.0
-/// `utils/sysex_detector.rs` free functions (now deleted).
+/// `analyze_rpn`/`analyze_nrpn` are the channel-parameter-tracker helpers used by
+/// `parameter_tracker.rs` / `modify_midi.rs` / `used_programs_and_keys.rs`, replacing the
+/// pre-4.3.0 `utils/sysex_detector.rs` free functions (now deleted).
 use crate::midi::enums::{
     midi_controllers, midi_message_types, non_registered_lsb, non_registered_msb,
     registered_parameter_types,
@@ -84,11 +80,14 @@ impl MidiUtils {
     /// Analyzes a MIDI System Exclusive message and returns an identification and data for it.
     /// * `syx` - the System Exclusive message, WITHOUT the first 0xF0 System Exclusive byte!
     ///
+    /// Returns the analysis result(s) of the message: one message can carry several
+    /// (e.g. the GS tone number is both a bank select and a program change).
+    ///
     /// Equivalent to: MIDIUtils.analyzeSysEx(syx)
-    pub fn analyze_sysex(syx: &[u8]) -> AnalyzedMidiMessage {
+    pub fn analyze_sysex(syx: &[u8]) -> Vec<AnalyzedMidiMessage> {
         // At least Manufacturer ID, Device ID and XG/GS model ID
         if syx.len() < 3 {
-            return AnalyzedMidiMessage::Other;
+            return vec![AnalyzedMidiMessage::Other];
         }
         match syx[0] {
             // Non realtime GM / Realtime GM
@@ -97,7 +96,7 @@ impl MidiUtils {
             0x41 => Self::analyze_gs(syx),
             // Yamaha
             0x43 => Self::analyze_xg(syx),
-            _ => AnalyzedMidiMessage::Other,
+            _ => vec![AnalyzedMidiMessage::Other],
         }
     }
 
@@ -133,6 +132,21 @@ impl MidiUtils {
         let lsb = (nrpn & 0x7f) as u8;
         match msb {
             non_registered_msb::PART_PARAMETER => match lsb {
+                non_registered_lsb::VIBRATO_RATE => AnalyzedMidiMessage::ControllerChange {
+                    channel,
+                    controller: midi_controllers::VIBRATO_RATE,
+                    value: (value >> 7) as u8,
+                },
+                non_registered_lsb::VIBRATO_DEPTH => AnalyzedMidiMessage::ControllerChange {
+                    channel,
+                    controller: midi_controllers::VIBRATO_DEPTH,
+                    value: (value >> 7) as u8,
+                },
+                non_registered_lsb::VIBRATO_DELAY => AnalyzedMidiMessage::ControllerChange {
+                    channel,
+                    controller: midi_controllers::VIBRATO_DELAY,
+                    value: (value >> 7) as u8,
+                },
                 non_registered_lsb::TVF_CUTOFF_FREQUENCY => AnalyzedMidiMessage::ControllerChange {
                     channel,
                     controller: midi_controllers::BRIGHTNESS,
@@ -248,14 +262,14 @@ impl MidiUtils {
     // Private analyzers
     // ─────────────────────────────────────────────────────────────────────
 
-    fn analyze_gm(syx: &[u8]) -> AnalyzedMidiMessage {
+    fn analyze_gm(syx: &[u8]) -> Vec<AnalyzedMidiMessage> {
         if syx.len() < 4 {
-            return AnalyzedMidiMessage::Other;
+            return vec![AnalyzedMidiMessage::Other];
         }
 
         if syx[2] == 0x04 {
             // Device control
-            return match syx[3] {
+            return vec![match syx[3] {
                 0x03 => {
                     // Master Fine-Tuning
                     let tuning_value =
@@ -277,7 +291,7 @@ impl MidiUtils {
                         || byte_at(syx, 7) != 0x01
                     // Slot Path MSB
                     {
-                        return AnalyzedMidiMessage::Other;
+                        return vec![AnalyzedMidiMessage::Other];
                     }
                     // Slot Path LSB
                     match byte_at(syx, 8) {
@@ -299,24 +313,24 @@ impl MidiUtils {
                     }
                 }
                 _ => AnalyzedMidiMessage::Other,
-            };
+            }];
         }
 
         if syx[2] != 0x09 {
-            return AnalyzedMidiMessage::Other;
+            return vec![AnalyzedMidiMessage::Other];
         }
-        match syx[3] {
+        vec![match syx[3] {
             0x01 => AnalyzedMidiMessage::GmOn,
             0x02 => AnalyzedMidiMessage::GmOff,
             0x03 => AnalyzedMidiMessage::Gm2On,
             _ => AnalyzedMidiMessage::Other,
-        }
+        }]
     }
 
-    fn analyze_xg(syx: &[u8]) -> AnalyzedMidiMessage {
+    fn analyze_xg(syx: &[u8]) -> Vec<AnalyzedMidiMessage> {
         // Ensure XG
         if syx[2] != 0x4c || syx.len() < 7 {
-            return AnalyzedMidiMessage::Other;
+            return vec![AnalyzedMidiMessage::Other];
         }
         let a1 = syx[3]; // Address 1
         let a2 = syx[4]; // Address 2
@@ -325,7 +339,7 @@ impl MidiUtils {
 
         if a1 == 0x00 && a2 == 0x00 {
             // XG SYSTEM
-            return match a3 {
+            return vec![match a3 {
                 0x00 => {
                     // MASTER TUNE
                     let tune = ((byte_at(syx, 6) & 15) as i32) << 12
@@ -344,33 +358,29 @@ impl MidiUtils {
                 // XG SYSTEM ON / ALL PARAMETER RESET
                 0x7e | 0x7f => AnalyzedMidiMessage::XgReset,
                 _ => AnalyzedMidiMessage::Other,
-            };
+            }];
         }
 
         // XG EFFECT 1
         if a1 == 0x02 && a2 == 0x01 {
             if a3 <= 0x15 {
-                return AnalyzedMidiMessage::ReverbParam;
+                return vec![AnalyzedMidiMessage::ReverbParam];
             }
             if a3 <= 0x35 {
-                return AnalyzedMidiMessage::ChorusParam;
+                return vec![AnalyzedMidiMessage::ChorusParam];
             }
-            return AnalyzedMidiMessage::VariationParam;
+            return vec![AnalyzedMidiMessage::VariationParam];
         }
 
         // XG EFFECT 2
         if a1 == 0x03 && a2 == 0x00 {
-            return AnalyzedMidiMessage::VariationParam;
+            return vec![AnalyzedMidiMessage::VariationParam];
         }
 
         // XG MULTI PART (a2 is the channel number)
         if a1 == 0x08 {
             let channel = a2;
-            // Avoid invalid channels
-            if channel >= 16 {
-                return AnalyzedMidiMessage::Other;
-            }
-            return match a3 {
+            return vec![match a3 {
                 0x01 => AnalyzedMidiMessage::ControllerChange {
                     channel,
                     controller: midi_controllers::BANK_SELECT,
@@ -462,31 +472,43 @@ impl MidiUtils {
                     controller: midi_controllers::DECAY_TIME,
                     value: data,
                 },
-                0x0c => AnalyzedMidiMessage::ControllerChange {
+                0x1c => AnalyzedMidiMessage::ControllerChange {
                     channel,
                     controller: midi_controllers::RELEASE_TIME,
                     value: data,
                 },
+                // Portamento switch
+                0x67 => AnalyzedMidiMessage::ControllerChange {
+                    channel,
+                    controller: midi_controllers::PORTAMENTO_ON_OFF,
+                    value: if data == 1 { 127 } else { 0 },
+                },
+                // Portamento time
+                0x68 => AnalyzedMidiMessage::ControllerChange {
+                    channel,
+                    controller: midi_controllers::PORTAMENTO_TIME,
+                    value: data,
+                },
                 _ => AnalyzedMidiMessage::Other,
-            };
+            }];
         }
 
         // Drum part setup
         if a1 >> 4 == 3 {
-            return AnalyzedMidiMessage::DrumSetup;
+            return vec![AnalyzedMidiMessage::DrumSetup];
         }
 
-        AnalyzedMidiMessage::Other
+        vec![AnalyzedMidiMessage::Other]
     }
 
-    fn analyze_gs(syx: &[u8]) -> AnalyzedMidiMessage {
+    fn analyze_gs(syx: &[u8]) -> Vec<AnalyzedMidiMessage> {
         if syx.len() < 10
             // Model ID (GS)
             || syx[2] != 0x42
             // 0x12: DT1 (Device Transmit)
             || syx[3] != 0x12
         {
-            return AnalyzedMidiMessage::Other; // Something else
+            return vec![AnalyzedMidiMessage::Other]; // Something else
         }
 
         // Address
@@ -503,13 +525,13 @@ impl MidiUtils {
             match a3 {
                 // MODE SET
                 0x7f => {
-                    return match data {
+                    return vec![match data {
                         // GS Reset/Mode-1
                         0x00 => AnalyzedMidiMessage::GsReset,
                         // GS Off, default to gm
                         0x7f => AnalyzedMidiMessage::GmOn,
                         _ => AnalyzedMidiMessage::Other,
-                    };
+                    }];
                 }
                 // Master Tune
                 0x00 => {
@@ -518,63 +540,68 @@ impl MidiUtils {
                         | (byte_at(syx, 9) as i32) << 4
                         | byte_at(syx, 10) as i32;
                     let cents = (tune - 1024) as f64 / 10.0;
-                    return AnalyzedMidiMessage::MasterFineTune { value: cents };
+                    return vec![AnalyzedMidiMessage::MasterFineTune { value: cents }];
                 }
                 _ => {}
             }
         }
 
-        if a1 == 0x41 {
-            return AnalyzedMidiMessage::DrumSetup;
+        // Drum Setup
+        if a1 == 0x41 || a1 == 0x51 {
+            return vec![AnalyzedMidiMessage::DrumSetup];
         }
-        if a1 != 0x40 {
-            return AnalyzedMidiMessage::Other;
+        // 0x40 -> Part Parameters, 0x50 -> Part Parameters (BLOCK B) Testcase: 95043-2.KYC.mid
+        if a1 != 0x40 && a1 != 0x50 {
+            return vec![AnalyzedMidiMessage::Other];
         }
 
-        if a2 == 0x00 && a3 == 0x05 {
-            return AnalyzedMidiMessage::MasterKeyShift {
+        // Block B is the second 16-channel set
+        let channel_offset = if a1 == 0x50 { 16 } else { 0 };
+
+        if a1 == 0x40 && a2 == 0x00 && a3 == 0x05 {
+            return vec![AnalyzedMidiMessage::MasterKeyShift {
                 value: data as i32 - 64,
-            };
+            }];
         }
 
         // Effects
         if a2 == 0x01 {
             if (0x30..=0x37).contains(&a3) {
-                return AnalyzedMidiMessage::ReverbParam;
+                return vec![AnalyzedMidiMessage::ReverbParam];
             }
             if (0x38..=0x40).contains(&a3) {
-                return AnalyzedMidiMessage::ChorusParam;
+                return vec![AnalyzedMidiMessage::ChorusParam];
             }
             if (0x50..=0x5a).contains(&a3) {
-                return AnalyzedMidiMessage::DelayParam;
+                return vec![AnalyzedMidiMessage::DelayParam];
             }
         }
 
         // EFX Parameter
         if a2 == 0x03 && a3 <= 0x7f {
-            return AnalyzedMidiMessage::InsertionParam;
+            return vec![AnalyzedMidiMessage::InsertionParam];
         }
 
         // Patch parameter
         if a2 >> 4 == 1 {
-            let channel = Self::syx_to_channel(a2 & 0x0f);
-            return match a3 {
+            let channel = Self::syx_to_channel(a2 & 0x0f) + channel_offset;
+            return vec![match a3 {
                 0x00 => {
                     // Tone number
-                    AnalyzedMidiMessage::ProgramChange { channel, value: data }
-                }
-                0x13 => {
-                    // Mono/poly
-                    AnalyzedMidiMessage::ControllerChange {
-                        channel,
-                        controller: if data == 1 {
-                            midi_controllers::POLY_MODE_ON
-                        } else {
-                            midi_controllers::MONO_MODE_ON
+                    return vec![
+                        AnalyzedMidiMessage::ControllerChange {
+                            channel,
+                            controller: midi_controllers::BANK_SELECT,
+                            value: data,
                         },
-                        value: 0,
-                    }
+                        AnalyzedMidiMessage::ProgramChange {
+                            channel,
+                            value: byte_at(syx, 8),
+                        },
+                    ];
                 }
+                // Mono/poly: a channel MIDI param ("polyMode"), not a controller change
+                0x13 => AnalyzedMidiMessage::Other,
                 0x15 => AnalyzedMidiMessage::DrumsOn {
                     channel,
                     is_drum: data > 0,
@@ -678,13 +705,13 @@ impl MidiUtils {
                     value: data,
                 },
                 _ => AnalyzedMidiMessage::Other,
-            };
+            }];
         }
 
         // Patch Parameter Tone Map
         if a2 >> 4 == 4 {
-            let channel = Self::syx_to_channel(a2 & 0x0f);
-            return match a3 {
+            let channel = Self::syx_to_channel(a2 & 0x0f) + channel_offset;
+            return vec![match a3 {
                 0x00 | 0x01 => {
                     // Tone map number (cc#32)
                     AnalyzedMidiMessage::ControllerChange {
@@ -695,10 +722,10 @@ impl MidiUtils {
                 }
                 0x22 => AnalyzedMidiMessage::InsertionParam,
                 _ => AnalyzedMidiMessage::Other,
-            };
+            }];
         }
 
-        AnalyzedMidiMessage::Other
+        vec![AnalyzedMidiMessage::Other]
     }
 }
 
@@ -769,7 +796,7 @@ mod tests {
     #[test]
     fn test_analyze_sysex_too_short() {
         assert_eq!(
-            MidiUtils::analyze_sysex(&[0x41, 0x10]),
+            MidiUtils::analyze_sysex(&[0x41, 0x10])[0],
             AnalyzedMidiMessage::Other
         );
     }
@@ -777,7 +804,7 @@ mod tests {
     #[test]
     fn test_analyze_sysex_unknown_manufacturer() {
         assert_eq!(
-            MidiUtils::analyze_sysex(&[0x99, 0x00, 0x00]),
+            MidiUtils::analyze_sysex(&[0x99, 0x00, 0x00])[0],
             AnalyzedMidiMessage::Other
         );
     }
@@ -787,7 +814,7 @@ mod tests {
     #[test]
     fn test_analyze_gm_on() {
         assert_eq!(
-            MidiUtils::analyze_sysex(&[0x7e, 0x7f, 0x09, 0x01]),
+            MidiUtils::analyze_sysex(&[0x7e, 0x7f, 0x09, 0x01])[0],
             AnalyzedMidiMessage::GmOn
         );
     }
@@ -795,7 +822,7 @@ mod tests {
     #[test]
     fn test_analyze_gm_off() {
         assert_eq!(
-            MidiUtils::analyze_sysex(&[0x7e, 0x7f, 0x09, 0x02]),
+            MidiUtils::analyze_sysex(&[0x7e, 0x7f, 0x09, 0x02])[0],
             AnalyzedMidiMessage::GmOff
         );
     }
@@ -803,7 +830,7 @@ mod tests {
     #[test]
     fn test_analyze_gm2_on() {
         assert_eq!(
-            MidiUtils::analyze_sysex(&[0x7e, 0x7f, 0x09, 0x03]),
+            MidiUtils::analyze_sysex(&[0x7e, 0x7f, 0x09, 0x03])[0],
             AnalyzedMidiMessage::Gm2On
         );
     }
@@ -813,14 +840,14 @@ mod tests {
         // Device control (syx[2]==0x04) subtype 0x01 (Master Volume) is not one of the ported
         // branches (0x03/0x04/0x05) — should fall to Other.
         assert_eq!(
-            MidiUtils::analyze_sysex(&[0x7f, 0x7f, 0x04, 0x01, 0x00, 0x7f]),
+            MidiUtils::analyze_sysex(&[0x7f, 0x7f, 0x04, 0x01, 0x00, 0x7f])[0],
             AnalyzedMidiMessage::Other
         );
     }
 
     #[test]
     fn test_analyze_gm_master_coarse_tuning() {
-        let result = MidiUtils::analyze_sysex(&[0x7f, 0x7f, 0x04, 0x04, 0x00, 70]);
+        let result = MidiUtils::analyze_sysex(&[0x7f, 0x7f, 0x04, 0x04, 0x00, 70])[0];
         assert_eq!(result, AnalyzedMidiMessage::MasterKeyShift { value: 6 });
     }
 
@@ -829,13 +856,13 @@ mod tests {
     #[test]
     fn test_analyze_gs_reset() {
         let syx = [0x41, 0x10, 0x42, 0x12, 0x40, 0x00, 0x7f, 0x00, 0x41, 0xf7];
-        assert_eq!(MidiUtils::analyze_sysex(&syx), AnalyzedMidiMessage::GsReset);
+        assert_eq!(MidiUtils::analyze_sysex(&syx)[0], AnalyzedMidiMessage::GsReset);
     }
 
     #[test]
     fn test_analyze_gs_off_returns_gm_on() {
         let syx = [0x41, 0x10, 0x42, 0x12, 0x40, 0x00, 0x7f, 0x7f, 0x00, 0xf7];
-        assert_eq!(MidiUtils::analyze_sysex(&syx), AnalyzedMidiMessage::GmOn);
+        assert_eq!(MidiUtils::analyze_sysex(&syx)[0], AnalyzedMidiMessage::GmOn);
     }
 
     #[test]
@@ -843,7 +870,7 @@ mod tests {
         // a1=0x40, a2=0x10 (part 0 → channel 9, drum bank flag), a3=0x15, data=1
         let syx = [0x41, 0x10, 0x42, 0x12, 0x40, 0x10, 0x15, 0x01, 0x00, 0xf7];
         assert_eq!(
-            MidiUtils::analyze_sysex(&syx),
+            MidiUtils::analyze_sysex(&syx)[0],
             AnalyzedMidiMessage::DrumsOn {
                 channel: 9,
                 is_drum: true
@@ -855,7 +882,7 @@ mod tests {
     fn test_analyze_gs_drums_off_channel() {
         let syx = [0x41, 0x10, 0x42, 0x12, 0x40, 0x11, 0x15, 0x00, 0x00, 0xf7];
         assert_eq!(
-            MidiUtils::analyze_sysex(&syx),
+            MidiUtils::analyze_sysex(&syx)[0],
             AnalyzedMidiMessage::DrumsOn {
                 channel: 0,
                 is_drum: false
@@ -865,14 +892,35 @@ mod tests {
 
     #[test]
     fn test_analyze_gs_program_change() {
-        // a2=0x11 (part 1 → channel 0), a3=0x00 (tone number), data=42
-        let syx = [0x41, 0x10, 0x42, 0x12, 0x40, 0x11, 0x00, 42, 0x00, 0xf7];
+        // a2=0x11 (part 1 → channel 0), a3=0x00 (tone number), data=42 (bank), 5 (program)
+        let syx = [0x41, 0x10, 0x42, 0x12, 0x40, 0x11, 0x00, 42, 5, 0x00, 0xf7];
         assert_eq!(
             MidiUtils::analyze_sysex(&syx),
-            AnalyzedMidiMessage::ProgramChange {
-                channel: 0,
-                value: 42
-            }
+            vec![
+                AnalyzedMidiMessage::ControllerChange {
+                    channel: 0,
+                    controller: midi_controllers::BANK_SELECT,
+                    value: 42
+                },
+                AnalyzedMidiMessage::ProgramChange {
+                    channel: 0,
+                    value: 5
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn test_analyze_gs_block_b_offsets_channel() {
+        // a1=0x50 (part parameters, block B), a2=0x19 (part 9 → channel 8), a3=0x19 (part level)
+        let syx = [0x41, 0x10, 0x42, 0x12, 0x50, 0x19, 0x19, 100, 0x00, 0xf7];
+        assert_eq!(
+            MidiUtils::analyze_sysex(&syx),
+            vec![AnalyzedMidiMessage::ControllerChange {
+                channel: 24,
+                controller: midi_controllers::MAIN_VOLUME,
+                value: 100
+            }]
         );
     }
 
@@ -880,7 +928,7 @@ mod tests {
     fn test_analyze_gs_reverb_param() {
         let syx = [0x41, 0x10, 0x42, 0x12, 0x40, 0x01, 0x30, 0x05, 0x00, 0xf7];
         assert_eq!(
-            MidiUtils::analyze_sysex(&syx),
+            MidiUtils::analyze_sysex(&syx)[0],
             AnalyzedMidiMessage::ReverbParam
         );
     }
@@ -889,7 +937,7 @@ mod tests {
     fn test_analyze_gs_chorus_param() {
         let syx = [0x41, 0x10, 0x42, 0x12, 0x40, 0x01, 0x38, 0x05, 0x00, 0xf7];
         assert_eq!(
-            MidiUtils::analyze_sysex(&syx),
+            MidiUtils::analyze_sysex(&syx)[0],
             AnalyzedMidiMessage::ChorusParam
         );
     }
@@ -898,7 +946,7 @@ mod tests {
     fn test_analyze_gs_delay_param() {
         let syx = [0x41, 0x10, 0x42, 0x12, 0x40, 0x01, 0x50, 0x05, 0x00, 0xf7];
         assert_eq!(
-            MidiUtils::analyze_sysex(&syx),
+            MidiUtils::analyze_sysex(&syx)[0],
             AnalyzedMidiMessage::DelayParam
         );
     }
@@ -906,13 +954,13 @@ mod tests {
     #[test]
     fn test_analyze_gs_too_short() {
         let syx = [0x41, 0x10, 0x42, 0x12, 0x40, 0x00, 0x7f];
-        assert_eq!(MidiUtils::analyze_sysex(&syx), AnalyzedMidiMessage::Other);
+        assert_eq!(MidiUtils::analyze_sysex(&syx)[0], AnalyzedMidiMessage::Other);
     }
 
     #[test]
     fn test_analyze_gs_wrong_command_id() {
         let syx = [0x41, 0x10, 0x42, 0x00, 0x40, 0x00, 0x7f, 0x00, 0x00, 0xf7];
-        assert_eq!(MidiUtils::analyze_sysex(&syx), AnalyzedMidiMessage::Other);
+        assert_eq!(MidiUtils::analyze_sysex(&syx)[0], AnalyzedMidiMessage::Other);
     }
 
     // ── analyze_sysex: XG ─────────────────────────────────────────────────
@@ -920,13 +968,13 @@ mod tests {
     #[test]
     fn test_analyze_xg_reset() {
         let syx = [0x43, 0x10, 0x4c, 0x00, 0x00, 0x7e, 0x00];
-        assert_eq!(MidiUtils::analyze_sysex(&syx), AnalyzedMidiMessage::XgReset);
+        assert_eq!(MidiUtils::analyze_sysex(&syx)[0], AnalyzedMidiMessage::XgReset);
     }
 
     #[test]
     fn test_analyze_xg_all_param_reset() {
         let syx = [0x43, 0x10, 0x4c, 0x00, 0x00, 0x7f, 0x00];
-        assert_eq!(MidiUtils::analyze_sysex(&syx), AnalyzedMidiMessage::XgReset);
+        assert_eq!(MidiUtils::analyze_sysex(&syx)[0], AnalyzedMidiMessage::XgReset);
     }
 
     #[test]
@@ -934,7 +982,7 @@ mod tests {
         // a1=0x08, a2=channel 3, a3=0x01 (bank select MSB), data=5
         let syx = [0x43, 0x10, 0x4c, 0x08, 0x03, 0x01, 5];
         assert_eq!(
-            MidiUtils::analyze_sysex(&syx),
+            MidiUtils::analyze_sysex(&syx)[0],
             AnalyzedMidiMessage::ControllerChange {
                 channel: 3,
                 controller: midi_controllers::BANK_SELECT,
@@ -947,7 +995,7 @@ mod tests {
     fn test_analyze_xg_program_change() {
         let syx = [0x43, 0x10, 0x4c, 0x08, 2, 0x03, 17];
         assert_eq!(
-            MidiUtils::analyze_sysex(&syx),
+            MidiUtils::analyze_sysex(&syx)[0],
             AnalyzedMidiMessage::ProgramChange {
                 channel: 2,
                 value: 17
@@ -959,7 +1007,7 @@ mod tests {
     fn test_analyze_xg_drums_on() {
         let syx = [0x43, 0x10, 0x4c, 0x08, 9, 0x07, 1];
         assert_eq!(
-            MidiUtils::analyze_sysex(&syx),
+            MidiUtils::analyze_sysex(&syx)[0],
             AnalyzedMidiMessage::DrumsOn {
                 channel: 9,
                 is_drum: true
@@ -968,16 +1016,24 @@ mod tests {
     }
 
     #[test]
-    fn test_analyze_xg_invalid_channel_returns_other() {
-        let syx = [0x43, 0x10, 0x4c, 0x08, 16, 0x07, 1];
-        assert_eq!(MidiUtils::analyze_sysex(&syx), AnalyzedMidiMessage::Other);
+    fn test_analyze_xg_part_above_15_is_kept() {
+        // TS 4.4.x has no channel guard: parts 16-31 address the second port
+        let syx = [0x43, 0x10, 0x4c, 0x08, 16, 0x0b, 90];
+        assert_eq!(
+            MidiUtils::analyze_sysex(&syx),
+            vec![AnalyzedMidiMessage::ControllerChange {
+                channel: 16,
+                controller: midi_controllers::MAIN_VOLUME,
+                value: 90
+            }]
+        );
     }
 
     #[test]
     fn test_analyze_xg_reverb_param() {
         let syx = [0x43, 0x10, 0x4c, 0x02, 0x01, 0x00, 0x05];
         assert_eq!(
-            MidiUtils::analyze_sysex(&syx),
+            MidiUtils::analyze_sysex(&syx)[0],
             AnalyzedMidiMessage::ReverbParam
         );
     }
@@ -986,7 +1042,7 @@ mod tests {
     fn test_analyze_xg_drum_setup() {
         let syx = [0x43, 0x10, 0x4c, 0x30, 0x00, 0x00, 0x05];
         assert_eq!(
-            MidiUtils::analyze_sysex(&syx),
+            MidiUtils::analyze_sysex(&syx)[0],
             AnalyzedMidiMessage::DrumSetup
         );
     }
@@ -995,7 +1051,7 @@ mod tests {
     fn test_analyze_xg_master_key_shift() {
         let syx = [0x43, 0x10, 0x4c, 0x00, 0x00, 0x06, 70];
         assert_eq!(
-            MidiUtils::analyze_sysex(&syx),
+            MidiUtils::analyze_sysex(&syx)[0],
             AnalyzedMidiMessage::MasterKeyShift { value: 6 }
         );
     }
@@ -1003,7 +1059,7 @@ mod tests {
     #[test]
     fn test_analyze_xg_wrong_id() {
         let syx = [0x43, 0x10, 0x00, 0x00, 0x00, 0x7e, 0x00];
-        assert_eq!(MidiUtils::analyze_sysex(&syx), AnalyzedMidiMessage::Other);
+        assert_eq!(MidiUtils::analyze_sysex(&syx)[0], AnalyzedMidiMessage::Other);
     }
 
     // ── analyze_rpn ─────────────────────────────────────────────────────────
@@ -1037,12 +1093,18 @@ mod tests {
     // ── analyze_nrpn ────────────────────────────────────────────────────────
 
     #[test]
-    fn test_analyze_nrpn_vibrato_rate_is_drum_setup() {
-        // msb=PART_PARAMETER(1), lsb=vibratoRate(0x08) -> not a "part parameter" case ported below
-        // (only tvfCutoff/tvfResonance/attack/decay/release are ported; vibrato falls to Other)
+    fn test_analyze_nrpn_vibrato_rate_is_controller_change() {
+        // msb=PART_PARAMETER(1), lsb=vibratoRate(0x08) -> vibrato rate CC (76), 7-bit MSB
         let nrpn = ((non_registered_msb::PART_PARAMETER as u16) << 7)
             | non_registered_lsb::VIBRATO_RATE as u16;
-        assert_eq!(MidiUtils::analyze_nrpn(0, nrpn, 0), AnalyzedMidiMessage::Other);
+        assert_eq!(
+            MidiUtils::analyze_nrpn(0, nrpn, 80 << 7),
+            AnalyzedMidiMessage::ControllerChange {
+                channel: 0,
+                controller: midi_controllers::VIBRATO_RATE,
+                value: 80
+            }
+        );
     }
 
     #[test]

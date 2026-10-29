@@ -16,18 +16,17 @@
 ///   `allControllerReset` → `reset` (now carrying the `MIDISystem`), `synthDisplay` →
 ///   `displayMessage`, `masterParameterChange` → `globalParamChange` (now only for the
 ///   global *MIDI* parameters; system-parameter changes fire no event).
-/// - TODO(Task 21, channel restructuring): TS 4.3.0 moved the per-channel callback payload
-///   types (`NoteOnCallback`, `NoteOffCallback`, `ControllerChangeCallback`,
+/// - Not ported (event API, outside the MIDI-to-WAV scope): TS 4.3.0 moved the per-channel
+///   callback payload types (`NoteOnCallback`, `NoteOffCallback`, `ControllerChangeCallback`,
 ///   `ProgramChangeCallback`, `PolyPressureCallback`, `StopAllCallback`, ...) to
 ///   `audio_engine/channel/types.ts` and replaced `channelPropertyChange`/`ChannelProperty`
 ///   with `channelParamChange`/`ChannelMIDIParameterChange`. The Rust equivalents stay here
-///   (with the 4.2.0 payload shapes for the channel-fired ones) until the channel
-///   restructuring lands.
+///   with the 4.2.0 payload shapes. Events do not affect the rendered audio.
 use crate::midi::enums::MidiController;
 use crate::soundbank::basic_soundbank::midi_patch::{MidiPatch, MidiPatchFull};
 use crate::soundbank::types::MIDISystem;
 
-/// Equivalent to: NoteOnCallback
+/// Equivalent to: NoteOnEvent
 #[derive(Clone, Copy, Debug)]
 pub struct NoteOnCallback {
     pub midi_note: u8,
@@ -35,28 +34,28 @@ pub struct NoteOnCallback {
     pub velocity: u8,
 }
 
-/// Equivalent to: NoteOffCallback
+/// Equivalent to: NoteOffEvent
 #[derive(Clone, Copy, Debug)]
 pub struct NoteOffCallback {
     pub midi_note: u8,
     pub channel: u8,
 }
 
-/// Equivalent to: DrumChangeCallback
+/// Not in TS 4.4.0+ (API event only, no effect on the MIDI-to-WAV output).
 #[derive(Clone, Copy, Debug)]
 pub struct DrumChangeCallback {
     pub channel: u8,
     pub is_drum_channel: bool,
 }
 
-/// Equivalent to: ProgramChangeCallback (extends MIDIPatch)
+/// Equivalent to: ProgramChangeEvent (extends MIDIPatchFull)
 #[derive(Clone, Copy, Debug)]
 pub struct ProgramChangeCallback {
     pub patch: MidiPatch,
     pub channel: u8,
 }
 
-/// Equivalent to: ControllerChangeCallback
+/// Equivalent to: ControllerChangeEvent
 #[derive(Clone, Copy, Debug)]
 pub struct ControllerChangeCallback {
     pub channel: u8,
@@ -64,7 +63,7 @@ pub struct ControllerChangeCallback {
     pub controller_value: u8,
 }
 
-/// Equivalent to: MuteChannelCallback
+/// Not in TS 4.4.0+ (API event only, no effect on the MIDI-to-WAV output).
 #[derive(Clone, Copy, Debug)]
 pub struct MuteChannelCallback {
     pub channel: u8,
@@ -83,7 +82,7 @@ pub type PresetList = Vec<PresetListEntry>;
 /// Equivalent to: SynthDisplayCallback
 pub type SynthDisplayCallback = Vec<u8>;
 
-/// Equivalent to: PitchWheelCallback
+/// Not in TS 4.4.0+ (API event only; TS reports it as `channelParamChange`).
 #[derive(Clone, Copy, Debug)]
 pub struct PitchWheelCallback {
     pub channel: u8,
@@ -93,14 +92,14 @@ pub struct PitchWheelCallback {
     pub midi_note: i32,
 }
 
-/// Equivalent to: ChannelPressureCallback
+/// Not in TS 4.4.0+ (API event only; TS reports it as `channelParamChange`).
 #[derive(Clone, Copy, Debug)]
 pub struct ChannelPressureCallback {
     pub channel: u8,
     pub pressure: u8,
 }
 
-/// Equivalent to: PolyPressureCallback
+/// Equivalent to: PolyPressureEvent
 #[derive(Clone, Copy, Debug)]
 pub struct PolyPressureCallback {
     pub channel: u8,
@@ -111,7 +110,7 @@ pub struct PolyPressureCallback {
 /// Equivalent to: SoundBankErrorCallback
 pub type SoundBankErrorCallback = String;
 
-/// Equivalent to: StopAllCallback
+/// Equivalent to: StopAllEvent
 #[derive(Clone, Copy, Debug)]
 pub struct StopAllCallback {
     pub channel: u8,
@@ -121,7 +120,7 @@ pub struct StopAllCallback {
 /// A single global MIDI parameter change (parameter + new value).
 /// TS 4.3.0's `globalParamChange` event payload is `{ parameter, value }` over the
 /// `GlobalMIDIParameter` keys; Rust uses a discriminated union.
-/// Equivalent to: GlobalMIDIParameterChangeCallback
+/// Equivalent to: GlobalMIDIParameterChangeEvent
 #[derive(Clone, Copy, Debug)]
 pub enum GlobalMIDIParameterChangeCallback {
     System(MIDISystem),
@@ -134,7 +133,7 @@ pub enum GlobalMIDIParameterChangeCallback {
 
 /// Channel property snapshot.
 /// Equivalent to: ChannelProperty (removed in TS 4.3.0 — replaced by the channel MIDI
-/// parameter set; kept until the Task 21 channel restructuring, see module doc)
+/// parameter set; the 4.2.0 event payload is kept, see module doc)
 #[derive(Clone, Copy, Debug)]
 pub struct ChannelProperty {
     pub voices_amount: u32,
@@ -148,7 +147,7 @@ pub struct ChannelProperty {
 }
 
 /// Equivalent to: ChannelPropertyChangeCallback (removed in TS 4.3.0 — replaced by
-/// `channelParamChange`/`ChannelMIDIParameterChange`; kept until Task 21, see module doc)
+/// `channelParamChange`/`ChannelMIDIParameterChange`; kept, see module doc)
 #[derive(Clone, Copy, Debug)]
 pub struct ChannelPropertyChangeCallback {
     pub channel: u8,
@@ -156,7 +155,7 @@ pub struct ChannelPropertyChangeCallback {
 }
 
 /// The payload of an `effectChange` event.
-/// Equivalent to: SynthProcessorEventData["effectChange"] (partial — the TS payload also
+/// Equivalent to: EffectChangeEvent (partial — the TS payload also
 /// distinguishes the effect kind via a string union)
 #[derive(Clone, Copy, Debug)]
 pub struct EffectChangeCallback {
@@ -178,7 +177,7 @@ pub enum EffectKind {
 }
 
 /// All synthesizer processor events (discriminated union).
-/// Equivalent to: SynthProcessorEvent
+/// Equivalent to: SynthesizerEventCallback
 #[derive(Clone, Debug)]
 pub enum SynthProcessorEvent {
     NoteOn(NoteOnCallback),
@@ -205,7 +204,7 @@ pub enum SynthProcessorEvent {
     GlobalParamChange(GlobalMIDIParameterChangeCallback),
     /// Equivalent to: effectChange
     EffectChange(EffectChangeCallback),
-    /// Kept from 4.2.0 until Task 21 (TS 4.3.0: channelParamChange) — see module doc.
+    /// Kept from 4.2.0 (TS 4.3.0: channelParamChange) — see module doc.
     ChannelPropertyChange(ChannelPropertyChangeCallback),
 }
 

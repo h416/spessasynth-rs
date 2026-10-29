@@ -18,8 +18,8 @@
 ///
 /// ## applyInstrumentZones
 /// TypeScript: directly calls `SoundFontInstrument`'s `createSoundFontZone` / `globalZone` methods.
-/// Rust: since `SoundFontInstrument` is not yet ported, the required operations are abstracted
-/// into the `SoundFontInstrumentZoneSink` trait. Implement this trait when porting `SoundFontInstrument`.
+/// Rust: the required operations are abstracted into the `SoundFontInstrumentZoneSink` trait,
+/// implemented by `SoundFontInstrument` (`instruments.rs`).
 ///
 /// ## samples parameter
 /// TypeScript: passes `BasicSample[]` and indexes into it.
@@ -150,7 +150,7 @@ pub fn apply_instrument_zones<I: SoundFontInstrumentZoneSink>(
     let mut gen_index: usize = 0;
 
     for (instrument_idx, instrument) in instruments.iter_mut().enumerate() {
-        for _ in 0..instrument.zones_count() {
+        for i in 0..instrument.zones_count() {
             // Extract the generators slice
             // Equivalent to: instrumentGenerators.slice(gensStart, gensEnd)
             let gens_start = indexes.gen_ndx[gen_index] as usize;
@@ -173,7 +173,8 @@ pub fn apply_instrument_zones<I: SoundFontInstrumentZoneSink>(
                     Ok(zone) => instrument.push_zone(zone.0),
                     Err(e) => SpessaLog::warn(&e),
                 }
-            } else {
+            } else if i == 0 {
+                // Global zone, only the first zone may be global (4.4.0)
                 // Equivalent to: instrument.globalZone.addGenerators(...gens)
                 //                instrument.globalZone.addModulators(...mods)
                 let global = instrument.global_zone_mut();

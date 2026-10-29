@@ -5,12 +5,12 @@
 ///
 /// TS 4.3.0 dropped the function-local "flatten all track events and sort by tick" step in
 /// favor of iterating `midi.timeline` (a flattened, time-sorted `{tr, ev}` index list computed
-/// once by `BasicMIDI.flush()`, ported in Task 17). This Rust file follows suit: `event_index`
+/// once by `BasicMIDI.flush()`). This Rust file follows suit: `event_index`
 /// walks `midi.timeline` and dereferences `midi.tracks[e.tr].events[e.ev]` instead of maintaining
 /// its own locally-sorted `Vec<&MidiMessage>`.
 use crate::midi::basic_midi::BasicMidi;
 use crate::midi::types::NoteTime;
-use crate::synthesizer::audio_engine::synth_constants::DEFAULT_PERCUSSION;
+use crate::synthesizer::audio_engine::synth_constants::MIDI_DRUM_CHANNEL;
 use crate::utils::byte_functions::big_endian::read_big_endian;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -36,7 +36,7 @@ fn note_off(
     {
         let (_, idx) = unfinished_notes[channel][pos];
         let time = elapsed_time - note_times[channel][idx].start;
-        note_times[channel][idx].length = if channel == DEFAULT_PERCUSSION as usize {
+        note_times[channel][idx].length = if channel == MIDI_DRUM_CHANNEL as usize {
             f64::max(time, min_drum_length)
         } else {
             time
@@ -153,7 +153,7 @@ pub fn get_note_times_internal(midi: &BasicMidi, min_drum_length: f64) -> Vec<Ve
         for channel in 0..16usize {
             for &(_, idx) in &unfinished_notes[channel] {
                 let time = elapsed_time - note_times[channel][idx].start;
-                note_times[channel][idx].length = if channel == DEFAULT_PERCUSSION as usize {
+                note_times[channel][idx].length = if channel == MIDI_DRUM_CHANNEL as usize {
                     f64::max(time, min_drum_length)
                 } else {
                     time

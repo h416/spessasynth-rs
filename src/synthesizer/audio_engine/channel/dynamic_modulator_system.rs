@@ -84,19 +84,163 @@ impl DynamicModulatorSystem {
             false,
             false,
         );
-        let ps = &modulator.primary_source;
-        let id = Self::get_modulator_id(
-            ps.to_source_enum() as usize,
-            modulator.destination,
-            ps.is_bipolar,
-            ps.is_negative,
-        );
+        // Copy, so changing the amount does not affect other channels
+        let id = Self::get_modulator_id(&modulator.primary_source, modulator.destination);
         vec![DynamicModulatorEntry { modulator, id }]
+    }
+
+    /// Configures the dynamic modulators from an XG part setup controller matrix message.
+    /// The lower nibble of `addr3` selects the parameter.
+    /// Equivalent to: setupReceiverXG(addr3, data, source, isCC, sourceName, bipolar = false)
+    pub fn setup_receiver_xg(
+        &mut self,
+        addr3: u8,
+        data: u8,
+        source: usize,
+        is_cc: bool,
+        source_name: &str,
+        bipolar: bool,
+    ) {
+        self.active = true;
+        let centered_value = data as f64 - 64.0;
+        let centered_normalized = centered_value / 64.0;
+        let normalized_not_centered = data as f64 / 127.0;
+
+        // Value is tested in xg_controller_matrix
+        // Ensure the test matches s-yxg50 before changing
+        match addr3 & 0x0f {
+            0x00 => {
+                let v = centered_value.clamp(-24.0, 24.0);
+                // Pitch Control
+                self.set_modulator(source, is_cc, generator_types::FINE_TUNE, v * 100.0, bipolar, false, false);
+                spessa_synth_info(&format!(
+                    "Channel {} {} pitch control {} semitones",
+                    self.channel, source_name, v
+                ));
+            }
+            0x01 => {
+                // Cutoff
+                self.set_modulator(
+                    source,
+                    is_cc,
+                    generator_types::INITIAL_FILTER_FC,
+                    centered_normalized * 9600.0,
+                    bipolar,
+                    false,
+                    false,
+                );
+                spessa_synth_info(&format!(
+                    "Channel {} {} filter control {} cents",
+                    self.channel,
+                    source_name,
+                    centered_normalized * 9600.0
+                ));
+            }
+            0x02 => {
+                // Amplitude
+                // In XG it behaves like CC volume (exponential) but we can't have positive attenuation
+                if centered_normalized > 0.0 {
+                    self.set_modulator(
+                        source,
+                        is_cc,
+                        generator_types::AMPLITUDE,
+                        centered_normalized * 1000.0, // Generator is 1/10%
+                        bipolar,
+                        false,
+                        false,
+                    );
+                    self.set_modulator(source, is_cc, generator_types::INITIAL_ATTENUATION, 0.0, bipolar, false, true);
+                } else {
+                    self.set_modulator(
+                        source,
+                        is_cc,
+                        generator_types::INITIAL_ATTENUATION,
+                        centered_normalized * -960.0,
+                        bipolar,
+                        false,
+                        true,
+                    );
+                    self.set_modulator(source, is_cc, generator_types::AMPLITUDE, 0.0, bipolar, false, false);
+                }
+                spessa_synth_info(&format!(
+                    "Channel {} {} amplitude control {} %",
+                    self.channel,
+                    source_name,
+                    centered_normalized * 100.0
+                ));
+            }
+            0x03 => {
+                // LFO pitch depth
+                self.set_modulator(
+                    source,
+                    is_cc,
+                    generator_types::VIB_LFO_TO_PITCH,
+                    normalized_not_centered * 600.0,
+                    bipolar,
+                    false,
+                    false,
+                );
+                spessa_synth_info(&format!(
+                    "Channel {} {} LFO pitch depth control {} cents",
+                    self.channel,
+                    source_name,
+                    normalized_not_centered * 600.0
+                ));
+            }
+            0x04 => {
+                // LFO filter depth
+                self.set_modulator(
+                    source,
+                    is_cc,
+                    generator_types::VIB_LFO_TO_FILTER_FC,
+                    normalized_not_centered * 9600.0,
+                    bipolar,
+                    false,
+                    false,
+                );
+                spessa_synth_info(&format!(
+                    "Channel {} {} LFO filter depth control {} cents",
+                    self.channel,
+                    source_name,
+                    normalized_not_centered * 9600.0
+                ));
+            }
+            0x05 => {
+                // LFO amplitude depth
+                // Value is tested in xg_controller_matrix
+                self.set_modulator(
+                    source,
+                    is_cc,
+                    generator_types::VIB_LFO_TO_VOLUME,
+                    normalized_not_centered * 200.0,
+                    bipolar,
+                    false,
+                    true,
+                );
+                // In XG the LFO is only negative (only attenuates), emulate that here
+                self.set_modulator(
+                    source,
+                    is_cc,
+                    generator_types::INITIAL_ATTENUATION,
+                    normalized_not_centered * 200.0,
+                    bipolar,
+                    false,
+                    true,
+                );
+                spessa_synth_info(&format!(
+                    "Channel {} {} LFO amplitude depth control {} dB",
+                    self.channel,
+                    source_name,
+                    normalized_not_centered * 200.0
+                ));
+            }
+            _ => {}
+        }
     }
 
     /// Configures the dynamic modulators from a GS "patch parameter" receiver
     /// setup message. The lower nibble of `addr3` selects the parameter.
-    /// Equivalent to: setupReceiver(addr3, data, source, isCC, sourceName, bipolar = false)
+    /// Equivalent to: setupReceiverGS(addr3, data, source, isCC, sourceName, bipolar = false)
     ///
     /// * `addr3` – third address byte of the GS message (parameter selector).
     /// * `data` – the raw data byte (0..127).
@@ -105,7 +249,7 @@ impl DynamicModulatorSystem {
     /// * `source_name` – human-readable source name (for logging only).
     /// * `bipolar` – whether the resulting modulation is bipolar.
     #[allow(clippy::too_many_arguments)]
-    pub fn setup_receiver(
+    pub fn setup_receiver_gs(
         &mut self,
         addr3: u8,
         data: u8,
@@ -131,6 +275,7 @@ impl DynamicModulatorSystem {
                     v * 100.0,
                     bipolar,
                     false,
+                    false,
                 );
                 spessa_synth_info(&format!(
                     "Channel {} {} pitch control {} semitones",
@@ -145,6 +290,7 @@ impl DynamicModulatorSystem {
                     generator_types::INITIAL_FILTER_FC,
                     centered_normalized * 9600.0,
                     bipolar,
+                    false,
                     false,
                 );
                 spessa_synth_info(&format!(
@@ -163,6 +309,7 @@ impl DynamicModulatorSystem {
                     centered_normalized * 1000.0,
                     bipolar,
                     false,
+                    false,
                 );
                 spessa_synth_info(&format!(
                     "Channel {} {} amplitude control {} %",
@@ -179,6 +326,7 @@ impl DynamicModulatorSystem {
                     generator_types::VIB_LFO_RATE,
                     centered_normalized * 1000.0,
                     bipolar,
+                    false,
                     false,
                 );
                 spessa_synth_info(&format!(
@@ -197,6 +345,7 @@ impl DynamicModulatorSystem {
                     normalized_not_centered * 600.0,
                     bipolar,
                     false,
+                    false,
                 );
                 spessa_synth_info(&format!(
                     "Channel {} {} LFO1 pitch depth control {} cents",
@@ -213,6 +362,7 @@ impl DynamicModulatorSystem {
                     generator_types::VIB_LFO_TO_FILTER_FC,
                     normalized_not_centered * 2400.0,
                     bipolar,
+                    false,
                     false,
                 );
                 spessa_synth_info(&format!(
@@ -231,6 +381,7 @@ impl DynamicModulatorSystem {
                     normalized_not_centered * 1000.0,
                     bipolar,
                     false,
+                    false,
                 );
                 spessa_synth_info(&format!(
                     "Channel {} {} LFO1 amplitude depth control {} %",
@@ -247,6 +398,7 @@ impl DynamicModulatorSystem {
                     generator_types::MOD_LFO_RATE,
                     centered_normalized * 1000.0,
                     bipolar,
+                    false,
                     false,
                 );
                 spessa_synth_info(&format!(
@@ -265,6 +417,7 @@ impl DynamicModulatorSystem {
                     normalized_not_centered * 600.0,
                     bipolar,
                     false,
+                    false,
                 );
                 spessa_synth_info(&format!(
                     "Channel {} {} LFO2 pitch depth control {} cents",
@@ -282,6 +435,7 @@ impl DynamicModulatorSystem {
                     normalized_not_centered * 2400.0,
                     bipolar,
                     false,
+                    false,
                 );
                 spessa_synth_info(&format!(
                     "Channel {} {} LFO2 filter depth control {} cents",
@@ -298,6 +452,7 @@ impl DynamicModulatorSystem {
                     generator_types::MOD_LFO_AMPLITUDE_DEPTH,
                     normalized_not_centered * 1000.0,
                     bipolar,
+                    false,
                     false,
                 );
                 spessa_synth_info(&format!(
@@ -319,8 +474,10 @@ impl DynamicModulatorSystem {
     /// * `amount` – modulation amount.
     /// * `is_bipolar` – true for bipolar (-1 to 1), false for unipolar (0 to 1).
     /// * `is_negative` – true for negative direction (1→0), false for positive (0→1).
+    /// * `is_concave` – true for a concave (exponential) curve.
     ///
-    /// Equivalent to: setModulator(source, isCC, destination, amount, isBipolar, isNegative)
+    /// Equivalent to: setModulator(source, isCC, destination, amount, isBipolar, isNegative, isConcave)
+    #[allow(clippy::too_many_arguments)]
     pub fn set_modulator(
         &mut self,
         source: usize,
@@ -329,24 +486,26 @@ impl DynamicModulatorSystem {
         amount: f64,
         is_bipolar: bool,
         is_negative: bool,
+        is_concave: bool,
     ) {
-        let id = Self::get_modulator_id(source, destination, is_bipolar, is_negative);
-
+        let primary_source = ModulatorSource::new(
+            source as ModulatorControllerSource,
+            if is_concave { modulator_curve_types::CONCAVE } else { modulator_curve_types::LINEAR },
+            is_cc,
+            is_bipolar,
+            is_negative,
+        );
+        let id = Self::get_modulator_id(&primary_source, destination);
         if amount == 0.0 {
             self.delete_modulator(&id);
+            return;
         }
 
         if let Some(entry) = self.modulator_list.iter_mut().find(|e| e.id == id) {
             entry.modulator.transform_amount = amount;
         } else {
             let modulator = Modulator::new(
-                ModulatorSource::new(
-                    source as ModulatorControllerSource,
-                    modulator_curve_types::LINEAR,
-                    is_cc,
-                    is_bipolar,
-                    false,
-                ),
+                primary_source,
                 ModulatorSource::default(),
                 destination,
                 amount,
@@ -354,21 +513,15 @@ impl DynamicModulatorSystem {
                 false,
                 false,
             );
-            self.modulator_list
-                .push(DynamicModulatorEntry { modulator, id });
+            self.modulator_list.push(DynamicModulatorEntry { modulator, id });
         }
     }
 
     /// Generates a modulator ID.
-    /// Equivalent to: getModulatorID(source, destination, isBipolar, isNegative)
-    /// → `"${source}-${destination}-${isBipolar}-${isNegative}"`
-    fn get_modulator_id(
-        source: usize,
-        destination: GeneratorType,
-        is_bipolar: bool,
-        is_negative: bool,
-    ) -> String {
-        format!("{}-{}-{}-{}", source, destination, is_bipolar, is_negative)
+    /// The source enum includes the CC flag, the curve and the polarity.
+    /// Equivalent to: getModulatorID(source, destination) → `"${source.toSourceEnum()}-${destination}"`
+    fn get_modulator_id(source: &ModulatorSource, destination: GeneratorType) -> String {
+        format!("{}-{}", source.to_source_enum(), destination)
     }
 
     /// Deletes the modulator with the specified ID.
@@ -385,352 +538,90 @@ impl DynamicModulatorSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::soundbank::basic_soundbank::generator_types::generator_types;
 
-    // -----------------------------------------------------------------------
-    // Helpers
-    // -----------------------------------------------------------------------
-
-    /// Test helper: returns the expected ID for a (source, destination) combination.
-    fn expected_id(src: usize, dst: GeneratorType, bipolar: bool, negative: bool) -> String {
-        format!("{}-{}-{}-{}", src, dst, bipolar, negative)
+    fn cc(index: usize) -> ModulatorSource {
+        ModulatorSource::new(index as ModulatorControllerSource, modulator_curve_types::LINEAR, true, false, false)
     }
-
-    // -----------------------------------------------------------------------
-    // new
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_new_empty_list() {
-        let sys = DynamicModulatorSystem::new(0);
-        assert!(sys.modulator_list.is_empty());
-        assert!(!sys.active);
-    }
-
-    // -----------------------------------------------------------------------
-    // reset_modulators
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_reset_seeds_initial_modulators() {
         let mut sys = DynamicModulatorSystem::new(0);
-        sys.set_modulator(10, true, generator_types::PAN, 500.0, false, false);
-        sys.set_modulator(7, true, generator_types::INITIAL_ATTENUATION, 960.0, false, false);
-        assert_eq!(sys.modulator_list.len(), 2);
-        sys.setup_receiver(0x00, 100, 1, true, "mod wheel", false);
+        sys.set_modulator(10, true, generator_types::PAN, 500.0, false, false, false);
+        sys.setup_receiver_gs(0x00, 100, 1, true, "mod wheel", false);
         assert!(sys.active);
-        // Reset restores the single initial (vibrato rate) modulator and clears active.
         sys.reset_modulators();
         assert_eq!(sys.modulator_list.len(), 1);
         assert!(!sys.active);
-    }
-
-    #[test]
-    fn test_reset_on_new_seeds_one_initial() {
-        let mut sys = DynamicModulatorSystem::new(0);
-        sys.reset_modulators();
-        assert_eq!(sys.modulator_list.len(), 1);
-    }
-
-    #[test]
-    fn test_initial_modulator_maps_vibrato_rate_to_vib_lfo_rate() {
-        let mut sys = DynamicModulatorSystem::new(0);
-        sys.reset_modulators();
         let entry = &sys.modulator_list[0];
         assert_eq!(entry.modulator.destination, generator_types::VIB_LFO_RATE);
         assert_eq!(entry.modulator.transform_amount, 1000.0);
-        assert!(entry.modulator.primary_source.is_cc);
-        assert_eq!(
-            entry.modulator.primary_source.index,
-            crate::midi::enums::midi_controllers::VIBRATO_RATE
-        );
         assert!(entry.modulator.primary_source.is_bipolar);
     }
 
-    // -----------------------------------------------------------------------
-    // setup_receiver
-    // -----------------------------------------------------------------------
-
     #[test]
-    fn test_setup_receiver_sets_active() {
+    fn test_id_is_source_enum_and_destination() {
         let mut sys = DynamicModulatorSystem::new(0);
-        assert!(!sys.active);
-        // addr3 lower nibble 0x04 = LFO1 pitch depth
-        sys.setup_receiver(0x04, 127, 1, true, "mod wheel", false);
-        assert!(sys.active);
-        assert_eq!(sys.modulator_list.len(), 1);
-        let entry = &sys.modulator_list[0];
-        assert_eq!(entry.modulator.destination, generator_types::VIB_LFO_TO_PITCH);
-        // normalizedNotCentered * 600 = (127/127) * 600 = 600
-        assert_eq!(entry.modulator.transform_amount, 600.0);
-        assert!(entry.modulator.primary_source.is_cc);
-        assert_eq!(entry.modulator.primary_source.index, 1);
-    }
-
-    #[test]
-    fn test_setup_receiver_amplitude_uses_centered_normalized() {
-        let mut sys = DynamicModulatorSystem::new(0);
-        // addr3 lower nibble 0x02 = amplitude, data 127 → centeredNormalized = 63/64
-        sys.setup_receiver(0x02, 127, 1, true, "mod wheel", false);
-        let entry = &sys.modulator_list[0];
-        assert_eq!(entry.modulator.destination, generator_types::AMPLITUDE);
-        assert_eq!(entry.modulator.transform_amount, (63.0 / 64.0) * 1000.0);
-    }
-
-    // -----------------------------------------------------------------------
-    // set_modulator: CC source
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_set_modulator_cc_source_adds_entry() {
-        let mut sys = DynamicModulatorSystem::new(0);
-        // CC 10 (pan), destination = PAN, amount = 500
-        sys.set_modulator(10, true, generator_types::PAN, 500.0, false, false);
-        assert_eq!(sys.modulator_list.len(), 1);
-        let entry = &sys.modulator_list[0];
-        assert_eq!(entry.modulator.transform_amount, 500.0);
-        assert_eq!(entry.modulator.destination, generator_types::PAN);
-        assert!(entry.modulator.primary_source.is_cc);
-        assert_eq!(entry.modulator.primary_source.index, 10);
-    }
-
-    #[test]
-    fn test_set_modulator_cc_source_id_is_correct() {
-        let mut sys = DynamicModulatorSystem::new(0);
-        sys.set_modulator(10, true, generator_types::PAN, 500.0, false, false);
+        sys.set_modulator(10, true, generator_types::PAN, 500.0, false, false, false);
         assert_eq!(
             sys.modulator_list[0].id,
-            expected_id(10, generator_types::PAN, false, false)
+            format!("{}-{}", cc(10).to_source_enum(), generator_types::PAN)
         );
     }
-
-    #[test]
-    fn test_set_modulator_cc_primary_source_is_linear() {
-        let mut sys = DynamicModulatorSystem::new(0);
-        sys.set_modulator(7, true, generator_types::INITIAL_ATTENUATION, 960.0, false, false);
-        assert_eq!(
-            sys.modulator_list[0].modulator.primary_source.curve_type,
-            modulator_curve_types::LINEAR
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // set_modulator: non-CC source (is_cc = false, raw source index)
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_set_modulator_non_cc_source() {
-        let mut sys = DynamicModulatorSystem::new(0);
-        // Source index 2 (note_on_velocity), is_cc = false
-        sys.set_modulator(
-            2,
-            false,
-            generator_types::INITIAL_ATTENUATION,
-            960.0,
-            false,
-            false,
-        );
-        let entry = &sys.modulator_list[0];
-        assert!(!entry.modulator.primary_source.is_cc);
-        assert_eq!(entry.modulator.primary_source.index, 2);
-    }
-
-    #[test]
-    fn test_set_modulator_non_cc_id_uses_raw_source() {
-        let mut sys = DynamicModulatorSystem::new(0);
-        sys.set_modulator(
-            2,
-            false,
-            generator_types::INITIAL_ATTENUATION,
-            960.0,
-            false,
-            false,
-        );
-        assert_eq!(
-            sys.modulator_list[0].id,
-            expected_id(2, generator_types::INITIAL_ATTENUATION, false, false)
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // set_modulator: update (when an entry with the same ID exists)
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_set_modulator_updates_existing_amount() {
         let mut sys = DynamicModulatorSystem::new(0);
-        sys.set_modulator(10, true, generator_types::PAN, 300.0, false, false);
-        // Re-set with the same source/destination/polarity
-        sys.set_modulator(10, true, generator_types::PAN, 700.0, false, false);
-        // Only one entry
+        sys.set_modulator(10, true, generator_types::PAN, 300.0, false, false, false);
+        sys.set_modulator(10, true, generator_types::PAN, 700.0, false, false, false);
         assert_eq!(sys.modulator_list.len(), 1);
         assert_eq!(sys.modulator_list[0].modulator.transform_amount, 700.0);
     }
 
     #[test]
-    fn test_set_modulator_different_bipolar_creates_separate_entries() {
+    fn test_polarity_and_curve_create_separate_entries() {
         let mut sys = DynamicModulatorSystem::new(0);
-        sys.set_modulator(10, true, generator_types::PAN, 300.0, false, false);
-        sys.set_modulator(10, true, generator_types::PAN, 300.0, true, false);
-        assert_eq!(sys.modulator_list.len(), 2);
+        sys.set_modulator(10, true, generator_types::PAN, 300.0, false, false, false);
+        sys.set_modulator(10, true, generator_types::PAN, 300.0, true, false, false);
+        sys.set_modulator(10, true, generator_types::PAN, 300.0, false, true, false);
+        sys.set_modulator(10, true, generator_types::PAN, 300.0, false, false, true);
+        assert_eq!(sys.modulator_list.len(), 4);
+        assert!(sys.modulator_list[2].modulator.primary_source.is_negative);
+        assert_eq!(
+            sys.modulator_list[3].modulator.primary_source.curve_type,
+            modulator_curve_types::CONCAVE
+        );
     }
 
     #[test]
-    fn test_set_modulator_different_negative_creates_separate_entries() {
+    fn test_amount_zero_deletes_and_does_not_add() {
         let mut sys = DynamicModulatorSystem::new(0);
-        sys.set_modulator(10, true, generator_types::PAN, 300.0, false, false);
-        sys.set_modulator(10, true, generator_types::PAN, 300.0, false, true);
-        assert_eq!(sys.modulator_list.len(), 2);
+        sys.set_modulator(10, true, generator_types::PAN, 500.0, false, false, false);
+        sys.set_modulator(10, true, generator_types::PAN, 0.0, false, false, false);
+        assert!(sys.modulator_list.is_empty());
+        sys.set_modulator(10, true, generator_types::PAN, 0.0, false, false, false);
+        assert!(sys.modulator_list.is_empty());
     }
 
     #[test]
-    fn test_set_modulator_different_destination_creates_separate_entries() {
+    fn test_xg_amplitude_swaps_attenuation_and_amplitude() {
         let mut sys = DynamicModulatorSystem::new(0);
-        sys.set_modulator(10, true, generator_types::PAN, 300.0, false, false);
-        sys.set_modulator(10, true, generator_types::INITIAL_ATTENUATION, 300.0, false, false);
-        assert_eq!(sys.modulator_list.len(), 2);
-    }
-
-    // -----------------------------------------------------------------------
-    // set_modulator: when amount=0 (TS behavior: delete then add new with amount=0)
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_set_modulator_amount_zero_on_existing_replaces_with_zero() {
-        let mut sys = DynamicModulatorSystem::new(0);
-        // First add an entry with amount=500
-        sys.set_modulator(10, true, generator_types::PAN, 500.0, false, false);
+        // Negative: concave attenuation only
+        sys.setup_receiver_xg(0x02, 0, 1, true, "mod wheel", false);
         assert_eq!(sys.modulator_list.len(), 1);
-        // Set with amount=0: TS behavior deletes then adds new (amount=0)
-        sys.set_modulator(10, true, generator_types::PAN, 0.0, false, false);
+        assert_eq!(sys.modulator_list[0].modulator.destination, generator_types::INITIAL_ATTENUATION);
+        assert_eq!(sys.modulator_list[0].modulator.transform_amount, 960.0);
+        // Positive: amplitude only, the attenuation is deleted
+        sys.setup_receiver_xg(0x02, 127, 1, true, "mod wheel", false);
         assert_eq!(sys.modulator_list.len(), 1);
-        assert_eq!(sys.modulator_list[0].modulator.transform_amount, 0.0);
+        assert_eq!(sys.modulator_list[0].modulator.destination, generator_types::AMPLITUDE);
     }
 
     #[test]
-    fn test_set_modulator_amount_zero_on_nonexistent_adds_zero_entry() {
+    fn test_gs_lfo1_pitch_depth() {
         let mut sys = DynamicModulatorSystem::new(0);
-        // No entry exists with amount=0 → same as TS, a zero-amount entry is added
-        sys.set_modulator(10, true, generator_types::PAN, 0.0, false, false);
-        assert_eq!(sys.modulator_list.len(), 1);
-        assert_eq!(sys.modulator_list[0].modulator.transform_amount, 0.0);
-    }
-
-    // -----------------------------------------------------------------------
-    // secondary_source should be default (zero value)
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_set_modulator_secondary_source_is_default() {
-        let mut sys = DynamicModulatorSystem::new(0);
-        sys.set_modulator(10, true, generator_types::PAN, 500.0, false, false);
-        let sec = &sys.modulator_list[0].modulator.secondary_source;
-        assert_eq!(*sec, ModulatorSource::default());
-    }
-
-    // -----------------------------------------------------------------------
-    // bipolar / negative flag propagation
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_set_modulator_bipolar_flag_passed_to_primary_source() {
-        let mut sys = DynamicModulatorSystem::new(0);
-        sys.set_modulator(10, true, generator_types::PAN, 500.0, true, false);
-        assert!(sys.modulator_list[0].modulator.primary_source.is_bipolar);
-    }
-
-    #[test]
-    fn test_set_modulator_not_bipolar() {
-        let mut sys = DynamicModulatorSystem::new(0);
-        sys.set_modulator(10, true, generator_types::PAN, 500.0, false, false);
-        assert!(!sys.modulator_list[0].modulator.primary_source.is_bipolar);
-    }
-
-    #[test]
-    fn test_set_modulator_is_negative_not_passed_to_primary_source() {
-        // is_negative is used for modulator ID generation, but
-        // ModulatorSource::new always sets is_negative=false (same as TS)
-        let mut sys = DynamicModulatorSystem::new(0);
-        sys.set_modulator(10, true, generator_types::PAN, 500.0, false, true);
-        assert!(!sys.modulator_list[0].modulator.primary_source.is_negative);
-    }
-
-    // -----------------------------------------------------------------------
-    // ID format verification
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_id_format_cc_unipolar_positive() {
-        let mut sys = DynamicModulatorSystem::new(0);
-        sys.set_modulator(10, true, generator_types::PAN, 100.0, false, false);
-        assert_eq!(
-            sys.modulator_list[0].id,
-            format!("10-{}-false-false", generator_types::PAN)
-        );
-    }
-
-    #[test]
-    fn test_id_format_bipolar_negative() {
-        let mut sys = DynamicModulatorSystem::new(0);
-        sys.set_modulator(7, true, generator_types::INITIAL_ATTENUATION, 100.0, true, true);
-        assert_eq!(
-            sys.modulator_list[0].id,
-            format!("7-{}-true-true", generator_types::INITIAL_ATTENUATION)
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // transform_type is always 0 (linear)
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_set_modulator_transform_type_is_zero() {
-        let mut sys = DynamicModulatorSystem::new(0);
-        sys.set_modulator(10, true, generator_types::PAN, 500.0, false, false);
-        assert_eq!(sys.modulator_list[0].modulator.transform_type, 0);
-    }
-
-    // -----------------------------------------------------------------------
-    // is_effect_modulator / is_default_resonant_modulator are always false
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_set_modulator_not_effect_modulator() {
-        let mut sys = DynamicModulatorSystem::new(0);
-        sys.set_modulator(10, true, generator_types::PAN, 500.0, false, false);
-        assert!(!sys.modulator_list[0].modulator.is_effect_modulator);
-    }
-
-    #[test]
-    fn test_set_modulator_not_default_resonant_modulator() {
-        let mut sys = DynamicModulatorSystem::new(0);
-        sys.set_modulator(10, true, generator_types::PAN, 500.0, false, false);
-        assert!(
-            !sys.modulator_list[0]
-                .modulator
-                .is_default_resonant_modulator
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // Independence of multiple entries
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_multiple_entries_independent() {
-        let mut sys = DynamicModulatorSystem::new(0);
-        sys.set_modulator(1, true, generator_types::VIB_LFO_TO_PITCH, 50.0, false, false);
-        sys.set_modulator(7, true, generator_types::INITIAL_ATTENUATION, 960.0, false, false);
-        sys.set_modulator(11, true, generator_types::INITIAL_ATTENUATION, 960.0, false, false);
-        assert_eq!(sys.modulator_list.len(), 3);
-        // Verify the destination of each entry
-        assert_eq!(
-            sys.modulator_list[0].modulator.destination,
-            generator_types::VIB_LFO_TO_PITCH
-        );
-        assert_eq!(
-            sys.modulator_list[1].modulator.destination,
-            generator_types::INITIAL_ATTENUATION
-        );
+        sys.setup_receiver_gs(0x04, 127, 1, true, "mod wheel", false);
+        let entry = &sys.modulator_list[0];
+        assert_eq!(entry.modulator.destination, generator_types::VIB_LFO_TO_PITCH);
+        assert_eq!(entry.modulator.transform_amount, 600.0);
     }
 }

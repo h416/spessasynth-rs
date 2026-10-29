@@ -48,7 +48,7 @@ mod tests {
         }
         RIFFChunk::new(
             "pbag".to_string(),
-            bytes.len() as u32,
+            bytes.len(),
             IndexedByteArray::from_vec(bytes),
         )
     }
