@@ -1,6 +1,7 @@
-/// soundfont.rs
-/// purpose: parses a SoundFont2 (.sf2 / .sf3 / .sf2pack) file into a BasicSoundBank.
-/// Ported from: src/soundbank/soundfont/read/soundfont.ts (spessasynth_core 4.3.0)
+//! soundfont.rs
+//! purpose: parses a SoundFont2 (.sf2 / .sf3 / .sf2pack) file into a BasicSoundBank.
+//! Ported from: src/soundbank/soundfont/read/soundfont.ts (spessasynth_core 4.3.0)
+
 use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::soundbank::basic_soundbank::modulator::{DecodedModulator, Modulator};

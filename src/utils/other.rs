@@ -1,10 +1,11 @@
-/// other.rs
-/// purpose: Miscellaneous utility functions.
-/// Ported from: src/utils/other.ts (spessasynth_core 4.3.0)
-///
-/// Note: TS 4.3.0 renamed `consoleColors` to `ConsoleColors` (naming-only, values unchanged).
-/// Rust already uses the idiomatic `console_colors` module with SCREAMING_SNAKE_CASE constants,
-/// so no change was needed for that rename.
+//! other.rs
+//! purpose: Miscellaneous utility functions.
+//! Ported from: src/utils/other.ts (spessasynth_core 4.3.0)
+//!
+//! Note: TS 4.3.0 renamed `consoleColors` to `ConsoleColors` (naming-only, values unchanged).
+//! Rust already uses the idiomatic `console_colors` module with SCREAMING_SNAKE_CASE constants,
+//! so no change was needed for that rename.
+
 /// Seedable, deterministic random generator (new in 4.3.16).
 /// Source - https://stackoverflow.com/a/47593316
 ///

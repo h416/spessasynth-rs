@@ -1,36 +1,37 @@
-/// processor.rs
-/// purpose: SpessaSynthProcessor - the main public API wrapping SynthesizerCore.
-/// Ported from: src/synthesizer/processor.ts (spessasynth_core 4.3.0)
-///
-/// # Design note
-/// TypeScript's SpessaSynthProcessor wraps SynthesizerCore and adds:
-///   - savedSnapshot: re-applied after embedded sound bank changes
-///   - onEventCall / onMissingPreset: callback fields
-///
-/// In Rust, the event callback is owned by SynthesizerCore directly.
-/// onMissingPreset is omitted (SynthesizerCore does not call it in the Rust port).
-///
-/// Additional impl SynthesizerCore blocks are defined here for channel-level
-/// wrapper methods and MIDI message dispatch (process_message), since those
-/// belong to synthesizer_core.ts but require access to the synthesizer state
-/// that is most naturally expressed as SynthesizerCore methods.
-///
-/// # Changes from 4.2.0 (reviewed against the 4.3.0 diff)
-/// - `currentSynthTime` → `currentTime` (pure rename; same `synthCore.currentTime`).
-/// - `totalVoicesAmount` → `voiceCount`.
-/// - `resetAllControllers(system = DEFAULT_SYNTH_MODE)` → `reset()` (no argument; the core's
-///   `reset(system)` keeps the parameter).
-/// - `clearEmbeddedBank` → `clearEmbeddedSoundBank`.
-/// - `applySynthesizerSnapshot` → `applySnapshot` (now via the free-standing
-///   `applySnapshot`/`getSynthesizerSnapshot` core functions; no post-apply "Finished
-///   applying snapshot!" log).
-/// - `setMasterParameter`/`getMasterParameter`/`getAllMasterParameters` →
-///   `setSystemParameter` + read-only `midiParameters`/`systemParameters` getters
-///   (replacing the `enableEffects`/`enableEventSystem` get/set pairs).
-/// - `getInsertionSnapshot` public wrapper removed (became protected on the core).
-/// - `processMessage` lost its `force` parameter.
-/// - `killVoices` (deprecated no-op) removed upstream; never existed in Rust.
-/// - The constructor creates 16 channels via a literal (MIDI_CHANNEL_COUNT was removed).
+//! processor.rs
+//! purpose: SpessaSynthProcessor - the main public API wrapping SynthesizerCore.
+//! Ported from: src/synthesizer/processor.ts (spessasynth_core 4.3.0)
+//!
+//! # Design note
+//! TypeScript's SpessaSynthProcessor wraps SynthesizerCore and adds:
+//!   - savedSnapshot: re-applied after embedded sound bank changes
+//!   - onEventCall / onMissingPreset: callback fields
+//!
+//! In Rust, the event callback is owned by SynthesizerCore directly.
+//! onMissingPreset is omitted (SynthesizerCore does not call it in the Rust port).
+//!
+//! Additional impl SynthesizerCore blocks are defined here for channel-level
+//! wrapper methods and MIDI message dispatch (process_message), since those
+//! belong to synthesizer_core.ts but require access to the synthesizer state
+//! that is most naturally expressed as SynthesizerCore methods.
+//!
+//! # Changes from 4.2.0 (reviewed against the 4.3.0 diff)
+//! - `currentSynthTime` → `currentTime` (pure rename; same `synthCore.currentTime`).
+//! - `totalVoicesAmount` → `voiceCount`.
+//! - `resetAllControllers(system = DEFAULT_SYNTH_MODE)` → `reset()` (no argument; the core's
+//!   `reset(system)` keeps the parameter).
+//! - `clearEmbeddedBank` → `clearEmbeddedSoundBank`.
+//! - `applySynthesizerSnapshot` → `applySnapshot` (now via the free-standing
+//!   `applySnapshot`/`getSynthesizerSnapshot` core functions; no post-apply "Finished
+//!   applying snapshot!" log).
+//! - `setMasterParameter`/`getMasterParameter`/`getAllMasterParameters` →
+//!   `setSystemParameter` + read-only `midiParameters`/`systemParameters` getters
+//!   (replacing the `enableEffects`/`enableEventSystem` get/set pairs).
+//! - `getInsertionSnapshot` public wrapper removed (became protected on the core).
+//! - `processMessage` lost its `force` parameter.
+//! - `killVoices` (deprecated no-op) removed upstream; never existed in Rust.
+//! - The constructor creates 16 channels via a literal (MIDI_CHANNEL_COUNT was removed).
+
 use crate::midi::enums::midi_message_types;
 use crate::synthesizer::audio_engine::channel::midi_channel::DrumLocks;
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;

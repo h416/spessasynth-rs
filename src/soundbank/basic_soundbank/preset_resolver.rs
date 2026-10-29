@@ -1,20 +1,21 @@
-/// preset_resolver.rs
-/// purpose: Trait for types that can resolve a MIDI patch to a BasicPreset.
-///
-/// This trait breaks the circular dependency between `basic_midi.rs` and
-/// `basic_soundbank.rs`:
-///
-/// - `BasicMIDI::get_used_programs_and_keys` accepts `&dyn PresetResolver`
-///   instead of `&BasicSoundBank`, so `basic_midi.rs` no longer depends on
-///   `basic_soundbank.rs`.
-/// - `BasicSoundBank::trim` (TS 4.3.0's rework of `trimSoundBank`) takes an
-///   already-computed `PresetsWithKeyCombinations` instead of a `&BasicMIDI`, so
-///   `basic_soundbank.rs` still doesn't need to depend on `basic_midi.rs`; the free function
-///   `get_used_programs_and_keys` (in `midi_tools::used_programs_and_keys`) is the one that
-///   depends on this trait to stay decoupled from `basic_soundbank.rs`.
-///
-/// Implementors: `BasicSoundBank` (and test mocks). TS also passes a `SoundBankManager`
-/// to `getUsedProgramsAndKeys` (from `preloadSynth`, which is not ported).
+//! preset_resolver.rs
+//! purpose: Trait for types that can resolve a MIDI patch to a BasicPreset.
+//!
+//! This trait breaks the circular dependency between `basic_midi.rs` and
+//! `basic_soundbank.rs`:
+//!
+//! - `BasicMIDI::get_used_programs_and_keys` accepts `&dyn PresetResolver`
+//!   instead of `&BasicSoundBank`, so `basic_midi.rs` no longer depends on
+//!   `basic_soundbank.rs`.
+//! - `BasicSoundBank::trim` (TS 4.3.0's rework of `trimSoundBank`) takes an
+//!   already-computed `PresetsWithKeyCombinations` instead of a `&BasicMIDI`, so
+//!   `basic_soundbank.rs` still doesn't need to depend on `basic_midi.rs`; the free function
+//!   `get_used_programs_and_keys` (in `midi_tools::used_programs_and_keys`) is the one that
+//!   depends on this trait to stay decoupled from `basic_soundbank.rs`.
+//!
+//! Implementors: `BasicSoundBank` (and test mocks). TS also passes a `SoundBankManager`
+//! to `getUsedProgramsAndKeys` (from `preloadSynth`, which is not ported).
+
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::soundbank::types::MIDISystem;

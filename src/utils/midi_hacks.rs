@@ -1,10 +1,11 @@
-/// midi_hacks.rs
-/// purpose: Bank select hacks for GS, XG, GM2 patch selection compatibility.
-/// Ported from: src/utils/midi_hacks.ts (spessasynth_core 4.3.0)
-///
-/// Note: TS 4.3.0 renamed the `SynthSystem` type to `MIDISystem` and relocated it from
-/// `synthesizer/types.ts` to `soundbank/types.ts`; the Rust definition now lives in
-/// `crate::soundbank::types::MIDISystem` accordingly.
+//! midi_hacks.rs
+//! purpose: Bank select hacks for GS, XG, GM2 patch selection compatibility.
+//! Ported from: src/utils/midi_hacks.ts (spessasynth_core 4.3.0)
+//!
+//! Note: TS 4.3.0 renamed the `SynthSystem` type to `MIDISystem` and relocated it from
+//! `synthesizer/types.ts` to `soundbank/types.ts`; the Rust definition now lives in
+//! `crate::soundbank::types::MIDISystem` accordingly.
+
 use crate::soundbank::types::MIDISystem;
 
 /// XG SFX Voice bank MSB.

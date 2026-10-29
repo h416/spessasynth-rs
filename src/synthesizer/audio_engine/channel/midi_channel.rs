@@ -1,12 +1,13 @@
-/// midi_channel.rs
-/// purpose: MidiChannel struct — a single MIDI channel within the synthesizer.
-/// Ported from: src/synthesizer/audio_engine/engine_components/midi_channel.ts
-///
-/// # Design note
-/// TypeScript's MIDIChannel holds a back-reference `synthCore: SynthesizerCore`, which would
-/// require a Rust ownership cycle (SynthesizerCore owns MidiChannel[] too). To avoid this,
-/// MidiChannel does not store a reference to SynthesizerCore; methods that previously accessed
-/// `this.synthCore` now receive the needed data as function parameters instead.
+//! midi_channel.rs
+//! purpose: MidiChannel struct — a single MIDI channel within the synthesizer.
+//! Ported from: src/synthesizer/audio_engine/engine_components/midi_channel.ts
+//!
+//! # Design note
+//! TypeScript's MIDIChannel holds a back-reference `synthCore: SynthesizerCore`, which would
+//! require a Rust ownership cycle (SynthesizerCore owns MidiChannel[] too). To avoid this,
+//! MidiChannel does not store a reference to SynthesizerCore; methods that previously accessed
+//! `this.synthCore` now receive the needed data as function parameters instead.
+
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::generator_types::{
     GENERATOR_LIMITS, GENERATORS_AMOUNT, GeneratorType,

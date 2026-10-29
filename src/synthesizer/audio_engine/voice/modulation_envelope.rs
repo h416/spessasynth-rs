@@ -1,18 +1,19 @@
-/// modulation_envelope.rs
-/// purpose: calculates the modulation envelope for the given voice
-/// Ported from: src/synthesizer/audio_engine/engine_components/dsp_chain/modulation_envelope.ts
-///
-/// # Design differences (resolving circular dependency from TypeScript → Rust)
-///
-/// In the TypeScript version, `process(voice, currentTime)` / `startRelease(voice)` / `init(voice)`
-/// received a `Voice` instance. However, since `Voice` owns `ModulationEnvelope` as a field,
-/// this would create a circular dependency in Rust.
-///
-/// In the Rust version, instead of passing the `Voice` object directly, the caller extracts
-/// the required values and passes them individually:
-///   - `process(release_start_time, current_time)`
-///   - `start_release(modulated_generators)`
-///   - `init(modulated_generators, start_time, target_key)`
+//! modulation_envelope.rs
+//! purpose: calculates the modulation envelope for the given voice
+//! Ported from: src/synthesizer/audio_engine/engine_components/dsp_chain/modulation_envelope.ts
+//!
+//! # Design differences (resolving circular dependency from TypeScript → Rust)
+//!
+//! In the TypeScript version, `process(voice, currentTime)` / `startRelease(voice)` / `init(voice)`
+//! received a `Voice` instance. However, since `Voice` owns `ModulationEnvelope` as a field,
+//! this would create a circular dependency in Rust.
+//!
+//! In the Rust version, instead of passing the `Voice` object directly, the caller extracts
+//! the required values and passes them individually:
+//!   - `process(release_start_time, current_time)`
+//!   - `start_release(modulated_generators)`
+//!   - `init(modulated_generators, start_time, target_key)`
+
 use std::sync::LazyLock;
 
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;

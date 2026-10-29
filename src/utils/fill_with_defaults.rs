@@ -1,8 +1,8 @@
-/// fill_with_defaults.rs
-/// purpose: Merge an optional partial options value with a set of defaults.
-/// Ported from: src/utils/fill_with_defaults.ts (spessasynth_core 4.3.0, new file; the same
-/// content already existed unported in 4.2.0)
-///
+//! fill_with_defaults.rs
+//! purpose: Merge an optional partial options value with a set of defaults.
+//! Ported from: src/utils/fill_with_defaults.ts (spessasynth_core 4.3.0, new file; the same
+//! content already existed unported in 4.2.0)
+
 /// TypeScript's `fillWithDefaults<T>(obj: Partial<T> | undefined, defObj: T): T` spreads
 /// `defObj` first and then `obj` on top of it, so any field present on `obj` overrides the
 /// corresponding default, while fields missing from `obj` (or `obj` being `undefined`

@@ -1,16 +1,17 @@
-/// midi.rs (parameters)
-/// purpose: Global MIDI parameters of the synthesizer (set via MIDI messages: SysEx master
-/// volume/pan/tuning/transpose and GM/GS/XG system changes) — struct, defaults, and the
-/// set/reset handlers for SynthesizerCore.
-/// Ported from: src/synthesizer/audio_engine/parameters/midi.ts (spessasynth_core 4.3.0)
-///
-/// New in TS 4.3.0: the single `MasterParameterType` was split into `GlobalMIDIParameter`
-/// (this file — parameters editable only via MIDI messages) and `GlobalSystemParameter`
-/// (`parameters/system.rs` — parameters editable only via the API).
-///
-/// TS 4.3.14 renamed `gain` to `volume`; the channels square it when folding it into
-/// their gain (`Math.pow(globalMIDI.volume, 2)` in `updateInternalParams` — "it corresponds
-/// to CC volume, so volume is squared").
+//! midi.rs (parameters)
+//! purpose: Global MIDI parameters of the synthesizer (set via MIDI messages: SysEx master
+//! volume/pan/tuning/transpose and GM/GS/XG system changes) — struct, defaults, and the
+//! set/reset handlers for SynthesizerCore.
+//! Ported from: src/synthesizer/audio_engine/parameters/midi.ts (spessasynth_core 4.3.0)
+//!
+//! New in TS 4.3.0: the single `MasterParameterType` was split into `GlobalMIDIParameter`
+//! (this file — parameters editable only via MIDI messages) and `GlobalSystemParameter`
+//! (`parameters/system.rs` — parameters editable only via the API).
+//!
+//! TS 4.3.14 renamed `gain` to `volume`; the channels square it when folding it into
+//! their gain (`Math.pow(globalMIDI.volume, 2)` in `updateInternalParams` — "it corresponds
+//! to CC volume, so volume is squared").
+
 use crate::soundbank::types::MIDISystem;
 use crate::synthesizer::audio_engine::synth_constants::DEFAULT_SYNTH_MODE;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;

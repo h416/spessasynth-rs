@@ -1,9 +1,10 @@
-/// generator.rs
-/// purpose: SoundFont2 Generator struct (type + 16-bit value).
-/// Ported from: src/soundbank/basic_soundbank/generator.ts
-///
-/// Note: TS 4.3.0 renamed the fields `generatorType` → `type` and `generatorValue` → `value`.
-/// Rust keeps `generator_type` / `generator_value` (`type` is a Rust keyword; naming-only).
+//! generator.rs
+//! purpose: SoundFont2 Generator struct (type + 16-bit value).
+//! Ported from: src/soundbank/basic_soundbank/generator.ts
+//!
+//! Note: TS 4.3.0 renamed the fields `generatorType` → `type` and `generatorValue` → `value`.
+//! Rust keeps `generator_type` / `generator_value` (`type` is a Rust keyword; naming-only).
+
 use std::fmt;
 
 use crate::soundbank::basic_soundbank::generator_types::{

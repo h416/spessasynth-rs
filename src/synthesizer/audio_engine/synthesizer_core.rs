@@ -1,58 +1,59 @@
-/// synthesizer_core.rs
-/// purpose: SynthesizerCore struct — the core synthesis engine which interacts with channels.
-/// Ported from: src/synthesizer/audio_engine/synthesizer_core.ts (spessasynth_core 4.3.0)
-///
-/// # Design note
-/// MidiChannel lives in channel/midi_channel.rs. It does not hold a back-reference to
-/// SynthesizerCore (unlike TypeScript's `this.synthCore`), so there is no ownership cycle
-/// between the two structs; methods on MidiChannel receive the needed data as parameters.
-///
-/// # Changes from 4.2.0 (reviewed against the 4.3.0 diff)
-/// Orchestration-layer changes:
-/// - `masterParameters` split into `midiParameters: GlobalMIDIParameter` +
-///   `systemParameters: GlobalSystemParameter` (see `parameters/{midi,system}.rs`).
-///   `enableEffects`/`enableEventSystem` core fields folded into the system parameters.
-/// - `maxBufferSize` (from `SynthProcessorOptions`): all effect input buffers are allocated
-///   once at that size, the 4.2.0 grow-on-demand path is gone, and rendering more samples
-///   than `maxBufferSize` panics (TS throws).
-/// - `voiceCount` became private with a public getter.
-/// - `assignVoice` gained the `autoAllocateVoices` path (allocate a new voice instead of
-///   stealing when the cap is hit; cap grows by 1; logs instead of firing an event). Note:
-///   TS 4.3.0 has an upstream quirk here — `allocateNewVoices(1)` already pushes the new
-///   voice and then `this.voices.push(v)` pushes the *same object* again (aliased at two
-///   indices). A Rust `Vec<Voice>` cannot alias one element at two indices; only the intent
-///   (allocate one, return it) is ported. The duplicate slot is beyond the cap and unused.
-/// - `resetAllControllers` renamed to `reset`, now firing `Reset(system)` (was
-///   `allControllerReset`), calling `resetMIDIParameters(system)` and respecting
-///   `delayLock`. The 4.2.0 post-reset locked-controller / pitch-wheel / channel-pressure
-///   event-restoration block was removed upstream (TS 4.3.0 fires those from
-///   `ch.reset(false)` instead) — removed here too. The per-channel reset is split into
-///   `reset_controllers` + `reset_preset` (TS: `ch.reset(false)`); together they reset the
-///   same state, but the locked-controller restore events are not fired (events only).
-/// - `setReverbMacro`/`setChorusMacro`/`setDelayMacro`: now guarded by the corresponding
-///   lock system parameter; an *invalid* macro number warns and returns instead of falling
-///   back to macro 0 (Room1/Chorus1/Delay1); fires `effectChange`.
-/// - `resetInsertion`: sendLevelToReverb now scaled by `EFX_SENDS_GAIN_CORRECTION`;
-///   parameter cache grown 20 → 23 entries (params + 3 sends at indices 20/21/22) with the
-///   new `resetInsertionParams()` helper; fires `effectChange`.
-/// - `getInsertionSnapshot`: `{type, params, channels}` — the separate send-level fields are
-///   gone (folded into params[20..23]).
-/// - `setMIDIVolume`/`setMasterTuning` were removed upstream (replaced by the
-///   `midiParameters.volume`/`fineTune` flow applied in the channels' `updateInternalParams`).
-///   Removed here too; the channels get the parameter sets through
-///   `update_channels_internal_params`.
-/// - `processMessage` lost its `force` parameter (and the force-kill Note Off branch).
-/// - `createMIDIChannel`: fires `ChannelAdded` (was `newChannel` + `sendChannelProperty`).
-///   The TS constructor calls `setDrumFlag(true)` on every 16th channel 10; Rust sets
-///   `drum_channel` and recomputes the internal params the same way.
-/// - The per-channel `updateVoiceCount()` loop at the end of `process()` was removed
-///   upstream (channel voice-count events move to the channel side) — removed here too.
-/// - `process()` no longer skips voices on muted channels in TS 4.3.0: TS mutes through the
-///   channel system parameter `isMuted` (note-ons are refused and the notes are stopped by
-///   `MidiChannel::set_system_parameter`).
-/// - Not ported (API only, no effect on the MIDI-to-WAV output): `ch.destroy()` (Rust drops
-///   the channels) and `updatePresetList()` (TS reruns program changes and `reset()` when a
-///   sound bank is added or removed; Rust loads the sound banks before playback).
+//! synthesizer_core.rs
+//! purpose: SynthesizerCore struct — the core synthesis engine which interacts with channels.
+//! Ported from: src/synthesizer/audio_engine/synthesizer_core.ts (spessasynth_core 4.3.0)
+//!
+//! # Design note
+//! MidiChannel lives in channel/midi_channel.rs. It does not hold a back-reference to
+//! SynthesizerCore (unlike TypeScript's `this.synthCore`), so there is no ownership cycle
+//! between the two structs; methods on MidiChannel receive the needed data as parameters.
+//!
+//! # Changes from 4.2.0 (reviewed against the 4.3.0 diff)
+//! Orchestration-layer changes:
+//! - `masterParameters` split into `midiParameters: GlobalMIDIParameter` +
+//!   `systemParameters: GlobalSystemParameter` (see `parameters/{midi,system}.rs`).
+//!   `enableEffects`/`enableEventSystem` core fields folded into the system parameters.
+//! - `maxBufferSize` (from `SynthProcessorOptions`): all effect input buffers are allocated
+//!   once at that size, the 4.2.0 grow-on-demand path is gone, and rendering more samples
+//!   than `maxBufferSize` panics (TS throws).
+//! - `voiceCount` became private with a public getter.
+//! - `assignVoice` gained the `autoAllocateVoices` path (allocate a new voice instead of
+//!   stealing when the cap is hit; cap grows by 1; logs instead of firing an event). Note:
+//!   TS 4.3.0 has an upstream quirk here — `allocateNewVoices(1)` already pushes the new
+//!   voice and then `this.voices.push(v)` pushes the *same object* again (aliased at two
+//!   indices). A Rust `Vec<Voice>` cannot alias one element at two indices; only the intent
+//!   (allocate one, return it) is ported. The duplicate slot is beyond the cap and unused.
+//! - `resetAllControllers` renamed to `reset`, now firing `Reset(system)` (was
+//!   `allControllerReset`), calling `resetMIDIParameters(system)` and respecting
+//!   `delayLock`. The 4.2.0 post-reset locked-controller / pitch-wheel / channel-pressure
+//!   event-restoration block was removed upstream (TS 4.3.0 fires those from
+//!   `ch.reset(false)` instead) — removed here too. The per-channel reset is split into
+//!   `reset_controllers` + `reset_preset` (TS: `ch.reset(false)`); together they reset the
+//!   same state, but the locked-controller restore events are not fired (events only).
+//! - `setReverbMacro`/`setChorusMacro`/`setDelayMacro`: now guarded by the corresponding
+//!   lock system parameter; an *invalid* macro number warns and returns instead of falling
+//!   back to macro 0 (Room1/Chorus1/Delay1); fires `effectChange`.
+//! - `resetInsertion`: sendLevelToReverb now scaled by `EFX_SENDS_GAIN_CORRECTION`;
+//!   parameter cache grown 20 → 23 entries (params + 3 sends at indices 20/21/22) with the
+//!   new `resetInsertionParams()` helper; fires `effectChange`.
+//! - `getInsertionSnapshot`: `{type, params, channels}` — the separate send-level fields are
+//!   gone (folded into params[20..23]).
+//! - `setMIDIVolume`/`setMasterTuning` were removed upstream (replaced by the
+//!   `midiParameters.volume`/`fineTune` flow applied in the channels' `updateInternalParams`).
+//!   Removed here too; the channels get the parameter sets through
+//!   `update_channels_internal_params`.
+//! - `processMessage` lost its `force` parameter (and the force-kill Note Off branch).
+//! - `createMIDIChannel`: fires `ChannelAdded` (was `newChannel` + `sendChannelProperty`).
+//!   The TS constructor calls `setDrumFlag(true)` on every 16th channel 10; Rust sets
+//!   `drum_channel` and recomputes the internal params the same way.
+//! - The per-channel `updateVoiceCount()` loop at the end of `process()` was removed
+//!   upstream (channel voice-count events move to the channel side) — removed here too.
+//! - `process()` no longer skips voices on muted channels in TS 4.3.0: TS mutes through the
+//!   channel system parameter `isMuted` (note-ons are refused and the notes are stopped by
+//!   `MidiChannel::set_system_parameter`).
+//! - Not ported (API only, no effect on the MIDI-to-WAV output): `ch.destroy()` (Rust drops
+//!   the channels) and `updatePresetList()` (TS reruns program changes and `reset()` when a
+//!   sound bank is added or removed; Rust loads the sound banks before playback).
+
 use crate::synthesizer::audio_engine::effects::xg::implementation::chorus::DefaultXGChorus;
 use crate::synthesizer::audio_engine::effects::xg::implementation::insertion::DefaultXGInsertion;
 use crate::synthesizer::audio_engine::effects::xg::implementation::variation::DefaultXGVariation;

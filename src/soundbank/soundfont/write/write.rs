@@ -1,24 +1,25 @@
-/// write.rs
-/// purpose: Write a BasicSoundBank as an SF2 binary file.
-/// Ported from: src/soundbank/soundfont/write/write.ts (spessasynth_core 4.3.0)
-///
-/// # Differences from TypeScript
-/// - Async is removed: the function is synchronous (TS 4.3.0 made the same change upstream,
-///   since Vorbis compression -- the only source of `await` here -- was removed; see below).
-/// - `compress` / `compressionFunction` are omitted (Vorbis encoding is outside the MIDI→WAV
-///   scope of this port; TS 4.3.0 itself dropped these from `writeSF2Internal`/`SoundFont2WriteOptions`
-///   entirely, moving compression to a separate opt-in step on `BasicSoundBank` that is not ported).
-/// - `progressFunction` is omitted (no async progress callbacks in Rust).
-/// - TS 4.3.0 removed the `decompress`-driven version bump (`major=3`/`minor=0` for compressed
-///   samples, `major=2`/`minor=4` for `decompress`) from this function entirely: `bank.soundBankInfo`
-///   is no longer mutated here at all, and its `version` is written as-is. This port follows suit:
-///   the `decompress` option and the version-mutation logic have both been removed.
-/// - TS 4.3.0 added a `software` write option (`SoundBankWriteOptions.software`, default
-///   `"SpessaSynth"`) used for the `ISFT` chunk; `bank.soundBankInfo.software` is no longer read or
-///   mutated by this function. This port adds the equivalent `SoundFont2WriteOptions::software` field.
-/// - TypeScript's `for (const [t, d] of Object.entries(bank.soundBankInfo))` loop
-///   is replaced with explicit per-field handling (Rust structs are not iterable).
-/// - `creationDate` is stored as a `String` (not a `Date`); no `toISODateString()` call.
+//! write.rs
+//! purpose: Write a BasicSoundBank as an SF2 binary file.
+//! Ported from: src/soundbank/soundfont/write/write.ts (spessasynth_core 4.3.0)
+//!
+//! # Differences from TypeScript
+//! - Async is removed: the function is synchronous (TS 4.3.0 made the same change upstream,
+//!   since Vorbis compression -- the only source of `await` here -- was removed; see below).
+//! - `compress` / `compressionFunction` are omitted (Vorbis encoding is outside the MIDI→WAV
+//!   scope of this port; TS 4.3.0 itself dropped these from `writeSF2Internal`/`SoundFont2WriteOptions`
+//!   entirely, moving compression to a separate opt-in step on `BasicSoundBank` that is not ported).
+//! - `progressFunction` is omitted (no async progress callbacks in Rust).
+//! - TS 4.3.0 removed the `decompress`-driven version bump (`major=3`/`minor=0` for compressed
+//!   samples, `major=2`/`minor=4` for `decompress`) from this function entirely: `bank.soundBankInfo`
+//!   is no longer mutated here at all, and its `version` is written as-is. This port follows suit:
+//!   the `decompress` option and the version-mutation logic have both been removed.
+//! - TS 4.3.0 added a `software` write option (`SoundBankWriteOptions.software`, default
+//!   `"SpessaSynth"`) used for the `ISFT` chunk; `bank.soundBankInfo.software` is no longer read or
+//!   mutated by this function. This port adds the equivalent `SoundFont2WriteOptions::software` field.
+//! - TypeScript's `for (const [t, d] of Object.entries(bank.soundBankInfo))` loop
+//!   is replaced with explicit per-field handling (Rust structs are not iterable).
+//! - `creationDate` is stored as a `String` (not a `Date`); no `toISODateString()` call.
+
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::soundbank::basic_soundbank::modulator::{
     MOD_BYTE_SIZE, Modulator, SPESSASYNTH_DEFAULT_MODULATORS,

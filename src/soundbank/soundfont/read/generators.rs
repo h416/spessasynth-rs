@@ -1,10 +1,11 @@
-/// generators.rs
-/// purpose: reads SF2 generator records from a pgen/igen RIFF chunk.
-/// Ported from: src/soundbank/soundfont/read/generators.ts
-///
-/// Note: TypeScript has a `ReadGenerator` class that extends `Generator`.
-/// Rust does not have class inheritance, so the constructor logic is implemented
-/// as a private `read_generator()` function that returns a `Generator` directly.
+//! generators.rs
+//! purpose: reads SF2 generator records from a pgen/igen RIFF chunk.
+//! Ported from: src/soundbank/soundfont/read/generators.ts
+//!
+//! Note: TypeScript has a `ReadGenerator` class that extends `Generator`.
+//! Rust does not have class inheritance, so the constructor logic is implemented
+//! as a private `read_generator()` function that returns a `Generator` directly.
+
 use crate::soundbank::basic_soundbank::generator::Generator;
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::read_little_endian_indexed;

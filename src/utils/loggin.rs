@@ -1,22 +1,23 @@
-/// loggin.rs
-/// purpose: Configurable logging output (info, warn, group) plus GM/GS/XG log helpers.
-/// Ported from: src/utils/loggin.ts (spessasynth_core 4.3.0)
-///
-/// TS 4.3.0 turned the free functions `SpessaSynthLogging` / `SpessaSynthInfo` /
-/// `SpessaSynthWarn` / `SpessaSynthGroup` / `SpessaSynthGroupCollapsed` /
-/// `SpessaSynthGroupEnd` into static members of a `SpessaLog` class, and added several new
-/// helper methods (`unsupported`, `gmInfo`/`gmFail`, `gsInfo`/`gsFail`, `xgInfo`/`xgFail`,
-/// `coolInfo`) used to report GM/GS/XG-related SysEx handling. `SpessaLog` is ported below as
-/// a zero-sized struct with associated functions (matching the existing `BankSelectHacks`
-/// pattern used elsewhere in this crate for TS static classes).
-///
-/// Note: TS's `%c`-prefixed `ConsoleColors` styling is a browser DevTools feature with no
-/// terminal equivalent; as with the pre-4.3.0 logging functions, colors are dropped and only
-/// the plain message text is printed to stderr.
-///
-/// The original free functions (`spessa_synth_logging`, `spessa_synth_info`,
-/// `spessa_synth_warn`, `spessa_synth_group`, `spessa_synth_group_collapsed`,
-/// `spessa_synth_group_end`) are kept as thin wrappers; many call sites still use them.
+//! loggin.rs
+//! purpose: Configurable logging output (info, warn, group) plus GM/GS/XG log helpers.
+//! Ported from: src/utils/loggin.ts (spessasynth_core 4.3.0)
+//!
+//! TS 4.3.0 turned the free functions `SpessaSynthLogging` / `SpessaSynthInfo` /
+//! `SpessaSynthWarn` / `SpessaSynthGroup` / `SpessaSynthGroupCollapsed` /
+//! `SpessaSynthGroupEnd` into static members of a `SpessaLog` class, and added several new
+//! helper methods (`unsupported`, `gmInfo`/`gmFail`, `gsInfo`/`gsFail`, `xgInfo`/`xgFail`,
+//! `coolInfo`) used to report GM/GS/XG-related SysEx handling. `SpessaLog` is ported below as
+//! a zero-sized struct with associated functions (matching the existing `BankSelectHacks`
+//! pattern used elsewhere in this crate for TS static classes).
+//!
+//! Note: TS's `%c`-prefixed `ConsoleColors` styling is a browser DevTools feature with no
+//! terminal equivalent; as with the pre-4.3.0 logging functions, colors are dropped and only
+//! the plain message text is printed to stderr.
+//!
+//! The original free functions (`spessa_synth_logging`, `spessa_synth_info`,
+//! `spessa_synth_warn`, `spessa_synth_group`, `spessa_synth_group_collapsed`,
+//! `spessa_synth_group_end`) are kept as thin wrappers; many call sites still use them.
+
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::utils::other::array_to_hex_string;

@@ -1,7 +1,8 @@
-/// sound_bank_loader.rs
-/// purpose: Detects the sound bank format (SF2 or DLS) from the file header
-///          and parses it into a BasicSoundBank.
-/// Ported from: src/soundbank/sound_bank_loader.ts
+//! sound_bank_loader.rs
+//! purpose: Detects the sound bank format (SF2 or DLS) from the file header
+//!          and parses it into a BasicSoundBank.
+//! Ported from: src/soundbank/sound_bank_loader.ts
+
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::soundbank::downloadable_sounds::downloadable_sounds::DownloadableSounds;
 use crate::soundbank::soundfont::read::soundfont::parse_sound_font2;

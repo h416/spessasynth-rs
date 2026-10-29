@@ -1,19 +1,20 @@
-/// downloadable_sounds.rs
-/// purpose: Top-level DLS file container with read/write and SF2 conversion.
-/// Ported from: src/soundbank/downloadable_sounds/downloadable_sounds.ts
-///
-/// # TypeScript vs Rust design differences
-///
-/// - `DownloadableSounds extends DLSVerifier` → free functions from `dls_verifier.rs` called directly.
-/// - `static read(buffer: ArrayBuffer)` → `DownloadableSounds::read(data: &[u8])`.
-/// - `async write(options)` → synchronous `write(&self) -> Vec<u8>`.
-///   The `progressFunction` callback is not supported (MIDI→WAV scope only).
-/// - `Date` for `creationDate` → `String` (matches `SoundBankInfoData.creation_date`).
-///   The raw ICRD text is stored as-is and written back verbatim.
-/// - `fromSFPreset(preset, samples)` in TypeScript receives only `preset` and `samples`;
-///   in Rust `BasicPreset` has no back-reference to the sound bank, so `instruments` is
-///   also passed explicitly – handled inside `DownloadableSoundsInstrument::from_sf_preset`.
-/// - `soundBank.flush()` is called in `to_sf` to sort presets.
+//! downloadable_sounds.rs
+//! purpose: Top-level DLS file container with read/write and SF2 conversion.
+//! Ported from: src/soundbank/downloadable_sounds/downloadable_sounds.ts
+//!
+//! # TypeScript vs Rust design differences
+//!
+//! - `DownloadableSounds extends DLSVerifier` → free functions from `dls_verifier.rs` called directly.
+//! - `static read(buffer: ArrayBuffer)` → `DownloadableSounds::read(data: &[u8])`.
+//! - `async write(options)` → synchronous `write(&self) -> Vec<u8>`.
+//!   The `progressFunction` callback is not supported (MIDI→WAV scope only).
+//! - `Date` for `creationDate` → `String` (matches `SoundBankInfoData.creation_date`).
+//!   The raw ICRD text is stored as-is and written back verbatim.
+//! - `fromSFPreset(preset, samples)` in TypeScript receives only `preset` and `samples`;
+//!   in Rust `BasicPreset` has no back-reference to the sound bank, so `instruments` is
+//!   also passed explicitly – handled inside `DownloadableSoundsInstrument::from_sf_preset`.
+//! - `soundBank.flush()` is called in `to_sf` to sort presets.
+
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::soundbank::downloadable_sounds::dls_verifier::{
     parsing_error, verify_and_read_list, verify_header, verify_text,

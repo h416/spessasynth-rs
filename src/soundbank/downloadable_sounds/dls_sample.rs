@@ -1,15 +1,16 @@
-/// dls_sample.rs
-/// purpose: DLS audio sample with on-demand PCM/A-law decoding.
-/// Ported from: src/soundbank/downloadable_sounds/dls_sample.ts
-///
-/// # TypeScript vs Rust design differences
-///
-/// TypeScript uses `class DLSSample extends BasicSample`.
-/// Rust uses composition: `DlsSample` contains a `BasicSample` (`sample` field) plus
-/// the DLS-specific fields (`w_format_tag`, `bytes_per_sample`, `raw_data`).
-///
-/// Callers that need `BasicSample` access use `dls_sample.sample`.
-/// The overridden `getAudioData` / `getRawData` methods are exposed on `DlsSample`.
+//! dls_sample.rs
+//! purpose: DLS audio sample with on-demand PCM/A-law decoding.
+//! Ported from: src/soundbank/downloadable_sounds/dls_sample.ts
+//!
+//! # TypeScript vs Rust design differences
+//!
+//! TypeScript uses `class DLSSample extends BasicSample`.
+//! Rust uses composition: `DlsSample` contains a `BasicSample` (`sample` field) plus
+//! the DLS-specific fields (`w_format_tag`, `bytes_per_sample`, `raw_data`).
+//!
+//! Callers that need `BasicSample` access use `dls_sample.sample`.
+//! The overridden `getAudioData` / `getRawData` methods are exposed on `DlsSample`.
+
 use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
 use crate::soundbank::enums::sample_types;
 use crate::utils::loggin::SpessaLog;

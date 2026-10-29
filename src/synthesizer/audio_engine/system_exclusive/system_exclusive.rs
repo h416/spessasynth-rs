@@ -1,6 +1,7 @@
-/// helpers.rs
-/// purpose: Helper functions for SysEx log output.
-/// Ported from: src/synthesizer/audio_engine/engine_methods/system_exclusive/helpers.ts
+//! helpers.rs
+//! purpose: Helper functions for SysEx log output.
+//! Ported from: src/synthesizer/audio_engine/engine_methods/system_exclusive/helpers.ts
+
 use crate::utils::loggin::spessa_synth_info;
 use crate::utils::other::array_to_hex_string;
 

@@ -1,18 +1,19 @@
-/// enums.rs
-/// purpose: MIDI message type and controller number constants.
-/// Ported from: src/midi/enums.ts (spessasynth_core 4.3.0)
-///
-/// TS 4.3.0 renamed `midiMessageTypes` → `MIDIMessageTypes`, `midiControllers` →
-/// `MIDIControllers`, `midiControllers.expressionController` → `expression`, and
-/// `expressionControllerLSB` → `expressionLSB` (naming-only; values unchanged). Rust already
-/// uses SCREAMING_SNAKE_CASE module-level constants (`midi_message_types`, `midi_controllers`),
-/// so those renames need no Rust-side change. `EXPRESSION`/`EXPRESSION_LSB` are added below as
-/// the new canonical names; `EXPRESSION_CONTROLLER`/`EXPRESSION_CONTROLLER_LSB` are kept as
-/// backward-compatible aliases because a few other files (out of scope for this task) still use
-/// the old name.
-///
-/// TS 4.3.0 also added `RegisteredParameterTypes`, `NonRegisteredMSB`, and `NonRegisteredLSB`
-/// (used by `midi_tools/midi_utils.ts`'s `analyzeRPN`/`analyzeNRPN`).
+//! enums.rs
+//! purpose: MIDI message type and controller number constants.
+//! Ported from: src/midi/enums.ts (spessasynth_core 4.3.0)
+//!
+//! TS 4.3.0 renamed `midiMessageTypes` → `MIDIMessageTypes`, `midiControllers` →
+//! `MIDIControllers`, `midiControllers.expressionController` → `expression`, and
+//! `expressionControllerLSB` → `expressionLSB` (naming-only; values unchanged). Rust already
+//! uses SCREAMING_SNAKE_CASE module-level constants (`midi_message_types`, `midi_controllers`),
+//! so those renames need no Rust-side change. `EXPRESSION`/`EXPRESSION_LSB` are added below as
+//! the new canonical names; `EXPRESSION_CONTROLLER`/`EXPRESSION_CONTROLLER_LSB` are kept as
+//! backward-compatible aliases because a few other files (out of scope for this task) still use
+//! the old name.
+//!
+//! TS 4.3.0 also added `RegisteredParameterTypes`, `NonRegisteredMSB`, and `NonRegisteredLSB`
+//! (used by `midi_tools/midi_utils.ts`'s `analyzeRPN`/`analyzeNRPN`).
+
 /// MIDI message type constants.
 /// Equivalent to: midiMessageTypes
 pub mod midi_message_types {

@@ -1,14 +1,15 @@
-/// midi_patch.rs
-/// purpose: MIDI patch (program/bank) data types, conversion utilities and the
-///          patch selection algorithm (MIDIPatchTools).
-/// Ported from: src/soundbank/basic_soundbank/midi_patch.ts
-///
-/// TS 4.3.0 merged preset_selector.ts into this file as `MIDIPatchTools.selectPatch`
-/// (static) and reworked it around the `MIDIPatchFull` interface (`isDrum` flag).
-/// In Rust, `MIDIPatchTools`' static methods are free functions, and `selectPatch`
-/// operates on `&[BasicPreset]` with a parallel `is_drum: &[bool]` slice, because
-/// Rust's `BasicPreset` does not store `parentSoundBank` (whose `isXGBank` flag
-/// defines `isDrum` in TypeScript).
+//! midi_patch.rs
+//! purpose: MIDI patch (program/bank) data types, conversion utilities and the
+//!          patch selection algorithm (MIDIPatchTools).
+//! Ported from: src/soundbank/basic_soundbank/midi_patch.ts
+//!
+//! TS 4.3.0 merged preset_selector.ts into this file as `MIDIPatchTools.selectPatch`
+//! (static) and reworked it around the `MIDIPatchFull` interface (`isDrum` flag).
+//! In Rust, `MIDIPatchTools`' static methods are free functions, and `selectPatch`
+//! operates on `&[BasicPreset]` with a parallel `is_drum: &[bool]` slice, because
+//! Rust's `BasicPreset` does not store `parentSoundBank` (whose `isXGBank` flag
+//! defines `isDrum` in TypeScript).
+
 use std::cmp::Ordering;
 
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;

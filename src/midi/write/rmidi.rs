@@ -1,35 +1,36 @@
-/// rmidi_writer.rs
-/// purpose: Write RMIDI (RIFF + MIDI + SoundFont) files.
-/// Ported from: src/midi/write/rmidi.ts (spessasynth_core 4.3.0)
-///
-/// TS 4.3.0 replaced the direct `isXGOn`/`isGSOn`/`isGMOn`/`isGM2On`/`isGSDrumsOn`/`syxToChannel`
-/// SysEx-detector calls (from `utils/sysex_detector.ts`, deleted in 4.3.0) with a single
-/// `MIDIUtils.analyzeSysEx` call whose result is dispatched on `syx.type`. This also broadens
-/// SysEx support: GS/XG SysEx-encoded bank-select/program-change/mono-poly messages are now
-/// recognized and replaced with equivalent regular Controller Change / Program Change events
-/// in-place (see the `AnalyzedMidiMessage::ControllerChange`/`ProgramChange` arms below), so the
-/// downstream bank-select tracking logic picks them up too. `getGsOn` (from the now-removed
-/// `get_gs_on.ts`) became `MIDIUtils.gsReset`. `readRIFFChunk`/`writeRIFFChunkRaw`/
-/// `writeRIFFChunkParts` free functions became `RIFFChunk::read`/`write`/`write_parts` static
-/// methods (migrated below). `correctBankOffsetInternal` also gained a trailing `mid.flush()`
-/// call to keep derived state (loop points, timeline, etc.) consistent after in-place event
-/// mutation/removal.
-///
-/// Note: this Rust file uses its own manual tick-sorted `(ticks, track_idx, event_idx)` scan
-/// instead of `BasicMidi::iterate`'s callback (unlike the TS `mid.iterate((e, trackNum,
-/// eventIndexes) => {...})`), since it already provides equivalent (track_idx, event_idx)
-/// addressing for in-place event replacement without needing `iterate`'s `eventIndexes` plumbing.
-///
-/// Quirk faithfully preserved from upstream: TS captures `const status = e.statusByte & 0xf0;`
-/// *before* the SysEx branch, then reassigns the *local* `e` to the replacement event for the
-/// `"Controller Change"`/`"Program Change"` SysEx cases (`break`, falling through) — but leaves
-/// `status` unchanged. So the post-SysEx `if (status === MIDIMessageTypes.programChange)` block
-/// (proper patch/preset lookup) never runs for a SysEx-derived Program Change; it falls straight
-/// to the bank-select detector, which only inspects `e.data[0]` (the program number) against
-/// `bankSelect`/`bankSelectLSB`. This looks like an upstream oversight, but per this repo's port
-/// policy we replicate it exactly rather than "fixing" it. See `event_status` (kept stale, used
-/// for the PROGRAM_CHANGE check) vs the fresh `ch_num` computation (uses the *updated* status
-/// byte) below.
+//! rmidi_writer.rs
+//! purpose: Write RMIDI (RIFF + MIDI + SoundFont) files.
+//! Ported from: src/midi/write/rmidi.ts (spessasynth_core 4.3.0)
+//!
+//! TS 4.3.0 replaced the direct `isXGOn`/`isGSOn`/`isGMOn`/`isGM2On`/`isGSDrumsOn`/`syxToChannel`
+//! SysEx-detector calls (from `utils/sysex_detector.ts`, deleted in 4.3.0) with a single
+//! `MIDIUtils.analyzeSysEx` call whose result is dispatched on `syx.type`. This also broadens
+//! SysEx support: GS/XG SysEx-encoded bank-select/program-change/mono-poly messages are now
+//! recognized and replaced with equivalent regular Controller Change / Program Change events
+//! in-place (see the `AnalyzedMidiMessage::ControllerChange`/`ProgramChange` arms below), so the
+//! downstream bank-select tracking logic picks them up too. `getGsOn` (from the now-removed
+//! `get_gs_on.ts`) became `MIDIUtils.gsReset`. `readRIFFChunk`/`writeRIFFChunkRaw`/
+//! `writeRIFFChunkParts` free functions became `RIFFChunk::read`/`write`/`write_parts` static
+//! methods (migrated below). `correctBankOffsetInternal` also gained a trailing `mid.flush()`
+//! call to keep derived state (loop points, timeline, etc.) consistent after in-place event
+//! mutation/removal.
+//!
+//! Note: this Rust file uses its own manual tick-sorted `(ticks, track_idx, event_idx)` scan
+//! instead of `BasicMidi::iterate`'s callback (unlike the TS `mid.iterate((e, trackNum,
+//! eventIndexes) => {...})`), since it already provides equivalent (track_idx, event_idx)
+//! addressing for in-place event replacement without needing `iterate`'s `eventIndexes` plumbing.
+//!
+//! Quirk faithfully preserved from upstream: TS captures `const status = e.statusByte & 0xf0;`
+//! *before* the SysEx branch, then reassigns the *local* `e` to the replacement event for the
+//! `"Controller Change"`/`"Program Change"` SysEx cases (`break`, falling through) — but leaves
+//! `status` unchanged. So the post-SysEx `if (status === MIDIMessageTypes.programChange)` block
+//! (proper patch/preset lookup) never runs for a SysEx-derived Program Change; it falls straight
+//! to the bank-select detector, which only inspects `e.data[0]` (the program number) against
+//! `bankSelect`/`bankSelectLSB`. This looks like an upstream oversight, but per this repo's port
+//! policy we replicate it exactly rather than "fixing" it. See `event_status` (kept stale, used
+//! for the PROGRAM_CHANGE check) vs the fresh `ch_num` computation (uses the *updated* status
+//! byte) below.
+
 use crate::midi::basic_midi::BasicMidi;
 use crate::midi::enums::{midi_controllers, midi_message_types};
 use crate::midi::midi_message::MidiMessage;

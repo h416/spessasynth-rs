@@ -1,27 +1,28 @@
-/// types.rs
-/// purpose: Common data types for the synthesizer.
-/// Ported from: src/synthesizer/types.ts (spessasynth_core 4.3.0)
-///
-/// Changes from 4.2.0 (reviewed against the 4.3.0 diff):
-/// - `SynthSystem` moved to soundbank/types.ts as `MIDISystem` (Rust:
-///   `crate::soundbank::types`).
-/// - `MasterParameterType` was removed, split into `GlobalMIDIParameter`
-///   (`audio_engine/parameters/midi.rs`) and `GlobalSystemParameter`
-///   (`audio_engine/parameters/system.rs`).
-/// - `SynthProcessorOptions` was reshaped: `enableEventSystem` → `eventsEnabled`,
-///   `enableEffects` → `effectsEnabled`, new `maxBufferSize`; the reverb/chorus/delay
-///   processor fields became optional (the core constructs the defaults itself — the Rust
-///   port always constructs the defaults internally, unchanged).
-/// - Event renames in `SynthProcessorEventData`: `newChannel` → `channelAdded`,
-///   `allControllerReset` → `reset` (now carrying the `MIDISystem`), `synthDisplay` →
-///   `displayMessage`, `masterParameterChange` → `globalParamChange` (now only for the
-///   global *MIDI* parameters; system-parameter changes fire no event).
-/// - Not ported (event API, outside the MIDI-to-WAV scope): TS 4.3.0 moved the per-channel
-///   callback payload types (`NoteOnCallback`, `NoteOffCallback`, `ControllerChangeCallback`,
-///   `ProgramChangeCallback`, `PolyPressureCallback`, `StopAllCallback`, ...) to
-///   `audio_engine/channel/types.ts` and replaced `channelPropertyChange`/`ChannelProperty`
-///   with `channelParamChange`/`ChannelMIDIParameterChange`. The Rust equivalents stay here
-///   with the 4.2.0 payload shapes. Events do not affect the rendered audio.
+//! types.rs
+//! purpose: Common data types for the synthesizer.
+//! Ported from: src/synthesizer/types.ts (spessasynth_core 4.3.0)
+//!
+//! Changes from 4.2.0 (reviewed against the 4.3.0 diff):
+//! - `SynthSystem` moved to soundbank/types.ts as `MIDISystem` (Rust:
+//!   `crate::soundbank::types`).
+//! - `MasterParameterType` was removed, split into `GlobalMIDIParameter`
+//!   (`audio_engine/parameters/midi.rs`) and `GlobalSystemParameter`
+//!   (`audio_engine/parameters/system.rs`).
+//! - `SynthProcessorOptions` was reshaped: `enableEventSystem` → `eventsEnabled`,
+//!   `enableEffects` → `effectsEnabled`, new `maxBufferSize`; the reverb/chorus/delay
+//!   processor fields became optional (the core constructs the defaults itself — the Rust
+//!   port always constructs the defaults internally, unchanged).
+//! - Event renames in `SynthProcessorEventData`: `newChannel` → `channelAdded`,
+//!   `allControllerReset` → `reset` (now carrying the `MIDISystem`), `synthDisplay` →
+//!   `displayMessage`, `masterParameterChange` → `globalParamChange` (now only for the
+//!   global *MIDI* parameters; system-parameter changes fire no event).
+//! - Not ported (event API, outside the MIDI-to-WAV scope): TS 4.3.0 moved the per-channel
+//!   callback payload types (`NoteOnCallback`, `NoteOffCallback`, `ControllerChangeCallback`,
+//!   `ProgramChangeCallback`, `PolyPressureCallback`, `StopAllCallback`, ...) to
+//!   `audio_engine/channel/types.ts` and replaced `channelPropertyChange`/`ChannelProperty`
+//!   with `channelParamChange`/`ChannelMIDIParameterChange`. The Rust equivalents stay here
+//!   with the 4.2.0 payload shapes. Events do not affect the rendered audio.
+
 use crate::midi::enums::MidiController;
 use crate::soundbank::basic_soundbank::midi_patch::{MidiPatch, MidiPatchFull};
 use crate::soundbank::types::MIDISystem;

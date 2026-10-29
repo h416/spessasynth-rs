@@ -1,10 +1,11 @@
-/// dls_verifier.rs
-/// purpose: Shared validation helpers for DLS file parsing.
-/// Ported from: src/soundbank/downloadable_sounds/dls_verifier.ts
-///
-/// TypeScript uses an abstract class with protected static methods.
-/// Rust has no abstract classes; equivalent logic is expressed as module-level pub functions.
-/// TypeScript's `throw new Error(...)` maps to `Err(String)` in Rust.
+//! dls_verifier.rs
+//! purpose: Shared validation helpers for DLS file parsing.
+//! Ported from: src/soundbank/downloadable_sounds/dls_verifier.ts
+//!
+//! TypeScript uses an abstract class with protected static methods.
+//! Rust has no abstract classes; equivalent logic is expressed as module-level pub functions.
+//! TypeScript's `throw new Error(...)` maps to `Err(String)` in Rust.
+
 use crate::utils::loggin::SpessaLog;
 use crate::utils::riff_chunk::RIFFChunk;
 use crate::utils::byte_functions::string::read_binary_string_indexed;

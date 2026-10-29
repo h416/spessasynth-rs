@@ -1,19 +1,20 @@
-/// riff_chunk.rs
-/// purpose: RIFF chunk read/write utilities.
-/// Ported from: src/utils/riff_chunk.ts (spessasynth_core 4.3.0)
-///
-/// Note: TypeScript's `WAVFourCC`, `GenericRIFFFourCC`, and `FourCC` are string literal union
-/// types used only for documentation/type checking. In Rust these are represented as `String`.
-/// Per CLAUDE.md, these type aliases are defined here (not in soundbank/types.rs) to avoid
-/// the circular dependency that exists in the TypeScript version.
-///
-/// TS 4.3.0 turned the free functions `readRIFFChunk` / `writeRIFFChunkRaw` /
-/// `writeRIFFChunkParts` / `findRIFFListType` into static methods on the `RIFFChunk` class
-/// (`RIFFChunk.read` / `RIFFChunk.write` / `RIFFChunk.writeParts` / `RIFFChunk.findListType`),
-/// and added a new `RIFFChunk.getParts` method. This is a purely organizational change (no
-/// behavior difference) plus the new `getParts` capability.
-///
-/// The associated functions below mirror the new 4.3.0 class layout 1:1.
+//! riff_chunk.rs
+//! purpose: RIFF chunk read/write utilities.
+//! Ported from: src/utils/riff_chunk.ts (spessasynth_core 4.3.0)
+//!
+//! Note: TypeScript's `WAVFourCC`, `GenericRIFFFourCC`, and `FourCC` are string literal union
+//! types used only for documentation/type checking. In Rust these are represented as `String`.
+//! Per CLAUDE.md, these type aliases are defined here (not in soundbank/types.rs) to avoid
+//! the circular dependency that exists in the TypeScript version.
+//!
+//! TS 4.3.0 turned the free functions `readRIFFChunk` / `writeRIFFChunkRaw` /
+//! `writeRIFFChunkParts` / `findRIFFListType` into static methods on the `RIFFChunk` class
+//! (`RIFFChunk.read` / `RIFFChunk.write` / `RIFFChunk.writeParts` / `RIFFChunk.findListType`),
+//! and added a new `RIFFChunk.getParts` method. This is a purely organizational change (no
+//! behavior difference) plus the new `getParts` capability.
+//!
+//! The associated functions below mirror the new 4.3.0 class layout 1:1.
+
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::{
     read_le64_indexed, read_little_endian_indexed, write_dword,

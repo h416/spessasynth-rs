@@ -1,19 +1,20 @@
-/// midi_message.rs
-/// purpose: MIDI message struct.
-/// Ported from: src/midi/midi_message.ts (spessasynth_core 4.3.0)
-///
-/// TS 4.3.0 removed `getChannel`, `getEvent`, and `dataBytesAmount` from this file entirely:
-/// `read/midi.ts`'s `parseSMFInternal` inlines an equivalent range-check + a private
-/// `DataBytesAmount` const instead of calling `getChannel` (this Rust crate's `read/midi.rs`
-/// counterpart already matches — it defines its own private `data_bytes_amount` and never called
-/// any of the three), and the sequencer (`process_event.ts`/`set_time_to.ts`) — 4.2.0's only
-/// caller of `getEvent` — was rewritten in 4.3.0 to inline the same channel/status split instead
-/// of calling `getEvent`.
-///
-/// The sequencer 4.3.0 port removed this file's `get_event`/`get_channel`/
-/// `data_bytes_amount` and `MidiEventInfo` accordingly, since `sequencer/process_event.rs` and
-/// `sequencer/set_time_to.rs` no longer call `get_event` (their last remaining caller) and now
-/// inline the equivalent split, matching TS.
+//! midi_message.rs
+//! purpose: MIDI message struct.
+//! Ported from: src/midi/midi_message.ts (spessasynth_core 4.3.0)
+//!
+//! TS 4.3.0 removed `getChannel`, `getEvent`, and `dataBytesAmount` from this file entirely:
+//! `read/midi.ts`'s `parseSMFInternal` inlines an equivalent range-check + a private
+//! `DataBytesAmount` const instead of calling `getChannel` (this Rust crate's `read/midi.rs`
+//! counterpart already matches — it defines its own private `data_bytes_amount` and never called
+//! any of the three), and the sequencer (`process_event.ts`/`set_time_to.ts`) — 4.2.0's only
+//! caller of `getEvent` — was rewritten in 4.3.0 to inline the same channel/status split instead
+//! of calling `getEvent`.
+//!
+//! The sequencer 4.3.0 port removed this file's `get_event`/`get_channel`/
+//! `data_bytes_amount` and `MidiEventInfo` accordingly, since `sequencer/process_event.rs` and
+//! `sequencer/set_time_to.rs` no longer call `get_event` (their last remaining caller) and now
+//! inline the equivalent split, matching TS.
+
 /// A single MIDI message.
 /// Equivalent to: class MIDIMessage
 #[derive(Clone)]

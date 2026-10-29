@@ -1,31 +1,32 @@
-/// preset_zones.rs
-/// purpose: reads preset zones from SoundFont and assigns instruments, generators, modulators.
-/// Ported from: src/soundbank/soundfont/read/preset_zones.ts (spessasynth_core 4.3.0)
-///
-/// # TypeScript vs Rust design differences
-///
-/// ## SoundFontPresetZone
-/// TS 4.2.0: a standalone `class SoundFontPresetZone extends BasicPresetZone` held the
-/// constructor logic (instrument-generator search + validation). TS 4.3.0 removed that class and
-/// inlined the same logic directly into `SoundFontPreset.createSoundFontZone`; the field names
-/// read on generators also changed from `generatorType`/`generatorValue` to `type`/`value`
-/// (naming-only; see `generator.rs`, which already uses `generator_type`/`generator_value` for
-/// both). Rust keeps the pre-existing `SoundFontPresetZone(BasicPresetZone)` newtype: it already
-/// isolates the same constructor logic in one place, so the TS-side class removal has no
-/// Rust-side structural consequence.
-/// Handles the constructor logic (instrument generator search and validation),
-/// and on success pushes the inner `BasicPresetZone` to the preset.
-///
-/// ## applyPresetZones
-/// TypeScript: directly calls `SoundFontPreset`'s `createSoundFontZone` / `globalZone` methods.
-/// Rust: the required operations are abstracted into the `SoundFontPresetZoneSink` trait,
-/// implemented by `SoundFontPreset` (`presets.rs`).
-///
-/// ## instruments parameter
-/// TypeScript: passes `BasicInstrument[]` and indexes into it.
-/// Rust: only `instrument_count: usize` (for index validation).
-/// Actual instrument data is stored in `BasicSoundBank::instruments`, and
-/// zones reference it via `instrument_idx`.
+//! preset_zones.rs
+//! purpose: reads preset zones from SoundFont and assigns instruments, generators, modulators.
+//! Ported from: src/soundbank/soundfont/read/preset_zones.ts (spessasynth_core 4.3.0)
+//!
+//! # TypeScript vs Rust design differences
+//!
+//! ## SoundFontPresetZone
+//! TS 4.2.0: a standalone `class SoundFontPresetZone extends BasicPresetZone` held the
+//! constructor logic (instrument-generator search + validation). TS 4.3.0 removed that class and
+//! inlined the same logic directly into `SoundFontPreset.createSoundFontZone`; the field names
+//! read on generators also changed from `generatorType`/`generatorValue` to `type`/`value`
+//! (naming-only; see `generator.rs`, which already uses `generator_type`/`generator_value` for
+//! both). Rust keeps the pre-existing `SoundFontPresetZone(BasicPresetZone)` newtype: it already
+//! isolates the same constructor logic in one place, so the TS-side class removal has no
+//! Rust-side structural consequence.
+//! Handles the constructor logic (instrument generator search and validation),
+//! and on success pushes the inner `BasicPresetZone` to the preset.
+//!
+//! ## applyPresetZones
+//! TypeScript: directly calls `SoundFontPreset`'s `createSoundFontZone` / `globalZone` methods.
+//! Rust: the required operations are abstracted into the `SoundFontPresetZoneSink` trait,
+//! implemented by `SoundFontPreset` (`presets.rs`).
+//!
+//! ## instruments parameter
+//! TypeScript: passes `BasicInstrument[]` and indexes into it.
+//! Rust: only `instrument_count: usize` (for index validation).
+//! Actual instrument data is stored in `BasicSoundBank::instruments`, and
+//! zones reference it via `instrument_idx`.
+
 use crate::soundbank::basic_soundbank::basic_preset_zone::BasicPresetZone;
 use crate::soundbank::basic_soundbank::basic_zone::BasicZone;
 use crate::soundbank::basic_soundbank::generator::Generator;

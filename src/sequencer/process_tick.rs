@@ -1,16 +1,17 @@
-/// process_tick.rs
-/// purpose: Main playback loop — processes MIDI events up to the current time.
-/// Ported from: src/sequencer/process_tick.ts (spessasynth_core 4.3.0)
-///
-/// Changes from 4.2.0 (reviewed against the 4.3.0 diff):
-/// - `findFirstEventIndex()` (called twice per loop iteration: once to find the event to
-///   process, once more to find the *next* event to process) is gone entirely. The single
-///   `index` cursor into `BasicMIDI.timeline` replaces the per-track
-///   `eventIndexes` array: `timeline[index++]` directly gives the event to process, and
-///   `timeline[index]` (no further increment) gives the next one — same two-event-lookahead
-///   shape as before, just without the linear track scan.
-/// - The end-of-track check now reads `this.index >= timeline.length` instead of comparing the
-///   next track's per-track cursor against its event count.
+//! process_tick.rs
+//! purpose: Main playback loop — processes MIDI events up to the current time.
+//! Ported from: src/sequencer/process_tick.ts (spessasynth_core 4.3.0)
+//!
+//! Changes from 4.2.0 (reviewed against the 4.3.0 diff):
+//! - `findFirstEventIndex()` (called twice per loop iteration: once to find the event to
+//!   process, once more to find the *next* event to process) is gone entirely. The single
+//!   `index` cursor into `BasicMIDI.timeline` replaces the per-track
+//!   `eventIndexes` array: `timeline[index++]` directly gives the event to process, and
+//!   `timeline[index]` (no further increment) gives the next one — same two-event-lookahead
+//!   shape as before, just without the linear track scan.
+//! - The end-of-track check now reads `this.index >= timeline.length` instead of comparing the
+//!   next track's per-track cursor against its event count.
+
 use crate::midi::types::MidiLoopType;
 use crate::sequencer::sequencer::SpessaSynthSequencer;
 use crate::sequencer::types::{LoopCountChangeEventData, SequencerEvent};

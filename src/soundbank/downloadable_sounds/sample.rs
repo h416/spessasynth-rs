@@ -1,19 +1,20 @@
-/// sample.rs
-/// purpose: DLS wave chunk parsing and SF2 sample conversion.
-/// Ported from: src/soundbank/downloadable_sounds/sample.ts
-///
-/// # TypeScript vs Rust design differences
-///
-/// TypeScript uses `class DownloadableSoundsSample extends DLSVerifier`.
-/// Rust has no class inheritance; DLSVerifier's protected static methods are plain
-/// module-level functions in `dls_verifier.rs` and called directly here.
-///
-/// The `dataChunk: RIFFChunk` field is replaced by `data: Vec<u8>` because only the
-/// raw audio bytes are needed after parsing (the RIFF framing is reconstructed in `write()`).
-///
-/// `toSFSample` eagerly decodes audio data before adding the sample to `BasicSoundBank`,
-/// since `BasicSoundBank` stores `Vec<BasicSample>` and cannot do polymorphic dispatch
-/// the way TypeScript's class inheritance allows.
+//! sample.rs
+//! purpose: DLS wave chunk parsing and SF2 sample conversion.
+//! Ported from: src/soundbank/downloadable_sounds/sample.ts
+//!
+//! # TypeScript vs Rust design differences
+//!
+//! TypeScript uses `class DownloadableSoundsSample extends DLSVerifier`.
+//! Rust has no class inheritance; DLSVerifier's protected static methods are plain
+//! module-level functions in `dls_verifier.rs` and called directly here.
+//!
+//! The `dataChunk: RIFFChunk` field is replaced by `data: Vec<u8>` because only the
+//! raw audio bytes are needed after parsing (the RIFF framing is reconstructed in `write()`).
+//!
+//! `toSFSample` eagerly decodes audio data before adding the sample to `BasicSoundBank`,
+//! since `BasicSoundBank` stores `Vec<BasicSample>` and cannot do polymorphic dispatch
+//! the way TypeScript's class inheritance allows.
+
 use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::soundbank::downloadable_sounds::dls_sample::{DlsSample, w_format_tag};

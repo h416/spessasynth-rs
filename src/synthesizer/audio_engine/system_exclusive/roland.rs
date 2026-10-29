@@ -1,9 +1,10 @@
-/// handle_gs.rs
-/// purpose: Handles GS (Roland) system exclusive messages.
-/// Ported from: src/synthesizer/audio_engine/engine_methods/system_exclusive/handle_gs.ts
-/// References:
-///   http://www.bandtrax.com.au/sysex.htm
-///   https://cdn.roland.com/assets/media/pdf/AT-20R_30R_MI.pdf
+//! handle_gs.rs
+//! purpose: Handles GS (Roland) system exclusive messages.
+//! Ported from: src/synthesizer/audio_engine/engine_methods/system_exclusive/handle_gs.ts
+//! References:
+//!   <http://www.bandtrax.com.au/sysex.htm>
+//!   <https://cdn.roland.com/assets/media/pdf/AT-20R_30R_MI.pdf>
+
 use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::generator_types;
 use crate::soundbank::enums::modulator_sources;

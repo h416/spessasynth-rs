@@ -1,19 +1,20 @@
-/// basic_preset.rs
-/// purpose: BasicPreset struct - an SF2 preset with zones, a global zone,
-///          bank/program assignment, and voice parameter computation.
-/// Ported from: src/soundbank/basic_soundbank/basic_preset.ts
-///
-/// # TypeScript vs Rust design differences
-///
-/// In TypeScript, `parentSoundBank: BasicSoundBank` is held as a field and
-/// referenced inside `isDrum` / `getVoiceParameters`.
-///
-/// In Rust, to avoid circular ownership, `parentSoundBank` is not stored as a field.
-/// Instead, the necessary information is passed as method arguments:
-///
-/// - `is_drum(is_xg_bank: bool)` — receives `parentSoundBank.isXGBank` as a parameter
-/// - `get_voice_parameters(midi_note, velocity, instruments, default_modulators)`
-///   — receives `parentSoundBank.defaultModulators` and `instruments` as parameters
+//! basic_preset.rs
+//! purpose: BasicPreset struct - an SF2 preset with zones, a global zone,
+//!          bank/program assignment, and voice parameter computation.
+//! Ported from: src/soundbank/basic_soundbank/basic_preset.ts
+//!
+//! # TypeScript vs Rust design differences
+//!
+//! In TypeScript, `parentSoundBank: BasicSoundBank` is held as a field and
+//! referenced inside `isDrum` / `getVoiceParameters`.
+//!
+//! In Rust, to avoid circular ownership, `parentSoundBank` is not stored as a field.
+//! Instead, the necessary information is passed as method arguments:
+//!
+//! - `is_drum(is_xg_bank: bool)` — receives `parentSoundBank.isXGBank` as a parameter
+//! - `get_voice_parameters(midi_note, velocity, instruments, default_modulators)`
+//!   — receives `parentSoundBank.defaultModulators` and `instruments` as parameters
+
 use std::fmt;
 
 use crate::soundbank::basic_soundbank::basic_instrument::BasicInstrument;

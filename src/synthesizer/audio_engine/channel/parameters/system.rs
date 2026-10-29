@@ -1,6 +1,7 @@
-/// system.rs
-/// purpose: Per-channel system parameters (API-controlled, not MIDI-controlled).
-/// Ported from: src/synthesizer/audio_engine/channel/parameters/system.ts
+//! system.rs
+//! purpose: Per-channel system parameters (API-controlled, not MIDI-controlled).
+//! Ported from: src/synthesizer/audio_engine/channel/parameters/system.ts
+
 use crate::synthesizer::enums::InterpolationType;
 
 /// The system parameters of the channel.

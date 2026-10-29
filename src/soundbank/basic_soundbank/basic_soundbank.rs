@@ -1,40 +1,41 @@
-/// basic_soundbank.rs
-/// purpose: BasicSoundBank struct - a single SoundFont2/DLS sound bank.
-/// Ported from: src/soundbank/basic_soundbank/basic_soundbank.ts (spessasynth_core 4.3.0)
-///
-/// # Skipped features
-/// - `setSampleFormat()` → SF3/Vorbis compression, out of scope
-/// - `writeSF2()`, `writeDLS()`, `getSampleSoundBankFile()` → write-only, out of MIDI→WAV scope
-/// - `addCompletePresets()` → replaced by `clone_preset_from` / `merge_sound_banks`
-///
-/// # TypeScript vs Rust design differences
-///
-/// - All object references replaced with Vec indices
-/// - `clone_sample/instrument/preset` take explicit source-bank slices for cross-bank cloning
-/// - `remove_unused_elements` / `delete_*` perform full index recomputation after removal
-/// - `get_preset` returns `Option<&BasicPreset>` (None on empty bank) to satisfy `PresetResolver`
-/// - `parentSoundBank` in `BasicPreset` is removed (circular ownership); passed as params instead
-///
-/// ## `trim`
-///
-/// TS 4.3.0 reworked `trimSoundBank(mid)` (which internally called `mid.getUsedProgramsAndKeys`)
-/// into `trim(presetData: PresetsWithKeyCombinations)`, taking the already-computed result so
-/// `basic_soundbank.ts` no longer depends on `basic_midi.ts`. Callers now do
-/// `bank.trim(&midi.get_used_programs_and_keys(&bank))` (mirrored 1:1 in Rust — see
-/// `midi_tools::used_programs_and_keys`).
-///
-/// TS's `trim` immediately calls `this.deleteInstrument`/`this.deleteSample` (identity-based, no
-/// reindexing needed) as soon as an instrument/sample's use count hits zero mid-loop. Rust's
-/// index-based `delete_instrument`/`delete_sample` instead perform a full reindex of every
-/// other index reference in the bank, which is unsafe to interleave with the in-progress
-/// zone-trimming loop (the loop holds cached indices that a reindex would invalidate). Since
-/// TS's `trim` unconditionally calls `this.removeUnusedElements()` once at the very end anyway
-/// (a no-op if everything was already cleaned up immediately), this Rust port defers *all*
-/// instrument/sample physical removal to that single final `remove_unused_elements()` sweep:
-/// the loop below only decrements use-counts (via `delete_zone`'s existing unlink behavior), and
-/// physical removal + reindexing happens once, after the loop. The final trimmed sound bank
-/// contents are identical either way — removal order cannot change which elements end up with a
-/// zero use-count.
+//! basic_soundbank.rs
+//! purpose: BasicSoundBank struct - a single SoundFont2/DLS sound bank.
+//! Ported from: src/soundbank/basic_soundbank/basic_soundbank.ts (spessasynth_core 4.3.0)
+//!
+//! # Skipped features
+//! - `setSampleFormat()` → SF3/Vorbis compression, out of scope
+//! - `writeSF2()`, `writeDLS()`, `getSampleSoundBankFile()` → write-only, out of MIDI→WAV scope
+//! - `addCompletePresets()` → replaced by `clone_preset_from` / `merge_sound_banks`
+//!
+//! # TypeScript vs Rust design differences
+//!
+//! - All object references replaced with Vec indices
+//! - `clone_sample/instrument/preset` take explicit source-bank slices for cross-bank cloning
+//! - `remove_unused_elements` / `delete_*` perform full index recomputation after removal
+//! - `get_preset` returns `Option<&BasicPreset>` (None on empty bank) to satisfy `PresetResolver`
+//! - `parentSoundBank` in `BasicPreset` is removed (circular ownership); passed as params instead
+//!
+//! ## `trim`
+//!
+//! TS 4.3.0 reworked `trimSoundBank(mid)` (which internally called `mid.getUsedProgramsAndKeys`)
+//! into `trim(presetData: PresetsWithKeyCombinations)`, taking the already-computed result so
+//! `basic_soundbank.ts` no longer depends on `basic_midi.ts`. Callers now do
+//! `bank.trim(&midi.get_used_programs_and_keys(&bank))` (mirrored 1:1 in Rust — see
+//! `midi_tools::used_programs_and_keys`).
+//!
+//! TS's `trim` immediately calls `this.deleteInstrument`/`this.deleteSample` (identity-based, no
+//! reindexing needed) as soon as an instrument/sample's use count hits zero mid-loop. Rust's
+//! index-based `delete_instrument`/`delete_sample` instead perform a full reindex of every
+//! other index reference in the bank, which is unsafe to interleave with the in-progress
+//! zone-trimming loop (the loop holds cached indices that a reindex would invalidate). Since
+//! TS's `trim` unconditionally calls `this.removeUnusedElements()` once at the very end anyway
+//! (a no-op if everything was already cleaned up immediately), this Rust port defers *all*
+//! instrument/sample physical removal to that single final `remove_unused_elements()` sweep:
+//! the loop below only decrements use-counts (via `delete_zone`'s existing unlink behavior), and
+//! physical removal + reindexing happens once, after the loop. The final trimmed sound bank
+//! contents are identical either way — removal order cannot change which elements end up with a
+//! zero use-count.
+
 use crate::soundbank::basic_soundbank::basic_instrument::BasicInstrument;
 use crate::soundbank::basic_soundbank::basic_instrument_zone::BasicInstrumentZone;
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;

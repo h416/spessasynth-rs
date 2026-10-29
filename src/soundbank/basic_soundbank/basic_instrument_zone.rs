@@ -1,18 +1,19 @@
-/// basic_instrument_zone.rs
-/// purpose: Zone within an instrument, referencing a specific sample.
-/// Ported from: src/soundbank/basic_soundbank/basic_instrument_zone.ts
-///
-/// # TypeScript vs Rust design differences
-///
-/// In TypeScript, direct object references to `BasicSample` and `BasicInstrument` are held,
-/// and cross-references are managed via `sample.linkTo(instrument)` / `sample.unlinkFrom(instrument)`.
-///
-/// In Rust, to avoid circular ownership:
-/// - `sample_idx`            : index into `BasicSoundBank::samples`
-/// - `parent_instrument_idx` : index into `BasicSoundBank::instruments`
-///
-/// Back-reference tracking via `linkTo` / `unlinkFrom` is implemented during `BasicSample` / `BasicInstrument` porting.
-/// `getWriteGenerators` uses `sample_idx` directly instead of `bank.samples.indexOf(this.sample)`.
+//! basic_instrument_zone.rs
+//! purpose: Zone within an instrument, referencing a specific sample.
+//! Ported from: src/soundbank/basic_soundbank/basic_instrument_zone.ts
+//!
+//! # TypeScript vs Rust design differences
+//!
+//! In TypeScript, direct object references to `BasicSample` and `BasicInstrument` are held,
+//! and cross-references are managed via `sample.linkTo(instrument)` / `sample.unlinkFrom(instrument)`.
+//!
+//! In Rust, to avoid circular ownership:
+//! - `sample_idx`            : index into `BasicSoundBank::samples`
+//! - `parent_instrument_idx` : index into `BasicSoundBank::instruments`
+//!
+//! Back-reference tracking via `linkTo` / `unlinkFrom` is implemented during `BasicSample` / `BasicInstrument` porting.
+//! `getWriteGenerators` uses `sample_idx` directly instead of `bank.samples.indexOf(this.sample)`.
+
 use crate::soundbank::basic_soundbank::basic_zone::BasicZone;
 use crate::soundbank::basic_soundbank::generator::Generator;
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;

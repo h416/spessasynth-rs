@@ -1,8 +1,9 @@
-/// modulator_curves.rs
-/// purpose: Precomputes modulator concave and convex curves and calculates
-///          a curve value for a given polarity, direction and type.
-/// Ported from: src/soundbank/basic_soundbank/modulator_curves.ts
-/// (moved from src/synthesizer/audio_engine/engine_components/ in TS 4.3.0)
+//! modulator_curves.rs
+//! purpose: Precomputes modulator concave and convex curves and calculates
+//!          a curve value for a given polarity, direction and type.
+//! Ported from: src/soundbank/basic_soundbank/modulator_curves.ts
+//! (moved from src/synthesizer/audio_engine/engine_components/ in TS 4.3.0)
+
 use std::sync::LazyLock;
 
 use crate::soundbank::enums::{ModulatorCurveType, modulator_curve_types};

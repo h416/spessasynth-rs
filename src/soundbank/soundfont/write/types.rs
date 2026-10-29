@@ -1,6 +1,7 @@
-/// types.rs
-/// purpose: Helper type definitions used during SF2 writing.
-/// Ported from: src/soundbank/soundfont/write/types.ts
+//! types.rs
+//! purpose: Helper type definitions used during SF2 writing.
+//! Ported from: src/soundbank/soundfont/write/types.ts
+
 use crate::utils::indexed_array::IndexedByteArray;
 
 /// Struct holding extended SF2 chunks.

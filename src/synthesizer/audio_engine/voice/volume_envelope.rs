@@ -1,18 +1,19 @@
-/// volume_envelope.rs
-/// purpose: applies a volume envelope for a given voice
-/// Ported from: src/synthesizer/audio_engine/voice/volume_envelope.ts (spessasynth_core 4.3.0)
-///
-/// For performance reasons, cbAttenuationToGain is inlined here (via the shared
-/// CENTIBEL_LOOKUP_TABLE exposed by `unit_converter::cb_attenuation_to_gain_f64`).
-///
-/// # 4.3.0 rewrite
-/// The volume envelope no longer processes the audio buffer sample-by-sample.
-/// Instead, `process` advances the envelope by an entire render quantum and writes the
-/// gain value for the LAST sample of the block into `output_gain`, returning the block's
-/// activity. The caller (`render_voice`) then linearly interpolates from the previous
-/// `output_gain` to the new one across the block. The per-sample gain smoothing and the
-/// `centibel_offset` argument were removed; the centibel excursion (mod LFO to volume,
-/// resonance) is now folded into `gain_target` by the caller before calling `process`.
+//! volume_envelope.rs
+//! purpose: applies a volume envelope for a given voice
+//! Ported from: src/synthesizer/audio_engine/voice/volume_envelope.ts (spessasynth_core 4.3.0)
+//!
+//! For performance reasons, cbAttenuationToGain is inlined here (via the shared
+//! CENTIBEL_LOOKUP_TABLE exposed by `unit_converter::cb_attenuation_to_gain_f64`).
+//!
+//! # 4.3.0 rewrite
+//! The volume envelope no longer processes the audio buffer sample-by-sample.
+//! Instead, `process` advances the envelope by an entire render quantum and writes the
+//! gain value for the LAST sample of the block into `output_gain`, returning the block's
+//! activity. The caller (`render_voice`) then linearly interpolates from the previous
+//! `output_gain` to the new one across the block. The per-sample gain smoothing and the
+//! `centibel_offset` argument were removed; the centibel excursion (mod LFO to volume,
+//! resonance) is now folded into `gain_target` by the caller before calling `process`.
+
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 use crate::synthesizer::audio_engine::synth_constants::SPESSA_BUFSIZE;
 use crate::synthesizer::audio_engine::voice::unit_converter::{

@@ -1,44 +1,45 @@
-/// sequencer.rs
-/// purpose: SpessaSynthSequencer struct and core methods.
-/// Ported from: src/sequencer/sequencer.ts (spessasynth_core 4.3.0)
-///
-/// Changes from 4.2.0 (reviewed against the 4.3.0 diff):
-/// - `eventIndexes: number[]` (one cursor per track, resolved via `findFirstEventIndex()`) was
-///   replaced by a single `index: number` cursor into `BasicMIDI.timeline` (a flattened,
-///   time-sorted `{tr, ev}` list computed once when the MIDI is flushed).
-///   `findFirstEventIndex()`/`find_first_event_index()` no longer exists.
-/// - `playingNotes: {midiNote, channel, velocity}[]` (a flat array, linearly scanned by
-///   `findIndex`/`splice` on every note on/off) became `playingNotes: Map<number, number>[]`
-///   (one `Map<midiNote, velocity>` per channel). Ported here as `Vec<Vec<(u8, u8)>>` (one
-///   `(note, velocity)` list per channel) since Rust has no ordered-map in std and channels never
-///   hold more than a handful of simultaneously-playing notes; `playing_notes_set`/
-///   `playing_notes_delete` below reproduce `Map.set`/`Map.delete` insertion-order semantics
-///   (update-in-place does not reorder; delete-then-reinsert moves an entry to the end).
-/// - `shuffleMode` setter no longer reshuffles/reloads as a side effect of being set; it is now a
-///   plain field write (shuffling only happens on `loadNewSongList`). Ported below.
-/// - `this.synth.currentSynthTime` was renamed to `this.synth.currentTime` (pure rename, same
-///   `synthCore.currentTime` value — see `processor.ts`'s `get currentTime()` /
-///   `get currentSynthTime()` in 4.3.0 / 4.2.0 respectively). This Rust file keeps calling the
-///   existing `SpessaSynthProcessor::current_synth_time()` (out of scope: `processor.rs` is not
-///   part of this task's file list), which returns the identical value.
-/// - `sendMIDIReset()`'s internal-playback path calls `this.synth.reset()` instead of
-///   `this.synth.resetAllControllers()`; `synthCore.reset(system = DEFAULT_SYNTH_MODE)` in 4.3.0
-///   is a rename of `synthCore.resetAllControllers(system)` with the same default and behavior
-///   (see `synthesizer_core.ts`). This Rust file keeps calling the existing
-///   `SpessaSynthProcessor::reset_all_controllers(DEFAULT_SYNTH_MODE)` (out of scope:
-///   `processor.rs`), which is functionally identical.
-/// - `sendMIDIReset()`'s external-playback path now sends a real GS-reset SysEx via
-///   `sendMIDISysEx(MIDIUtils.gsData(...))` instead of a raw `[midiMessageTypes.reset]` byte.
-///   Not reachable from this port: `externalMIDIPlayback` (used only by host apps forwarding MIDI
-///   to real/virtual hardware) is out of scope for this offline-WAV-rendering project and was
-///   never implemented — every `sendMIDI*` wrapper below only has the internal-synth branch.
-/// - `SpessaSynthWarn`/`SpessaSynthGroup`/`SpessaSynthGroupEnd` calls became
-///   `SpessaLog::warn`/`SpessaLog::group`/`SpessaLog::group_end` (behavior-identical
-///   thin wrappers, see `utils/loggin.rs`).
-/// - Cosmetic-only: doc comment wording ("shuffleMode" → "shuffle mode"), `midiControllers` /
-///   `midiMessageTypes` → `MIDIControllers` / `MIDIMessageTypes` (TS casing convention change;
-///   Rust's `midi_controllers`/`midi_message_types` modules were already using
-///   SCREAMING_SNAKE_CASE consts and need no change).
+//! sequencer.rs
+//! purpose: SpessaSynthSequencer struct and core methods.
+//! Ported from: src/sequencer/sequencer.ts (spessasynth_core 4.3.0)
+//!
+//! Changes from 4.2.0 (reviewed against the 4.3.0 diff):
+//! - `eventIndexes: number[]` (one cursor per track, resolved via `findFirstEventIndex()`) was
+//!   replaced by a single `index: number` cursor into `BasicMIDI.timeline` (a flattened,
+//!   time-sorted `{tr, ev}` list computed once when the MIDI is flushed).
+//!   `findFirstEventIndex()`/`find_first_event_index()` no longer exists.
+//! - `playingNotes: {midiNote, channel, velocity}[]` (a flat array, linearly scanned by
+//!   `findIndex`/`splice` on every note on/off) became `playingNotes: Map<number, number>[]`
+//!   (one `Map<midiNote, velocity>` per channel). Ported here as `Vec<Vec<(u8, u8)>>` (one
+//!   `(note, velocity)` list per channel) since Rust has no ordered-map in std and channels never
+//!   hold more than a handful of simultaneously-playing notes; `playing_notes_set`/
+//!   `playing_notes_delete` below reproduce `Map.set`/`Map.delete` insertion-order semantics
+//!   (update-in-place does not reorder; delete-then-reinsert moves an entry to the end).
+//! - `shuffleMode` setter no longer reshuffles/reloads as a side effect of being set; it is now a
+//!   plain field write (shuffling only happens on `loadNewSongList`). Ported below.
+//! - `this.synth.currentSynthTime` was renamed to `this.synth.currentTime` (pure rename, same
+//!   `synthCore.currentTime` value — see `processor.ts`'s `get currentTime()` /
+//!   `get currentSynthTime()` in 4.3.0 / 4.2.0 respectively). This Rust file keeps calling the
+//!   existing `SpessaSynthProcessor::current_synth_time()` (out of scope: `processor.rs` is not
+//!   part of this task's file list), which returns the identical value.
+//! - `sendMIDIReset()`'s internal-playback path calls `this.synth.reset()` instead of
+//!   `this.synth.resetAllControllers()`; `synthCore.reset(system = DEFAULT_SYNTH_MODE)` in 4.3.0
+//!   is a rename of `synthCore.resetAllControllers(system)` with the same default and behavior
+//!   (see `synthesizer_core.ts`). This Rust file keeps calling the existing
+//!   `SpessaSynthProcessor::reset_all_controllers(DEFAULT_SYNTH_MODE)` (out of scope:
+//!   `processor.rs`), which is functionally identical.
+//! - `sendMIDIReset()`'s external-playback path now sends a real GS-reset SysEx via
+//!   `sendMIDISysEx(MIDIUtils.gsData(...))` instead of a raw `[midiMessageTypes.reset]` byte.
+//!   Not reachable from this port: `externalMIDIPlayback` (used only by host apps forwarding MIDI
+//!   to real/virtual hardware) is out of scope for this offline-WAV-rendering project and was
+//!   never implemented — every `sendMIDI*` wrapper below only has the internal-synth branch.
+//! - `SpessaSynthWarn`/`SpessaSynthGroup`/`SpessaSynthGroupEnd` calls became
+//!   `SpessaLog::warn`/`SpessaLog::group`/`SpessaLog::group_end` (behavior-identical
+//!   thin wrappers, see `utils/loggin.rs`).
+//! - Cosmetic-only: doc comment wording ("shuffleMode" → "shuffle mode"), `midiControllers` /
+//!   `midiMessageTypes` → `MIDIControllers` / `MIDIMessageTypes` (TS casing convention change;
+//!   Rust's `midi_controllers`/`midi_message_types` modules were already using
+//!   SCREAMING_SNAKE_CASE consts and need no change).
+
 use std::collections::HashMap;
 
 use crate::midi::basic_midi::BasicMidi;

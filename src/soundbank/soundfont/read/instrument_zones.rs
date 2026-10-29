@@ -1,30 +1,31 @@
-/// instrument_zones.rs
-/// purpose: reads instrument zones from SoundFont and assigns samples, generators, modulators.
-/// Ported from: src/soundbank/soundfont/read/instrument_zones.ts (spessasynth_core 4.3.0)
-///
-/// # TypeScript vs Rust design differences
-///
-/// ## SoundFontInstrumentZone
-/// TS 4.2.0: a standalone `class SoundFontInstrumentZone extends BasicInstrumentZone` held the
-/// constructor logic (sampleID search + validation). TS 4.3.0 removed that class and inlined the
-/// same logic directly into `SoundFontInstrument.createSoundFontZone`; the field names read on
-/// generators also changed from `generatorType`/`generatorValue` to `type`/`value` (naming-only;
-/// see `generator.rs`, which already uses `generator_type`/`generator_value` for both).
-/// Rust keeps the pre-existing `SoundFontInstrumentZone(BasicInstrumentZone)` newtype: it already
-/// isolates the same constructor logic (sampleID search and validation) in one place, so the
-/// TS-side class removal has no Rust-side structural consequence.
-/// Handles the constructor logic (sampleID search and validation),
-/// and on success pushes the inner `BasicInstrumentZone` to the instrument.
-///
-/// ## applyInstrumentZones
-/// TypeScript: directly calls `SoundFontInstrument`'s `createSoundFontZone` / `globalZone` methods.
-/// Rust: the required operations are abstracted into the `SoundFontInstrumentZoneSink` trait,
-/// implemented by `SoundFontInstrument` (`instruments.rs`).
-///
-/// ## samples parameter
-/// TypeScript: passes `BasicSample[]` and indexes into it.
-/// Rust: only `sample_count: usize` (for index validation).
-/// Actual sample data is stored in `BasicSoundBank::samples`, and zones reference it via `sample_idx`.
+//! instrument_zones.rs
+//! purpose: reads instrument zones from SoundFont and assigns samples, generators, modulators.
+//! Ported from: src/soundbank/soundfont/read/instrument_zones.ts (spessasynth_core 4.3.0)
+//!
+//! # TypeScript vs Rust design differences
+//!
+//! ## SoundFontInstrumentZone
+//! TS 4.2.0: a standalone `class SoundFontInstrumentZone extends BasicInstrumentZone` held the
+//! constructor logic (sampleID search + validation). TS 4.3.0 removed that class and inlined the
+//! same logic directly into `SoundFontInstrument.createSoundFontZone`; the field names read on
+//! generators also changed from `generatorType`/`generatorValue` to `type`/`value` (naming-only;
+//! see `generator.rs`, which already uses `generator_type`/`generator_value` for both).
+//! Rust keeps the pre-existing `SoundFontInstrumentZone(BasicInstrumentZone)` newtype: it already
+//! isolates the same constructor logic (sampleID search and validation) in one place, so the
+//! TS-side class removal has no Rust-side structural consequence.
+//! Handles the constructor logic (sampleID search and validation),
+//! and on success pushes the inner `BasicInstrumentZone` to the instrument.
+//!
+//! ## applyInstrumentZones
+//! TypeScript: directly calls `SoundFontInstrument`'s `createSoundFontZone` / `globalZone` methods.
+//! Rust: the required operations are abstracted into the `SoundFontInstrumentZoneSink` trait,
+//! implemented by `SoundFontInstrument` (`instruments.rs`).
+//!
+//! ## samples parameter
+//! TypeScript: passes `BasicSample[]` and indexes into it.
+//! Rust: only `sample_count: usize` (for index validation).
+//! Actual sample data is stored in `BasicSoundBank::samples`, and zones reference it via `sample_idx`.
+
 use crate::soundbank::basic_soundbank::basic_instrument_zone::BasicInstrumentZone;
 use crate::soundbank::basic_soundbank::basic_zone::BasicZone;
 use crate::soundbank::basic_soundbank::generator::Generator;

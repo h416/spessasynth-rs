@@ -1,21 +1,22 @@
-/// midi.rs
-/// purpose: Standard MIDI File (SMF) parser.
-/// Ported from: src/midi/read/midi.ts (spessasynth_core 4.3.0)
-///
-/// TS 4.3.0 split the monolithic `midi_loader.ts` (4.2.0) into `read/midi.ts`, `read/rmidi.ts`,
-/// and `read/xmf.ts`. This file is `read/midi.ts`'s `parseSMFInternal`, which now handles *only*
-/// SMF parsing: the RIFF (RMIDI) / "XMF_" / plain-SMF format dispatch that `loadMIDIFromArrayBufferInternal`
-/// used to do here moved to `BasicMIDI.fromArrayBuffer` (see `basic_midi.rs`), and `read/rmidi.ts`
-/// now calls `parseSMFInternal` (this file) at the end of its own parsing instead of the other
-/// way around — this Rust port's phase-1 structure had the call direction backwards (`read/midi.rs`
-/// called into `read/rmidi.rs`); it is corrected here to match the real TS 4.3.0 layout.
-///
-/// TS 4.3.0 also inlined the message-length dispatch: instead of calling the (now file-local, no
-/// longer exported) `getChannel` to classify the status byte into -1/-2/-3/voice, it does a
-/// direct range check against `MIDIMessageTypes` bounds, and moved `dataBytesAmount` into a
-/// private `DataBytesAmount` const local to this file (both ported below as `data_bytes_amount`,
-/// a private fn distinct from the crate-public `midi_message::data_bytes_amount` kept for the
-/// not-yet-ported `sequencer` module — see `midi_message.rs`'s header comment).
+//! midi.rs
+//! purpose: Standard MIDI File (SMF) parser.
+//! Ported from: src/midi/read/midi.ts (spessasynth_core 4.3.0)
+//!
+//! TS 4.3.0 split the monolithic `midi_loader.ts` (4.2.0) into `read/midi.ts`, `read/rmidi.ts`,
+//! and `read/xmf.ts`. This file is `read/midi.ts`'s `parseSMFInternal`, which now handles *only*
+//! SMF parsing: the RIFF (RMIDI) / "XMF_" / plain-SMF format dispatch that `loadMIDIFromArrayBufferInternal`
+//! used to do here moved to `BasicMIDI.fromArrayBuffer` (see `basic_midi.rs`), and `read/rmidi.ts`
+//! now calls `parseSMFInternal` (this file) at the end of its own parsing instead of the other
+//! way around — this Rust port's phase-1 structure had the call direction backwards (`read/midi.rs`
+//! called into `read/rmidi.rs`); it is corrected here to match the real TS 4.3.0 layout.
+//!
+//! TS 4.3.0 also inlined the message-length dispatch: instead of calling the (now file-local, no
+//! longer exported) `getChannel` to classify the status byte into -1/-2/-3/voice, it does a
+//! direct range check against `MIDIMessageTypes` bounds, and moved `dataBytesAmount` into a
+//! private `DataBytesAmount` const local to this file (both ported below as `data_bytes_amount`,
+//! a private fn distinct from the crate-public `midi_message::data_bytes_amount` kept for the
+//! not-yet-ported `sequencer` module — see `midi_message.rs`'s header comment).
+
 use crate::midi::basic_midi::BasicMidi;
 use crate::midi::midi_message::MidiMessage;
 use crate::midi::midi_track::MidiTrack;

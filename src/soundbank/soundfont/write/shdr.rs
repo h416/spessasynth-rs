@@ -1,6 +1,7 @@
-/// shdr.rs
-/// purpose: Build the SF2 shdr RIFF chunk (sample header records) from a sound bank.
-/// Ported from: src/soundbank/soundfont/write/shdr.ts (spessasynth_core 4.3.0)
+//! shdr.rs
+//! purpose: Build the SF2 shdr RIFF chunk (sample header records) from a sound bank.
+//! Ported from: src/soundbank/soundfont/write/shdr.ts (spessasynth_core 4.3.0)
+
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::soundbank::soundfont::read::samples::SF3_BIT_FLAG;
 use crate::soundbank::soundfont::write::types::ExtendedSF2Chunks;

@@ -1,54 +1,55 @@
-/// modify_midi.rs
-/// purpose: MIDI sequence editing utilities (program changes, controller changes, channel
-///          clearing, transposition, RPN/NRPN-aware deletion, and GS effect parameter writing).
-/// Ported from: src/midi/midi_tools/modify_midi.ts (spessasynth_core 4.3.0)
-/// (formerly `src/midi/midi_tools/midi_editor.ts` in 4.2.0)
-///
-/// TS 4.3.0 rewrote this file almost entirely, replacing the flat
-/// `modifyMIDIInternal(midi, desiredProgramChanges, desiredControllerChanges,
-/// desiredChannelsToClear, desiredChannelsToTranspose)` signature with a single
-/// `modifyMIDIInternal(midi, opts: ModifyMIDIOptions)`, where `opts.channels` is a
-/// `Map<channel, ClearableParameter<ChannelModification>>` (channel -> "clear everything" or a
-/// per-channel modification). New capabilities: RPN/NRPN-aware deletion via `ParameterTracker`
-/// (so locking/clearing a controller that's actually driven by an NRPN, e.g. GS vibrato depth,
-/// now works), and writing GS reverb/chorus/delay/insertion-effect System Exclusive parameters
-/// (`reverbParams`/`chorusParams`/`delayParams`/`insertionParams`), replacing/augmenting
-/// `applySnapshotInternal`'s previous "controllers + program changes only" scope (now split out
-/// into `apply_snapshot.rs`).
-///
-/// `isXGOn`/`isGSOn`/`isGMOn`/`isGM2On` (from the now-deleted `utils/sysex_detector.ts`) are
-/// replaced by `MIDIUtils.analyzeSysEx`; `getGsOn` is replaced by `MIDIUtils.gsReset`.
-///
-/// # Faithfully-reproduced upstream quirks
-///
-/// - `addEventBefore` (here: `add_event_before`) always inserts at the *original*, frozen event
-///   index captured at the start of processing the current note-on/off — it never advances that
-///   index between repeated calls. Since each insertion happens at the same array position, later
-///   calls end up *before* earlier ones in the final MIDI: e.g. the program-change block calls
-///   `addEventBefore` for program-change, then bank MSB, then bank LSB, then (optionally) GS drum
-///   change, producing the final on-track order `drums -> lsb -> msb -> program change -> (note
-///   on)` — exactly as the upstream code comment says. The per-channel controller-lock loop and
-///   the fine-tune RPN block rely on the same reversal.
-/// - The fine-tune RPN block's Data Entry MSB event is built with `getControllerChange(channel,
-///   ...)` (the port-offset-inclusive absolute channel number) while every other call in that
-///   block uses `midiChannel` (0-15, no port offset) — almost certainly an upstream typo, kept
-///   as-is.
-/// - The post-loop "insertion effect enabled per channel" writer calls `targetTrack.addEvents(
-///   targetTicks, ...)`, i.e. it (mis)uses a *tick count* as the splice array index instead of
-///   `targetIndex`. `Vec::insert` panics on an out-of-bounds index where JS's `Array.splice`
-///   silently clamps, so the Rust port's `splice_insert` helper clamps explicitly — this is the
-///   one deviation from "port bugs as-is", and only prevents a panic; it does not change where
-///   the event ends up when the tick count *is* in-bounds.
-/// - CC-lock deletion uses JS *truthiness* inconsistently across the three lookup sites. The
-///   plain Controller Change path and the NRPN-decoded Controller Change path both test
-///   `if (change)`, so a lock *value* of `0` is falsy and does NOT delete the existing event
-///   (while `"clear"`, a non-empty string, is truthy and does); but the SysEx-decoded
-///   Controller Change path tests `changes !== undefined`, so there even a `0`-valued lock
-///   deletes. All three are reproduced as-is (`Clear` counts as truthy; `Value(0)` deletes only
-///   on the SysEx path).
-/// - The GS-reset auto-insert trigger is `.some((c) => c.patch && c.patch !== "clear")`: a
-///   `Clear`-only patch request removes program changes but does not cause a GS reset to be
-///   inserted.
+//! modify_midi.rs
+//! purpose: MIDI sequence editing utilities (program changes, controller changes, channel
+//!          clearing, transposition, RPN/NRPN-aware deletion, and GS effect parameter writing).
+//! Ported from: src/midi/midi_tools/modify_midi.ts (spessasynth_core 4.3.0)
+//! (formerly `src/midi/midi_tools/midi_editor.ts` in 4.2.0)
+//!
+//! TS 4.3.0 rewrote this file almost entirely, replacing the flat
+//! `modifyMIDIInternal(midi, desiredProgramChanges, desiredControllerChanges,
+//! desiredChannelsToClear, desiredChannelsToTranspose)` signature with a single
+//! `modifyMIDIInternal(midi, opts: ModifyMIDIOptions)`, where `opts.channels` is a
+//! `Map<channel, ClearableParameter<ChannelModification>>` (channel -> "clear everything" or a
+//! per-channel modification). New capabilities: RPN/NRPN-aware deletion via `ParameterTracker`
+//! (so locking/clearing a controller that's actually driven by an NRPN, e.g. GS vibrato depth,
+//! now works), and writing GS reverb/chorus/delay/insertion-effect System Exclusive parameters
+//! (`reverbParams`/`chorusParams`/`delayParams`/`insertionParams`), replacing/augmenting
+//! `applySnapshotInternal`'s previous "controllers + program changes only" scope (now split out
+//! into `apply_snapshot.rs`).
+//!
+//! `isXGOn`/`isGSOn`/`isGMOn`/`isGM2On` (from the now-deleted `utils/sysex_detector.ts`) are
+//! replaced by `MIDIUtils.analyzeSysEx`; `getGsOn` is replaced by `MIDIUtils.gsReset`.
+//!
+//! # Faithfully-reproduced upstream quirks
+//!
+//! - `addEventBefore` (here: `add_event_before`) always inserts at the *original*, frozen event
+//!   index captured at the start of processing the current note-on/off — it never advances that
+//!   index between repeated calls. Since each insertion happens at the same array position, later
+//!   calls end up *before* earlier ones in the final MIDI: e.g. the program-change block calls
+//!   `addEventBefore` for program-change, then bank MSB, then bank LSB, then (optionally) GS drum
+//!   change, producing the final on-track order `drums -> lsb -> msb -> program change -> (note
+//!   on)` — exactly as the upstream code comment says. The per-channel controller-lock loop and
+//!   the fine-tune RPN block rely on the same reversal.
+//! - The fine-tune RPN block's Data Entry MSB event is built with `getControllerChange(channel,
+//!   ...)` (the port-offset-inclusive absolute channel number) while every other call in that
+//!   block uses `midiChannel` (0-15, no port offset) — almost certainly an upstream typo, kept
+//!   as-is.
+//! - The post-loop "insertion effect enabled per channel" writer calls `targetTrack.addEvents(
+//!   targetTicks, ...)`, i.e. it (mis)uses a *tick count* as the splice array index instead of
+//!   `targetIndex`. `Vec::insert` panics on an out-of-bounds index where JS's `Array.splice`
+//!   silently clamps, so the Rust port's `splice_insert` helper clamps explicitly — this is the
+//!   one deviation from "port bugs as-is", and only prevents a panic; it does not change where
+//!   the event ends up when the tick count *is* in-bounds.
+//! - CC-lock deletion uses JS *truthiness* inconsistently across the three lookup sites. The
+//!   plain Controller Change path and the NRPN-decoded Controller Change path both test
+//!   `if (change)`, so a lock *value* of `0` is falsy and does NOT delete the existing event
+//!   (while `"clear"`, a non-empty string, is truthy and does); but the SysEx-decoded
+//!   Controller Change path tests `changes !== undefined`, so there even a `0`-valued lock
+//!   deletes. All three are reproduced as-is (`Clear` counts as truthy; `Value(0)` deletes only
+//!   on the SysEx path).
+//! - The GS-reset auto-insert trigger is `.some((c) => c.patch && c.patch !== "clear")`: a
+//!   `Clear`-only patch request removes program changes but does not cause a GS reset to be
+//!   inserted.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::midi::basic_midi::BasicMidi;

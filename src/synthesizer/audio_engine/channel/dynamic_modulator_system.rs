@@ -1,6 +1,7 @@
-/// dynamic_modulator_system.rs
-/// purpose: DynamicModulatorSystem - Runtime dynamic modulator management for complex messages such as SysEx.
-/// Ported from: src/synthesizer/audio_engine/engine_components/dynamic_modulator_system.ts
+//! dynamic_modulator_system.rs
+//! purpose: DynamicModulatorSystem - Runtime dynamic modulator management for complex messages such as SysEx.
+//! Ported from: src/synthesizer/audio_engine/engine_components/dynamic_modulator_system.ts
+
 use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::{GeneratorType, generator_types};
 use crate::soundbank::basic_soundbank::modulator::{Modulator, get_mod_source_enum};

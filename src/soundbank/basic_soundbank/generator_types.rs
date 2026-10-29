@@ -1,14 +1,15 @@
-/// generator_types.rs
-/// purpose: SoundFont2 Generator type constants and limit/default tables.
-/// Ported from: src/soundbank/basic_soundbank/generator_types.ts
-///
-/// Note: TS 4.3.0 renamed `generatorTypes` → `GeneratorTypes` and `generatorLimits` →
-/// `GeneratorLimits` (naming-only). Rust keeps the idiomatic `generator_types` module and
-/// `GENERATOR_LIMITS` constant names.
-///
-/// TS 4.3.0 also moved `defaultGeneratorValues` into `basic_preset.ts` (module-private).
-/// Rust keeps `DEFAULT_GENERATOR_VALUES` here because it is also used by several
-/// engine-side tests; the values are identical.
+//! generator_types.rs
+//! purpose: SoundFont2 Generator type constants and limit/default tables.
+//! Ported from: src/soundbank/basic_soundbank/generator_types.ts
+//!
+//! Note: TS 4.3.0 renamed `generatorTypes` → `GeneratorTypes` and `generatorLimits` →
+//! `GeneratorLimits` (naming-only). Rust keeps the idiomatic `generator_types` module and
+//! `GENERATOR_LIMITS` constant names.
+//!
+//! TS 4.3.0 also moved `defaultGeneratorValues` into `basic_preset.ts` (module-private).
+//! Rust keeps `DEFAULT_GENERATOR_VALUES` here because it is also used by several
+//! engine-side tests; the values are identical.
+
 /// All SoundFont2 Generator enumerations.
 /// Equivalent to: GeneratorTypes
 #[allow(clippy::module_inception)]

@@ -1,17 +1,18 @@
-/// presets.rs
-/// purpose: SoundFont preset struct and reader.
-/// Ported from: src/soundbank/soundfont/read/presets.ts (spessasynth_core 4.3.0)
-///
-/// # TypeScript vs Rust design differences
-///
-/// - `SoundFontPreset` contains a `BasicPreset` by value (composition) instead of inheriting
-/// - The `sf2: BasicSoundBank` constructor parameter is dropped (no `parentSoundBank` in Rust)
-/// - Implements `SoundFontPresetZoneSink` (from `preset_zones.rs`) so that `apply_preset_zones`
-///   can populate zones without depending on `BasicSoundBank`
-///
-/// Note: TS 4.3.0 removed the `\d{3}:\d{3}` ("000:001"-style patch number) stripping that
-/// previously ran on the raw PHDR name; the name is now stored verbatim. This Rust port
-/// follows suit (the `strip_patch_number` helper that used to run here has been removed).
+//! presets.rs
+//! purpose: SoundFont preset struct and reader.
+//! Ported from: src/soundbank/soundfont/read/presets.ts (spessasynth_core 4.3.0)
+//!
+//! # TypeScript vs Rust design differences
+//!
+//! - `SoundFontPreset` contains a `BasicPreset` by value (composition) instead of inheriting
+//! - The `sf2: BasicSoundBank` constructor parameter is dropped (no `parentSoundBank` in Rust)
+//! - Implements `SoundFontPresetZoneSink` (from `preset_zones.rs`) so that `apply_preset_zones`
+//!   can populate zones without depending on `BasicSoundBank`
+//!
+//! Note: TS 4.3.0 removed the `\d{3}:\d{3}` ("000:001"-style patch number) stripping that
+//! previously ran on the raw PHDR name; the name is now stored verbatim. This Rust port
+//! follows suit (the `strip_patch_number` helper that used to run here has been removed).
+
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::basic_preset_zone::BasicPresetZone;
 use crate::soundbank::basic_soundbank::basic_zone::BasicZone;

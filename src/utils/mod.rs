@@ -1,16 +1,17 @@
-/// utils/mod.rs
-/// purpose: Public API of the utils module.
-/// Ported from: src/utils/exports.ts (spessasynth_core 4.3.0)
-///
-/// Per CLAUDE.md, TypeScript's `exports.ts` maps to `mod.rs` in Rust.
-/// Types/constants are defined here; re-exports expose sub-module items.
-///
-/// Note: `SpessaSynthCoreUtils` (a JS-only utility aggregate object) is not ported.
-///
-/// Note: `sysex_detector.rs` was deleted, matching TS 4.3.0's removal of
-/// `sysex_detector.ts`: its `isXGOn`/`isGSOn`/`isGMOn`/`isGM2On`/`isGSDrumsOn`/`syxToChannel`
-/// detectors were replaced by `MIDIUtils.analyzeSysEx` in `midi/midi_tools/midi_utils.ts`, and
-/// all Rust call sites now use `MidiUtils::analyze_sysex`.
+//! utils/mod.rs
+//! purpose: Public API of the utils module.
+//! Ported from: src/utils/exports.ts (spessasynth_core 4.3.0)
+//!
+//! Per CLAUDE.md, TypeScript's `exports.ts` maps to `mod.rs` in Rust.
+//! Types/constants are defined here; re-exports expose sub-module items.
+//!
+//! Note: `SpessaSynthCoreUtils` (a JS-only utility aggregate object) is not ported.
+//!
+//! Note: `sysex_detector.rs` was deleted, matching TS 4.3.0's removal of
+//! `sysex_detector.ts`: its `isXGOn`/`isGSOn`/`isGMOn`/`isGM2On`/`isGSDrumsOn`/`syxToChannel`
+//! detectors were replaced by `MIDIUtils.analyzeSysEx` in `midi/midi_tools/midi_utils.ts`, and
+//! all Rust call sites now use `MidiUtils::analyze_sysex`.
+
 pub mod byte_functions;
 pub mod date;
 pub mod fill_with_defaults;

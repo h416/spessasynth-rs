@@ -1,18 +1,19 @@
-/// synth_constants.rs
-/// purpose: Synthesizer-wide constants.
-/// Ported from: src/synthesizer/audio_engine/synth_constants.ts (spessasynth_core 4.3.0;
-/// moved out of engine_components/ in the upstream 4.3.0 restructuring)
-///
-/// Changes from 4.2.0 (reviewed against the 4.3.0 diff):
-/// - Removed: `MIDI_CHANNEL_COUNT` (callers now use a literal 16), and
-///   `ALL_CHANNELS_OR_DIFFERENT_ACTION` (callers now use a literal -1, matching the
-///   `deviceID: -1` default in `parameters/system.ts`).
-/// - `SYNTHESIZER_GAIN` (1) was replaced by `SPESSASYNTH_GAIN_FACTOR` (0.6), which is applied
-///   inside the channel's `updateInternalParams()` gain computation.
-/// - Added: `EFX_SENDS_GAIN_CORRECTION`, `CONTROLLER_TABLE_SIZE` (128 — NOT the same constant
-///   as the 4.2.0-era `channel/parameters/midi.rs::CONTROLLER_TABLE_SIZE` = 147, which appends
-///   non-CC modulator-source slots and is still used by the Rust channel's controller table),
-///   and `SPESSA_BUFSIZE` documentation updates.
+//! synth_constants.rs
+//! purpose: Synthesizer-wide constants.
+//! Ported from: src/synthesizer/audio_engine/synth_constants.ts (spessasynth_core 4.3.0;
+//! moved out of engine_components/ in the upstream 4.3.0 restructuring)
+//!
+//! Changes from 4.2.0 (reviewed against the 4.3.0 diff):
+//! - Removed: `MIDI_CHANNEL_COUNT` (callers now use a literal 16), and
+//!   `ALL_CHANNELS_OR_DIFFERENT_ACTION` (callers now use a literal -1, matching the
+//!   `deviceID: -1` default in `parameters/system.ts`).
+//! - `SYNTHESIZER_GAIN` (1) was replaced by `SPESSASYNTH_GAIN_FACTOR` (0.6), which is applied
+//!   inside the channel's `updateInternalParams()` gain computation.
+//! - Added: `EFX_SENDS_GAIN_CORRECTION`, `CONTROLLER_TABLE_SIZE` (128 — NOT the same constant
+//!   as the 4.2.0-era `channel/parameters/midi.rs::CONTROLLER_TABLE_SIZE` = 147, which appends
+//!   non-CC modulator-source slots and is still used by the Rust channel's controller table),
+//!   and `SPESSA_BUFSIZE` documentation updates.
+
 use std::sync::OnceLock;
 
 use crate::soundbank::types::MIDISystem;

@@ -1,6 +1,7 @@
-/// IndexedByteArray
-/// purpose: Uint8Array with a current_index cursor.
-/// Ported from: src/utils/indexed_array.ts
+//! IndexedByteArray
+//! purpose: Uint8Array with a current_index cursor.
+//! Ported from: src/utils/indexed_array.ts
+
 use std::ops::{Deref, DerefMut, Index, IndexMut};
 
 #[derive(Debug)]

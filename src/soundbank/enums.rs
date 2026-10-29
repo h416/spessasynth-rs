@@ -1,14 +1,15 @@
-/// enums.rs
-/// purpose: SoundFont2 enumeration constants.
-/// Ported from: src/soundbank/enums.ts
-///
-/// Note: TS 4.3.0 moved the DLS enums (DLSSources, DLSDestinations, DLSLoopTypes,
-/// DLSTransform) to src/soundbank/downloadable_sounds/enums.ts; the Rust counterparts
-/// now live in soundbank/downloadable_sounds/enums.rs.
-/// TS 4.3.0 also renamed `sampleTypes` → `SampleTypes`, `modulatorSources` →
-/// `ModulatorControllerSources` (type: `ModulatorSourceEnum` → `ModulatorControllerSource`),
-/// `modulatorCurveTypes` → `ModulatorCurveTypes` and `modulatorTransformTypes` →
-/// `ModulatorTransformTypes`. Rust keeps its idiomatic snake_case module names.
+//! enums.rs
+//! purpose: SoundFont2 enumeration constants.
+//! Ported from: src/soundbank/enums.ts
+//!
+//! Note: TS 4.3.0 moved the DLS enums (DLSSources, DLSDestinations, DLSLoopTypes,
+//! DLSTransform) to src/soundbank/downloadable_sounds/enums.ts; the Rust counterparts
+//! now live in soundbank/downloadable_sounds/enums.rs.
+//! TS 4.3.0 also renamed `sampleTypes` → `SampleTypes`, `modulatorSources` →
+//! `ModulatorControllerSources` (type: `ModulatorSourceEnum` → `ModulatorControllerSource`),
+//! `modulatorCurveTypes` → `ModulatorCurveTypes` and `modulatorTransformTypes` →
+//! `ModulatorTransformTypes`. Rust keeps its idiomatic snake_case module names.
+
 // Re-export everything from generator_types.
 // Equivalent to: export * from "./basic_soundbank/generator_types"
 pub use crate::soundbank::basic_soundbank::generator_types::*;

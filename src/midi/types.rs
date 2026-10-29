@@ -1,16 +1,17 @@
-/// types.rs
-/// purpose: Common data types for MIDI and RMIDI files.
-/// Ported from: src/midi/types.ts (spessasynth_core 4.3.0)
-///
-/// TS 4.3.0 added `TimelineEvent` (see `TimelineEvent` below, used by `BasicMIDI.timeline`) and
-/// `SysExAcceptedArray` (a union of `number[] | Uint8Array | Int8Array | Uint8ClampedArray`; in
-/// Rust this is simply `&[u8]`, so no type alias is needed).
-///
-/// TS 4.3.0 also *removed* `DesiredProgramChange`, `DesiredControllerChange`, and
-/// `DesiredChannelTranspose` from this file — folded into `midi_tools/modify_midi.ts`'s
-/// restructured `ModifyMIDIOptions`. The Rust equivalents were deleted along with the
-/// `modify_midi.rs` 4.3.0 port (see `midi_tools::modify_midi::{ModifyMidiOptions,
-/// ChannelModification, ClearableParameter}`).
+//! types.rs
+//! purpose: Common data types for MIDI and RMIDI files.
+//! Ported from: src/midi/types.ts (spessasynth_core 4.3.0)
+//!
+//! TS 4.3.0 added `TimelineEvent` (see `TimelineEvent` below, used by `BasicMIDI.timeline`) and
+//! `SysExAcceptedArray` (a union of `number[] | Uint8Array | Int8Array | Uint8ClampedArray`; in
+//! Rust this is simply `&[u8]`, so no type alias is needed).
+//!
+//! TS 4.3.0 also *removed* `DesiredProgramChange`, `DesiredControllerChange`, and
+//! `DesiredChannelTranspose` from this file — folded into `midi_tools/modify_midi.ts`'s
+//! restructured `ModifyMIDIOptions`. The Rust equivalents were deleted along with the
+//! `modify_midi.rs` 4.3.0 port (see `midi_tools::modify_midi::{ModifyMidiOptions,
+//! ChannelModification, ClearableParameter}`).
+
 use chrono::NaiveDateTime;
 
 

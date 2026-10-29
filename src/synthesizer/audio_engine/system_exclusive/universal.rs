@@ -1,6 +1,7 @@
-/// universal.rs
-/// purpose: Handles Universal (GM realtime/non-realtime) system exclusive messages.
-/// Ported from: src/synthesizer/audio_engine/system_exclusive/universal.ts
+//! universal.rs
+//! purpose: Handles Universal (GM realtime/non-realtime) system exclusive messages.
+//! Ported from: src/synthesizer/audio_engine/system_exclusive/universal.ts
+
 use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::sys_ex_not_recognized;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::types::GlobalMIDIParameterChangeCallback;

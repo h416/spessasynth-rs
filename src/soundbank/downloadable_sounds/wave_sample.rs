@@ -1,6 +1,7 @@
-/// wave_sample.rs
-/// purpose: DLS WaveSample (wsmp chunk) read/write and SF2 zone conversion.
-/// Ported from: src/soundbank/downloadable_sounds/wave_sample.ts
+//! wave_sample.rs
+//! purpose: DLS WaveSample (wsmp chunk) read/write and SF2 zone conversion.
+//! Ported from: src/soundbank/downloadable_sounds/wave_sample.ts
+
 use crate::soundbank::basic_soundbank::basic_instrument_zone::BasicInstrumentZone;
 use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
 use crate::soundbank::basic_soundbank::basic_zone::BasicZone;

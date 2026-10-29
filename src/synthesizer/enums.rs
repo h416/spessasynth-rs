@@ -1,12 +1,13 @@
-/// enums.rs
-/// purpose: Synthesizer enumeration constants.
-/// Ported from: src/synthesizer/enums.ts (spessasynth_core 4.3.0)
-///
-/// Changes from 4.2.0 (reviewed against the 4.3.0 diff): TS 4.3.0 keeps only
-/// `InterpolationTypes` (renamed from `interpolationTypes` — TS casing convention only, no
-/// Rust-side change) and removed `dataEntryStates` and `customControllers` entirely.
-/// Both are removed here too (the SF2 NRPN generator selector is the channel field
-/// `sf2_nrpn_generator_lsb`, TS `sf2NRPNGeneratorLSB`).
+//! enums.rs
+//! purpose: Synthesizer enumeration constants.
+//! Ported from: src/synthesizer/enums.ts (spessasynth_core 4.3.0)
+//!
+//! Changes from 4.2.0 (reviewed against the 4.3.0 diff): TS 4.3.0 keeps only
+//! `InterpolationTypes` (renamed from `interpolationTypes` — TS casing convention only, no
+//! Rust-side change) and removed `dataEntryStates` and `customControllers` entirely.
+//! Both are removed here too (the SF2 NRPN generator selector is the channel field
+//! `sf2_nrpn_generator_lsb`, TS `sf2NRPNGeneratorLSB`).
+
 /// Sample interpolation type constants.
 /// Equivalent to: InterpolationTypes
 pub mod interpolation_types {

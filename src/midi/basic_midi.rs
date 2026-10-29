@@ -1,31 +1,32 @@
-/// basic_midi.rs
-/// purpose: Central MIDI data structure with parse, iterate, and tick-to-seconds utilities.
-/// Ported from: src/midi/basic_midi.ts (spessasynth_core 4.3.0)
-///
-/// Key 4.3.0 changes ported here:
-/// - `BasicMIDI.fromArrayBuffer` now performs the RIFF ("RMID") / "XMF_" / plain-SMF format
-///   dispatch itself (calling `parseRMIDIInternal`/`loadXMF`/`parseSMFInternal` directly) instead
-///   of delegating to a single `loadMIDIFromArrayBufferInternal` — the dispatch used to live in
-///   `read/midi.ts` (4.2.0's `midi_loader.ts`). This Rust port's previous (phase-1) structure had
-///   the dispatch in `read/midi.rs`; it is moved here to `from_array_buffer` to match.
-/// - `timeDivision`'s default changed from 0 to 480.
-/// - A new `timeline: readonly Readonly<TimelineEvent>[]` field: a flattened, time-sorted list
-///   of all events (as `{tr: trackNum, ev: eventIndexInTrack}` pairs), rebuilt at the end of
-///   `parseInternal` via `iterate`. `iterate`'s callback signature grew a third `eventIndexes`
-///   parameter to support this (and to let callers like `write/rmidi.ts` replace events in-place
-///   by index).
-/// - Touhou loop false-positive fix ("Touhou loop 誤検出の修正" in the 4.3.0 release notes): CC2
-///   (Touhou)/CC111 (RPG Maker) loop-start markers, and CC4 (Touhou) loop-end markers, now
-///   additionally require the CC value to be 0 (CC116/CC117, the dedicated EMIDI/XMI loop
-///   markers, remain unconditional). A duplicate CC4/CC117 loop-end marker now also resets
-///   `loopType` back to "hard" (previously only `loopEnd` was reset to 0, leaving a stale "soft"
-///   loop type from the first, now-invalidated, hit).
-/// - `getUsedProgramsAndKeys`'s return type changed shape (`Map<preset, Set<"key-velocity">>` →
-///   `Map<preset, Map<midiNote, Set<velocity>>>`) and `modify()`/`applySnapshot()`/
-///   `preloadSynth()` were also touched — none of these BasicMIDI *methods* are wired up in this
-///   Rust port yet (pre-existing gap predating 4.3.0, unrelated to this diff; the underlying
-///   `midi_tools` functions exist but are not exposed as `BasicMidi` methods), so they are not
-///   addressed here.
+//! basic_midi.rs
+//! purpose: Central MIDI data structure with parse, iterate, and tick-to-seconds utilities.
+//! Ported from: src/midi/basic_midi.ts (spessasynth_core 4.3.0)
+//!
+//! Key 4.3.0 changes ported here:
+//! - `BasicMIDI.fromArrayBuffer` now performs the RIFF ("RMID") / "XMF_" / plain-SMF format
+//!   dispatch itself (calling `parseRMIDIInternal`/`loadXMF`/`parseSMFInternal` directly) instead
+//!   of delegating to a single `loadMIDIFromArrayBufferInternal` — the dispatch used to live in
+//!   `read/midi.ts` (4.2.0's `midi_loader.ts`). This Rust port's previous (phase-1) structure had
+//!   the dispatch in `read/midi.rs`; it is moved here to `from_array_buffer` to match.
+//! - `timeDivision`'s default changed from 0 to 480.
+//! - A new `timeline: readonly Readonly<TimelineEvent>[]` field: a flattened, time-sorted list
+//!   of all events (as `{tr: trackNum, ev: eventIndexInTrack}` pairs), rebuilt at the end of
+//!   `parseInternal` via `iterate`. `iterate`'s callback signature grew a third `eventIndexes`
+//!   parameter to support this (and to let callers like `write/rmidi.ts` replace events in-place
+//!   by index).
+//! - Touhou loop false-positive fix ("Touhou loop 誤検出の修正" in the 4.3.0 release notes): CC2
+//!   (Touhou)/CC111 (RPG Maker) loop-start markers, and CC4 (Touhou) loop-end markers, now
+//!   additionally require the CC value to be 0 (CC116/CC117, the dedicated EMIDI/XMI loop
+//!   markers, remain unconditional). A duplicate CC4/CC117 loop-end marker now also resets
+//!   `loopType` back to "hard" (previously only `loopEnd` was reset to 0, leaving a stale "soft"
+//!   loop type from the first, now-invalidated, hit).
+//! - `getUsedProgramsAndKeys`'s return type changed shape (`Map<preset, Set<"key-velocity">>` →
+//!   `Map<preset, Map<midiNote, Set<velocity>>>`) and `modify()`/`applySnapshot()`/
+//!   `preloadSynth()` were also touched — none of these BasicMIDI *methods* are wired up in this
+//!   Rust port yet (pre-existing gap predating 4.3.0, unrelated to this diff; the underlying
+//!   `midi_tools` functions exist but are not exposed as `BasicMidi` methods), so they are not
+//!   addressed here.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::midi::enums::midi_message_types;

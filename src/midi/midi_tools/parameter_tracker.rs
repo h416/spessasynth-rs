@@ -1,13 +1,14 @@
-/// parameter_tracker.rs
-/// purpose: Tracks RPN/NRPN selection (MSB/LSB) and data-entry (MSB/LSB) MIDI Controller Change
-///          messages for a single MIDI channel, exposing the decoded parameter via
-///          `MidiUtils::analyze_rpn`/`analyze_nrpn` whenever a data-entry value is received.
-/// Ported from: src/midi/midi_tools/parameter_tracker.ts (spessasynth_core 4.3.0)
-///
-/// New in TS 4.3.0 (no previous version to diff against). Used by `modify_midi.rs` and
-/// `used_programs_and_keys.rs` to recognize RPN Coarse/Fine Tuning and the handful of GS/XG
-/// NRPN "part parameters" (filter cutoff/resonance, envelope attack/decay/release) and NRPN
-/// drum-setup messages, replacing ad-hoc byte inspection.
+//! parameter_tracker.rs
+//! purpose: Tracks RPN/NRPN selection (MSB/LSB) and data-entry (MSB/LSB) MIDI Controller Change
+//!          messages for a single MIDI channel, exposing the decoded parameter via
+//!          `MidiUtils::analyze_rpn`/`analyze_nrpn` whenever a data-entry value is received.
+//! Ported from: src/midi/midi_tools/parameter_tracker.ts (spessasynth_core 4.3.0)
+//!
+//! New in TS 4.3.0 (no previous version to diff against). Used by `modify_midi.rs` and
+//! `used_programs_and_keys.rs` to recognize RPN Coarse/Fine Tuning and the handful of GS/XG
+//! NRPN "part parameters" (filter cutoff/resonance, envelope attack/decay/release) and NRPN
+//! drum-setup messages, replacing ad-hoc byte inspection.
+
 use crate::midi::enums::midi_controllers;
 use crate::midi::midi_tools::midi_utils::{AnalyzedMidiMessage, MidiUtils};
 use crate::synthesizer::audio_engine::synth_constants::{DEFAULT_NRPN, DEFAULT_RPN};

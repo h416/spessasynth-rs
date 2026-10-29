@@ -1,24 +1,25 @@
-/// compute_modulator.rs
-/// purpose: function for computing all modulators on a voice.
-/// Ported from: src/synthesizer/audio_engine/engine_components/compute_modulator.ts
-///
-/// # TypeScript vs Rust design differences
-///
-/// ## this: MIDIChannel → ChannelContext trait
-/// TypeScript's `this: MIDIChannel` is abstracted into a `ChannelContext` trait in Rust
-/// (implemented by `MidiChannel`).
-///
-/// ## Voice → VoiceContext trait
-/// `Voice` is abstracted into a `VoiceContext` trait (implemented by `Voice`).
-///
-/// ## Separation of modulated_generators
-/// TypeScript: directly overwrites `voice.modulatedGenerators`.
-/// Rust: since `voice.compute_single_modulator(&mut self)` requires the same `&mut Voice` borrow,
-/// `modulated_generators` is passed separately as `&mut [i16]` by the caller.
-///
-/// ## generator_offsets (Mode 2)
-/// TypeScript: creates an offset-applied copy with `generators = new Int16Array(generators)`.
-/// Rust: uses the helper function `effective_base` to compute offsets per index.
+//! compute_modulator.rs
+//! purpose: function for computing all modulators on a voice.
+//! Ported from: src/synthesizer/audio_engine/engine_components/compute_modulator.ts
+//!
+//! # TypeScript vs Rust design differences
+//!
+//! ## this: MIDIChannel → ChannelContext trait
+//! TypeScript's `this: MIDIChannel` is abstracted into a `ChannelContext` trait in Rust
+//! (implemented by `MidiChannel`).
+//!
+//! ## Voice → VoiceContext trait
+//! `Voice` is abstracted into a `VoiceContext` trait (implemented by `Voice`).
+//!
+//! ## Separation of modulated_generators
+//! TypeScript: directly overwrites `voice.modulatedGenerators`.
+//! Rust: since `voice.compute_single_modulator(&mut self)` requires the same `&mut Voice` borrow,
+//! `modulated_generators` is passed separately as `&mut [i16]` by the caller.
+//!
+//! ## generator_offsets (Mode 2)
+//! TypeScript: creates an offset-applied copy with `generators = new Int16Array(generators)`.
+//! Rust: uses the helper function `effective_base` to compute offsets per index.
+
 use crate::soundbank::basic_soundbank::generator_types::GENERATOR_LIMITS;
 use crate::soundbank::basic_soundbank::modulator::DecodedModulator;
 use crate::soundbank::basic_soundbank::modulator_source::SF2Channel;

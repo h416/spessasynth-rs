@@ -1,6 +1,7 @@
-/// articulation.rs
-/// purpose: DLS Articulation (collection of connection blocks) with read/write and SF zone conversion.
-/// Ported from: src/soundbank/downloadable_sounds/articulation.ts
+//! articulation.rs
+//! purpose: DLS Articulation (collection of connection blocks) with read/write and SF zone conversion.
+//! Ported from: src/soundbank/downloadable_sounds/articulation.ts
+
 use crate::soundbank::basic_soundbank::basic_zone::BasicZone;
 use crate::soundbank::basic_soundbank::generator_types::{GeneratorType, generator_types as gt};
 use crate::soundbank::downloadable_sounds::connection_block::ConnectionBlock;

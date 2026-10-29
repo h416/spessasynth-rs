@@ -1,23 +1,24 @@
-/// used_programs_and_keys.rs
-/// purpose: Scan a BasicMidi to find every (BasicPreset, note, velocity) combination that is
-///          actually played, so callers can trim unused presets/instrument-zones/samples from a
-///          sound bank via `BasicSoundBank::trim`.
-/// Ported from: src/midi/midi_tools/used_programs_and_keys.ts (spessasynth_core 4.3.0)
-/// (formerly `src/midi/midi_tools/used_keys_loaded.ts` in 4.2.0)
-///
-/// TS 4.3.0 rewrote this file almost entirely:
-/// - Return type changed from `Map<BasicPreset, Set<string>>` ("note-velocity" strings) to
-///   `PresetsWithKeyCombinations` = `Map<BasicPreset, Map<number, Set<number>>>` (midiNote ->
-///   set of velocities). See `soundbank::types::PresetsWithKeyCombinations` for the Rust-specific
-///   pointer-identity key scheme used in place of TS's `Map<BasicPreset, ...>`.
-/// - `isXGOn`/`isGSOn`/`isGMOn`/`isGM2On`/`isGSDrumsOn`/`syxToChannel` (from the now-deleted
-///   `utils/sysex_detector.ts`) are replaced by `MIDIUtils.analyzeSysEx`.
-/// - Iterates `mid.timeline` directly instead of `mid.iterate(callback)`.
-/// - Added RPN/NRPN tracking via `ParameterTracker` (RPN Coarse Tuning / GS-XG SysEx key-shift
-///   are now honored when recording which MIDI note was actually played — drum channels ignore
-///   key-shift; test case referenced upstream: th07_19_user_gm.mid), `CC 121` (Reset All
-///   Controllers) handling, and `BankSelectHacks.getDefaultBank` for the per-system default bank
-///   used when a system reset (XG/GM/GM2/GS) occurs mid-file.
+//! used_programs_and_keys.rs
+//! purpose: Scan a BasicMidi to find every (BasicPreset, note, velocity) combination that is
+//!          actually played, so callers can trim unused presets/instrument-zones/samples from a
+//!          sound bank via `BasicSoundBank::trim`.
+//! Ported from: src/midi/midi_tools/used_programs_and_keys.ts (spessasynth_core 4.3.0)
+//! (formerly `src/midi/midi_tools/used_keys_loaded.ts` in 4.2.0)
+//!
+//! TS 4.3.0 rewrote this file almost entirely:
+//! - Return type changed from `Map<BasicPreset, Set<string>>` ("note-velocity" strings) to
+//!   `PresetsWithKeyCombinations` = `Map<BasicPreset, Map<number, Set<number>>>` (midiNote ->
+//!   set of velocities). See `soundbank::types::PresetsWithKeyCombinations` for the Rust-specific
+//!   pointer-identity key scheme used in place of TS's `Map<BasicPreset, ...>`.
+//! - `isXGOn`/`isGSOn`/`isGMOn`/`isGM2On`/`isGSDrumsOn`/`syxToChannel` (from the now-deleted
+//!   `utils/sysex_detector.ts`) are replaced by `MIDIUtils.analyzeSysEx`.
+//! - Iterates `mid.timeline` directly instead of `mid.iterate(callback)`.
+//! - Added RPN/NRPN tracking via `ParameterTracker` (RPN Coarse Tuning / GS-XG SysEx key-shift
+//!   are now honored when recording which MIDI note was actually played — drum channels ignore
+//!   key-shift; test case referenced upstream: th07_19_user_gm.mid), `CC 121` (Reset All
+//!   Controllers) handling, and `BankSelectHacks.getDefaultBank` for the per-system default bank
+//!   used when a system reset (XG/GM/GM2/GS) occurs mid-file.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::midi::basic_midi::BasicMidi;

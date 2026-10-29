@@ -1,6 +1,7 @@
-/// connection_source.rs
-/// purpose: ConnectionSource struct - DLS modulator source with SF2 ↔ DLS conversion.
-/// Ported from: src/soundbank/downloadable_sounds/connection_source.ts
+//! connection_source.rs
+//! purpose: ConnectionSource struct - DLS modulator source with SF2 ↔ DLS conversion.
+//! Ported from: src/soundbank/downloadable_sounds/connection_source.ts
+
 use std::fmt;
 
 use crate::midi::enums::midi_controllers;

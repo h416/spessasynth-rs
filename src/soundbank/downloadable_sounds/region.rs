@@ -1,6 +1,7 @@
-/// region.rs
-/// purpose: DLS Region (rgn/rgn2 chunk) read/write and SF2 instrument zone conversion.
-/// Ported from: src/soundbank/downloadable_sounds/region.ts
+//! region.rs
+//! purpose: DLS Region (rgn/rgn2 chunk) read/write and SF2 instrument zone conversion.
+//! Ported from: src/soundbank/downloadable_sounds/region.ts
+
 use crate::soundbank::basic_soundbank::basic_instrument::BasicInstrument;
 use crate::soundbank::basic_soundbank::basic_instrument_zone::BasicInstrumentZone;
 use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
