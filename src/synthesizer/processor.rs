@@ -1,36 +1,18 @@
 //! processor.rs
 //! purpose: SpessaSynthProcessor - the main public API wrapping SynthesizerCore.
-//! Ported from: src/synthesizer/processor.ts (spessasynth_core 4.3.0)
+//! Ported from: src/synthesizer/processor.ts (the public API; the engine state is
+//! `audio_engine/synthesizer_core.rs`)
 //!
 //! # Design note
-//! TypeScript's SpessaSynthProcessor wraps SynthesizerCore and adds:
-//!   - savedSnapshot: re-applied after embedded sound bank changes
-//!   - onEventCall / onMissingPreset: callback fields
+//! TS has a single SpessaSynthProcessor class. Rust splits it: SpessaSynthProcessor holds
+//! the API-only state (`savedSnapshot`, re-applied after embedded sound bank changes) and
+//! wraps a SynthesizerCore that owns the engine state and the event callback (`onEventCall`).
+//! onMissingPreset is omitted (the Rust port does not call it).
 //!
-//! In Rust, the event callback is owned by SynthesizerCore directly.
-//! onMissingPreset is omitted (SynthesizerCore does not call it in the Rust port).
-//!
-//! Additional impl SynthesizerCore blocks are defined here for channel-level
-//! wrapper methods and MIDI message dispatch (process_message), since those
-//! belong to synthesizer_core.ts but require access to the synthesizer state
-//! that is most naturally expressed as SynthesizerCore methods.
-//!
-//! # Changes from 4.2.0 (reviewed against the 4.3.0 diff)
-//! - `currentSynthTime` → `currentTime` (pure rename; same `synthCore.currentTime`).
-//! - `totalVoicesAmount` → `voiceCount`.
-//! - `resetAllControllers(system = DEFAULT_SYNTH_MODE)` → `reset()` (no argument; the core's
-//!   `reset(system)` keeps the parameter).
-//! - `clearEmbeddedBank` → `clearEmbeddedSoundBank`.
-//! - `applySynthesizerSnapshot` → `applySnapshot` (now via the free-standing
-//!   `applySnapshot`/`getSynthesizerSnapshot` core functions; no post-apply "Finished
-//!   applying snapshot!" log).
-//! - `setMasterParameter`/`getMasterParameter`/`getAllMasterParameters` →
-//!   `setSystemParameter` + read-only `midiParameters`/`systemParameters` getters
-//!   (replacing the `enableEffects`/`enableEventSystem` get/set pairs).
-//! - `getInsertionSnapshot` public wrapper removed (became protected on the core).
-//! - `processMessage` lost its `force` parameter.
-//! - `killVoices` (deprecated no-op) removed upstream; never existed in Rust.
-//! - The constructor creates 16 channels via a literal (MIDI_CHANNEL_COUNT was removed).
+//! Additional impl SynthesizerCore blocks are defined here for the channel-level
+//! wrapper methods and MIDI message dispatch (process_message), which need the
+//! engine state and are most naturally expressed as SynthesizerCore methods.
+
 
 use crate::midi::enums::midi_message_types;
 use crate::synthesizer::audio_engine::channel::midi_channel::DrumLocks;
@@ -62,7 +44,7 @@ impl SynthesizerCore {
     /// With custom channel numbers, every channel whose rxChannel matches receives it;
     /// otherwise the selected port's channel does.
     /// Equivalent to the routing at the top of the public SpessaSynthProcessor
-    /// noteOn / noteOff / controllerChange / ... methods (new in 4.4.0).
+    /// noteOn / noteOff / controllerChange / ... methods.
     pub(crate) fn routed_channels(&self, channel: usize) -> Vec<usize> {
         if self.custom_channel_numbers {
             return (0..self.midi_channels.len())
@@ -111,10 +93,10 @@ impl SynthesizerCore {
             current_system,
             events_enabled,
         );
-        // TS 4.3.16 controller_change.ts calls `synthCore.updateActiveEffects()` inside the
-        // channel's variationDepth case (4.3.14 latched `delayActive = true` there). The
-        // Rust channel has no core reference, so mirror it here: any variationDepth (CC#94)
-        // change re-derives the delay flag. Without this the delay send never renders.
+        // TS controller_change.ts calls `synthCore.updateActiveGSEffects()` inside the
+        // channel's variationDepth case. The Rust channel has no core reference, so mirror it
+        // here: any variationDepth (CC#94) change re-derives the delay flag. Without this the
+        // delay send never renders.
         if controller == crate::midi::enums::midi_controllers::VARIATION_DEPTH {
             self.update_active_gs_effects();
         }
@@ -240,8 +222,7 @@ impl SynthesizerCore {
     /// Processes a raw MIDI message.
     /// If options.time > current_time, the dispatch is scheduled for later;
     /// otherwise it executes immediately.
-    /// Equivalent to: processMessage(message, channelOffset, options) in synthesizer_core.ts
-    /// (the 4.2.0 `force` parameter was removed in TS 4.3.0)
+    /// Equivalent to: processMessage(message, channelOffset, options)
     pub fn process_message(
         &mut self,
         message: &[u8],
@@ -317,7 +298,6 @@ impl SynthesizerCore {
                         if message.len() < 3 {
                             return;
                         }
-                        // 4.4.0 fixed the arguments (4.3.x passed message[0] as the note).
                         self.poly_pressure_channel(channel, message[1], message[2]);
                     }
                     midi_message_types::CHANNEL_PRESSURE => {
@@ -406,13 +386,13 @@ impl SpessaSynthProcessor {
     }
 
     /// Current total amount of voices that are currently playing.
-    /// Equivalent to: get voiceCount() (renamed from totalVoicesAmount in TS 4.3.0)
+    /// Equivalent to: get voiceCount()
     pub fn voice_count(&self) -> u32 {
         self.synth_core.voice_count()
     }
 
     /// The current time of the synthesizer, in seconds.
-    /// Equivalent to: get currentTime() (renamed from currentSynthTime in TS 4.3.0)
+    /// Equivalent to: get currentTime()
     pub fn current_time(&self) -> f64 {
         self.synth_core.current_time
     }
@@ -434,7 +414,7 @@ impl SpessaSynthProcessor {
     /// Executes a full synthesizer reset.
     /// This will reset all controllers to their default values,
     /// except for the locked controllers.
-    /// Equivalent to: reset() (renamed from resetAllControllers in TS 4.3.0)
+    /// Equivalent to: reset()
     pub fn reset(&mut self) {
         self.synth_core.reset(DEFAULT_SYNTH_MODE);
     }
@@ -444,7 +424,7 @@ impl SpessaSynthProcessor {
     // -----------------------------------------------------------------------
 
     /// Applies the snapshot to this `SpessaSynthProcessor` instance.
-    /// Equivalent to: applySnapshot(snapshot) (renamed from applySynthesizerSnapshot)
+    /// Equivalent to: applySnapshot(snapshot)
     pub fn apply_snapshot(&mut self, snapshot: SynthesizerSnapshot) {
         self.saved_snapshot = Some(snapshot.clone());
         apply_snapshot(&mut self.synth_core, &snapshot);
@@ -483,7 +463,7 @@ impl SpessaSynthProcessor {
     }
 
     /// Removes the embedded sound bank from the synthesizer.
-    /// Equivalent to: clearEmbeddedSoundBank() (renamed from clearEmbeddedBank in TS 4.3.0)
+    /// Equivalent to: clearEmbeddedSoundBank()
     pub fn clear_embedded_sound_bank(&mut self) {
         let id = embedded_sound_bank_id();
         if self
@@ -514,7 +494,7 @@ impl SpessaSynthProcessor {
     }
 
     /// Destroys the synthesizer, releasing all resources.
-    /// Equivalent to: destroy() (renamed from destroySynthProcessor in 4.4.0)
+    /// Equivalent to: destroy()
     pub fn destroy_synth_processor(&mut self) {
         self.synth_core.destroy();
     }
@@ -582,7 +562,6 @@ impl SpessaSynthProcessor {
 
     /// Processes a raw MIDI message.
     /// Equivalent to: processMessage(message, channelOffset, options)
-    /// (the 4.2.0 `force` parameter was removed in TS 4.3.0)
     pub fn process_message(
         &mut self,
         message: &[u8],
@@ -1077,7 +1056,7 @@ mod tests {
         let before = event_count(&events);
 
         // Render 1 second in maxBufferSize (128) chunks (rendering more than
-        // maxBufferSize at once panics in 4.3.0).
+        // maxBufferSize at once panics).
         let chunk = 128;
         let mut out = vec![vec![0.0f32; chunk]; 2];
         for _ in 0..(44100 / chunk + 1) {

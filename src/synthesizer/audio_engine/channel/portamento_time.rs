@@ -5,10 +5,8 @@
 //! Reference measurements by John Novak:
 //! <https://github.com/dosbox-staging/dosbox-staging/pull/2705>
 //!
-//! The table used to be linearly interpolated, then replaced by a PCHIP function created by
-//! Benjamin Rosseaux (4.4.1 and earlier). Since 4.4.2 it uses rates measured on the original
-//! Sound Canvas. The pitch moves linearly towards the target at a constant rate, so the time
-//! scales linearly with the distance.
+//! The rates are measured on the original Sound Canvas. The pitch moves linearly towards the
+//! target at a constant rate, so the time scales linearly with the distance.
 
 /// The Sound Canvas portamento rate table, indexed by CC 5.
 /// The rate is in 1/16 semitones per second.

@@ -2,13 +2,12 @@
 //! purpose: Global MIDI parameters of the synthesizer (set via MIDI messages: SysEx master
 //! volume/pan/tuning/transpose and GM/GS/XG system changes) — struct, defaults, and the
 //! set/reset handlers for SynthesizerCore.
-//! Ported from: src/synthesizer/audio_engine/parameters/midi.ts (spessasynth_core 4.3.0)
+//! Ported from: src/synthesizer/audio_engine/parameters/midi.ts
 //!
-//! New in TS 4.3.0: the single `MasterParameterType` was split into `GlobalMIDIParameter`
-//! (this file — parameters editable only via MIDI messages) and `GlobalSystemParameter`
-//! (`parameters/system.rs` — parameters editable only via the API).
+//! `GlobalMIDIParameter` (this file) holds the parameters editable only via MIDI messages;
+//! `GlobalSystemParameter` (`parameters/system.rs`) those editable only via the API.
 //!
-//! TS 4.3.14 renamed `gain` to `volume`; the channels square it when folding it into
+//! The channels square `volume` when folding it into
 //! their gain (`Math.pow(globalMIDI.volume, 2)` in `updateInternalParams` — "it corresponds
 //! to CC volume, so volume is squared").
 
@@ -148,8 +147,7 @@ impl SynthesizerCore {
 
     /// Resets all global MIDI parameters to their default values.
     ///
-    /// TS 4.3.14 inlines this directly in `reset()` (the separate bound
-    /// `resetMIDIParameters` method was removed), in the order
+    /// TS inlines this directly in `reset()`, in the order
     /// system, volume, pan, keyShift, fineTune.
     /// Equivalent to: (inlined in) reset(system)
     pub fn reset_midi_parameters(&mut self, system: MIDISystem) {

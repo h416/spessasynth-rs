@@ -3,8 +3,6 @@
 //!          patch selection algorithm (MIDIPatchTools).
 //! Ported from: src/soundbank/basic_soundbank/midi_patch.ts
 //!
-//! TS 4.3.0 merged preset_selector.ts into this file as `MIDIPatchTools.selectPatch`
-//! (static) and reworked it around the `MIDIPatchFull` interface (`isDrum` flag).
 //! In Rust, `MIDIPatchTools`' static methods are free functions, and `selectPatch`
 //! operates on `&[BasicPreset]` with a parallel `is_drum: &[bool]` slice, because
 //! Rust's `BasicPreset` does not store `parentSoundBank` (whose `isXGBank` flag
@@ -32,7 +30,7 @@ pub struct MidiPatch {
 }
 
 /// A MIDI patch with an associated name and drum flag.
-/// Equivalent to: MIDIPatchFull (extends MIDIPatch; TS 4.2.0 name: MIDIPatchNamed)
+/// Equivalent to: MIDIPatchFull (extends MIDIPatch)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MidiPatchFull {
     pub patch: MidiPatch,
@@ -97,7 +95,7 @@ pub fn from_midi_string(s: &str) -> Result<MidiPatch, String> {
 /// The format is:
 /// - `<MIDIPatch string> D <name>` for `is_drum` set to `true`.
 /// - `<MIDIPatch string> M <name>` for `is_drum` set to `false`.
-/// Equivalent to: MIDIPatchTools.toFullMIDIString (TS 4.2.0 name: toNamedMIDIString)
+/// Equivalent to: MIDIPatchTools.toFullMIDIString
 pub fn to_full_midi_string(patch: &MidiPatchFull) -> String {
     format!(
         "{} {} {}",
@@ -108,7 +106,7 @@ pub fn to_full_midi_string(patch: &MidiPatchFull) -> String {
 }
 
 /// Parses a MidiPatchFull from its string representation.
-/// Equivalent to: MIDIPatchTools.fromFullMIDIString (TS 4.2.0 name: fromNamedMIDIString)
+/// Equivalent to: MIDIPatchTools.fromFullMIDIString
 pub fn from_full_midi_string(s: &str) -> Result<MidiPatchFull, String> {
     let first_space = s
         .find(' ')
@@ -143,8 +141,8 @@ pub fn matches(patch1: &MidiPatch, patch2: &MidiPatch) -> bool {
 }
 
 /// A comparison function for sorting, ordering the patches in ascending order.
-/// Equivalent to: MIDIPatchTools.compare (TS 4.2.0 name: sorter; 4.3.0 moved the
-/// drum check before the program comparison)
+/// Equivalent to: MIDIPatchTools.compare (the drum check comes before the program
+/// comparison)
 pub fn compare(a: &MidiPatch, b: &MidiPatch) -> Ordering {
     // Force drum presets to be last
     match (a.is_gm_gs_drum, b.is_gm_gs_drum) {
@@ -556,7 +554,7 @@ mod tests {
 
     #[test]
     fn test_compare_drum_after_normal_any_program() {
-        // TS 4.3.0: the drum check comes before the program comparison,
+        // The drum check comes before the program comparison,
         // so drums sort after melodic presets regardless of program.
         assert_eq!(compare(&drum(0), &normal(127, 0, 0)), Ordering::Greater);
         assert_eq!(compare(&normal(127, 0, 0), &drum(0)), Ordering::Less);
@@ -824,7 +822,7 @@ mod select_patch_tests {
 
     #[test]
     fn test_xg_drum_program_49_and_above_avoids_gs_kit() {
-        // TS 4.3.0: for program >= 49 the any-drum (GM/GS) fallback is skipped
+        // For program >= 49 the any-drum (GM/GS) fallback is skipped
         // because GS and XG kits diverge there; any XG drums are preferred.
         let presets = vec![xg_drum(0, 127), gm_gs_drum(56)];
         let p = select(&presets, patch(56, 127, 0), MIDISystem::Xg, true);

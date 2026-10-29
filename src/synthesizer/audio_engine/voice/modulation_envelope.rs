@@ -1,6 +1,6 @@
 //! modulation_envelope.rs
 //! purpose: calculates the modulation envelope for the given voice
-//! Ported from: src/synthesizer/audio_engine/engine_components/dsp_chain/modulation_envelope.ts
+//! Ported from: src/synthesizer/audio_engine/voice/modulation_envelope.ts
 //!
 //! # Design differences (resolving circular dependency from TypeScript → Rust)
 //!

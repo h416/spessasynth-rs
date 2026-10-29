@@ -1,6 +1,6 @@
 //! handle_gs.rs
 //! purpose: Handles GS (Roland) system exclusive messages.
-//! Ported from: src/synthesizer/audio_engine/engine_methods/system_exclusive/handle_gs.ts
+//! Ported from: src/synthesizer/audio_engine/system_exclusive/roland.ts
 //! References:
 //!   <http://www.bandtrax.com.au/sysex.htm>
 //!   <https://cdn.roland.com/assets/media/pdf/AT-20R_30R_MI.pdf>
@@ -382,12 +382,9 @@ impl SynthesizerCore {
                                 for i in 0..tuning_bytes.min(12) {
                                     new_tuning[i] = (syx[i + 7] as i16 - 64) as i8;
                                 }
-                                // TS 4.3.14 (roland.ts, case 0x40) calls ONLY
+                                // TS (roland.ts, case 0x40) calls ONLY
                                 // `ch.setOctaveTuning(newTuning)` here — no additional
-                                // channel-wide fine tune. A prior Rust revision also called
-                                // `set_tuning((messageValue - 64), false)`, double-applying a
-                                // channel-wide tuning offset on top of the octave tuning table;
-                                // that call does not exist upstream and has been removed.
+                                // channel-wide fine tune.
                                 self.midi_channels[channel].set_octave_tuning(&new_tuning);
                                 sys_ex_logging(
                                     syx,
@@ -573,7 +570,7 @@ impl SynthesizerCore {
 
                             0x05 => {
                                 // Roland master key shift (transpose).
-                                // TS 4.3.0: setMIDIParameter("keyShift", transpose) — integer
+                                // TS: setMIDIParameter("keyShift", transpose) — integer
                                 // semitone shift (drum channels ignore it), not a cents tuning.
                                 let transpose = message_value as i32 - 64;
                                 spessa_synth_info(&format!(
@@ -620,7 +617,7 @@ impl SynthesizerCore {
 
                             0x17 => {
                                 // EFX send level to reverb.
-                                // TS 4.3.0 scales the raw send by EFX_SENDS_GAIN_CORRECTION.
+                                // TS scales the raw send by EFX_SENDS_GAIN_CORRECTION.
                                 self.insertion_processor.set_send_level_to_reverb(
                                     (data as f64 / 127.0) * EFX_SENDS_GAIN_CORRECTION,
                                 );

@@ -1,25 +1,16 @@
 //! sdta.rs
 //! purpose: Build the SF2 sdta LIST chunk from a sound bank's samples.
-//! Ported from: src/soundbank/soundfont/write/sdta.ts (spessasynth_core 4.3.0)
+//! Ported from: src/soundbank/soundfont/write/sdta.ts
 //!
 //! # Differences from TypeScript
 //!
-//! - Async behaviour is removed: the function is synchronous (TS 4.3.0 made the same change
-//!   upstream, since Vorbis compression -- the only source of `await` here -- was removed from
-//!   this function; see below).
-//! - `compress` / `vorbisFunc` / `progressFunction` parameters are omitted: TS 4.3.0 itself
-//!   dropped compression support from `getSDTA` entirely (Vorbis encoding moved to a separate
-//!   opt-in step on `BasicSoundBank`, out of MIDI→WAV scope and not ported -- see
-//!   `basic_soundbank.rs`'s doc comment on `setSampleFormat`).
-//! - `decompress` is also removed: TS 4.3.0 dropped it from `getSDTA` too, so forcing
-//!   Vorbis-compressed samples to decode to PCM during writing is no longer part of this
-//!   function.
-//! - TS 4.3.0 changed `getSDTA` to return `RIFFChunk.getParts(...)` -- an array of borrowed
-//!   byte-slice parts assembled lazily -- instead of one fully-copied `Uint8Array`, to reduce
-//!   peak memory usage during writing. This port keeps building one flat `Vec<u8>` up front
-//!   (matching the pre-4.3.0 shape): the written bytes are identical either way, since this is
-//!   purely an internal memory/performance optimization with no observable effect on the file
-//!   produced.
+//! - The function is synchronous, like TS (Vorbis compression is a separate step on
+//!   `BasicSoundBank` in TS, out of MIDI→WAV scope and not ported -- see `basic_soundbank.rs`'s
+//!   doc comment on `setSampleFormat`).
+//! - `progressFunction` is omitted.
+//! - TS `getSDTA` returns `RIFFChunk.getParts(...)` -- an array of borrowed byte-slice parts
+//!   assembled lazily -- to reduce peak memory usage during writing. This port builds one flat
+//!   `Vec<u8>` up front: the written bytes are identical.
 
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::utils::indexed_array::IndexedByteArray;
@@ -81,8 +72,8 @@ pub fn get_sdta(
 
     for (i, sample) in bank.samples.iter_mut().enumerate() {
         // `get_raw_data` takes `&mut self` because it lazily decodes/caches Vorbis
-        // audio internally; TS 4.3.0 no longer performs any explicit compress/decompress
-        // mutation here (that moved to a separate opt-in step, out of scope -- see above).
+        // audio internally; TS performs no compress/decompress mutation here (that is a
+        // separate opt-in step, out of scope -- see above).
         let raw = sample.get_raw_data(true);
         let is_compressed = sample.is_compressed();
         let name = sample.name.clone();

@@ -95,7 +95,6 @@ pub struct BasicInstrument {
 
     /// Global zone (generators/modulators applied to all zones).
     /// Equivalent to: public readonly globalZone = new BasicZone()
-    /// (TS 4.3.0 removed the BasicGlobalZone subclass)
     pub global_zone: BasicZone,
 
     /// Preset indices that use this instrument (back-references).

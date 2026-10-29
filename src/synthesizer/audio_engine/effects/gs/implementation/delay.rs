@@ -1,8 +1,8 @@
 //! The default GS Delay implementation.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/delay.ts
 //!
-//! 4.4.0 replaced the three `DelayLine`s with a single shared buffer: center, left and
-//! right are read positions in it, and only the center delay feeds back.
+//! A single shared buffer: center, left and right are read positions in it, and only the
+//! center delay feeds back.
 use std::f64::consts::PI;
 
 const DELAY_GAIN: f64 = 1.66;

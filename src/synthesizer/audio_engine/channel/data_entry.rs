@@ -2,10 +2,9 @@
 //! purpose: Unified MIDI data entry (RPN/NRPN) handler for MidiChannel.
 //! Ported from: src/synthesizer/audio_engine/channel/data_entry.ts
 //!
-//! TS 4.3.0 merged the previous `dataEntryCoarse`/`dataEntryFine` pair into a single
-//! `dataEntry()` that is invoked for both the Data Entry MSB and LSB controllers and
+//! A single `dataEntry()` is invoked for both the Data Entry MSB and LSB controllers and
 //! reads the full 14-bit value stored in the Data Entry MSB slot. RPN vs NRPN is
-//! selected by `lastParameterIsRegistered` instead of the old 4-state machine.
+//! selected by `lastParameterIsRegistered`.
 //! The RPN pitch wheel range, fine tune and modulation depth go through the channel MIDI
 //! parameters (`setMIDIParameter`), as in the TS.
 use crate::midi::enums::midi_controllers;
@@ -112,7 +111,7 @@ impl MidiChannel {
                 }
 
                 // Coarse tuning: semitones, discard the LSB.
-                // TS 4.3.14 treats this as a (non-real-time) key shift via
+                // TS treats this as a (non-real-time) key shift via
                 // setMIDIParameter("keyShift", semitones), which changes the sound-bank
                 // note chosen at note-on (sample selection + root key), NOT a pitch bend
                 // of the currently selected sample. Routing it through the channel tuning
@@ -145,7 +144,7 @@ impl MidiChannel {
                 }
 
                 rpt::RESET_PARAMETERS => {
-                    // TS 4.3.0 ignores the RPN "reset parameters" (0x7F,0x7F) data entry.
+                    // TS ignores the RPN "reset parameters" (0x7F,0x7F) data entry.
                 }
 
                 _ => {

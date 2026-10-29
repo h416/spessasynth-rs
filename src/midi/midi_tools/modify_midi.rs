@@ -1,23 +1,11 @@
 //! modify_midi.rs
 //! purpose: MIDI sequence editing utilities (program changes, controller changes, channel
 //!          clearing, transposition, RPN/NRPN-aware deletion, and GS effect parameter writing).
-//! Ported from: src/midi/midi_tools/modify_midi.ts (spessasynth_core 4.3.0)
-//! (formerly `src/midi/midi_tools/midi_editor.ts` in 4.2.0)
+//! Ported from: src/midi/midi_tools/modify_midi.ts of TS 4.3.0 (`modifyMIDIInternal`).
 //!
-//! TS 4.3.0 rewrote this file almost entirely, replacing the flat
-//! `modifyMIDIInternal(midi, desiredProgramChanges, desiredControllerChanges,
-//! desiredChannelsToClear, desiredChannelsToTranspose)` signature with a single
-//! `modifyMIDIInternal(midi, opts: ModifyMIDIOptions)`, where `opts.channels` is a
-//! `Map<channel, ClearableParameter<ChannelModification>>` (channel -> "clear everything" or a
-//! per-channel modification). New capabilities: RPN/NRPN-aware deletion via `ParameterTracker`
-//! (so locking/clearing a controller that's actually driven by an NRPN, e.g. GS vibrato depth,
-//! now works), and writing GS reverb/chorus/delay/insertion-effect System Exclusive parameters
-//! (`reverbParams`/`chorusParams`/`delayParams`/`insertionParams`), replacing/augmenting
-//! `applySnapshotInternal`'s previous "controllers + program changes only" scope (now split out
-//! into `apply_snapshot.rs`).
-//!
-//! `isXGOn`/`isGSOn`/`isGMOn`/`isGM2On` (from the now-deleted `utils/sysex_detector.ts`) are
-//! replaced by `MIDIUtils.analyzeSysEx`; `getGsOn` is replaced by `MIDIUtils.gsReset`.
+//! Not kept in step with TS: TS 4.4.0 replaced this file with `midi_editor.ts` (`MIDIEditor`).
+//! MIDI editing is outside the MIDI-to-WAV scope, so this stays the 4.3.0 port, used by
+//! `apply_snapshot.rs` (see its module doc). The quirks below are those of TS 4.3.0.
 //!
 //! # Faithfully-reproduced upstream quirks
 //!
@@ -153,7 +141,7 @@ pub struct ChannelModification {
 /// TS 4.3.0's `InsertionProcessorSnapshot` (`type`/`params`/`channels`), the shape the 4.3.0
 /// `modifyMIDIInternal` ported here takes for `insertionParams`.
 ///
-/// The synthesizer snapshot now holds the 4.4.1 `GSInsertionProcessorSnapshot`, which has no
+/// The synthesizer snapshot holds the current `GSInsertionProcessorSnapshot`, which has no
 /// `channels` (the per-channel flag is the channel's `efxAssign` MIDI parameter), so
 /// `apply_snapshot.rs` does not pass it on (see its module doc).
 #[derive(Clone, Debug)]
@@ -206,7 +194,7 @@ fn get_controller_change(channel: u8, cc: u8, value: u8, ticks: u32) -> MidiMess
 /// Emulates JavaScript's `Uint8Array` element-assignment coercion (`ToUint8`): truncate toward
 /// zero, then wrap into `0..256` (non-negative modulo), matching `IndexedByteArray`'s behavior
 /// when TS does e.g. `e.data[0] += channelStatus.keyShift`. Used for key-shift/transpose, which
-/// (unlike the pre-4.3.0 Rust port) is no longer clamped to `0..=127`.
+/// is not clamped to `0..=127`.
 fn to_uint8(x: f64) -> u8 {
     let n = x.trunc() as i64;
     (n.rem_euclid(256)) as u8
@@ -664,7 +652,7 @@ pub fn modify_midi_internal(midi: &mut BasicMidi, opts: &ModifyMidiOptions) {
                 }
 
                 // Transpose key (for zero it won't change anyway). Matches JS `Uint8Array`
-                // wraparound (no clamping) rather than the pre-4.3.0 clamp-to-0..=127 behavior.
+                // wraparound (no clamping).
                 // The cursor (bumped once per event inserted above) points at the current
                 // note-on's shifted position, mirroring TS's mutation of the same `e` object.
                 let key_shift = channel_statuses[channel_idx].key_shift;

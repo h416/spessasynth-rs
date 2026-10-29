@@ -30,7 +30,7 @@ pub const MOD_BYTE_SIZE: usize = 10;
 /// ModulatorSource::new(filterResonance=71, LINEAR, isCC=true, isBipolar=true, isNegative=false)
 ///   .to_source_enum()
 /// = (0<<10) | (1<<9) | (0<<8) | (1<<7) | 71 = 512 + 128 + 71 = 711
-/// Equivalent to: DEFAULT_RESONANT_MOD_SOURCE (exported in TS 4.3.0)
+/// Equivalent to: DEFAULT_RESONANT_MOD_SOURCE
 pub const DEFAULT_RESONANT_MOD_SOURCE: u16 = 711;
 
 // ---------------------------------------------------------------------------
@@ -98,7 +98,7 @@ pub struct Modulator {
 
     /// True if this is a modulation-wheel modulator: a CC-1 (modulation wheel)
     /// source driving the vibrato/mod LFO pitch depth.
-    /// Corresponds to TS 4.3.0 `VoiceModulator.isModWheelModulator`; in this port
+    /// Corresponds to TS `VoiceModulator.isModWheelModulator`; in this port
     /// the flag is folded into `Modulator` (matching the existing treatment of
     /// `is_effect_modulator` / `is_default_resonant_modulator`) rather than kept on
     /// a separate `VoiceModulator` subclass.
@@ -294,7 +294,7 @@ pub struct DecodedModulator {
     /// Equivalent to: isDefaultResonantModulator
     pub is_default_resonant_modulator: bool,
     /// True if this is a modulation-wheel modulator (CC-1 driving mod/vib LFO pitch).
-    /// Corresponds to TS 4.3.0 `VoiceModulator.isModWheelModulator`; folded here so the
+    /// Corresponds to TS `VoiceModulator.isModWheelModulator`; folded here so the
     /// voice render loop can read the precomputed flag instead of recomputing it per call.
     pub is_mod_wheel_modulator: bool,
 }
@@ -667,7 +667,7 @@ mod tests {
 
     // ── SPESSASYNTH_DEFAULT_MODULATORS ───────────────────────────────────────
 
-    /// The default modulator table, as printed by TS 4.4.1. Re-capture it from TS when upstream
+    /// The default modulator table, as printed by TS. Re-capture it from TS when upstream
     /// changes the table (do not edit by hand):
     /// `for (const m of SPESSASYNTH_DEFAULT_MODULATORS)` print
     /// `index,isCC,isBipolar,isNegative,curveType` of both sources, then
@@ -1076,8 +1076,7 @@ mod tests {
         assert_eq!(
             mods.len(),
             15,
-            "Expected 9 SF2 + 6 SpessaSynth = 15 modulators \
-             (4.3.14 removed the CC67->initialAttenuation and CC8->pan defaults)"
+            "Expected 9 SF2 + 6 SpessaSynth = 15 modulators"
         );
     }
 
@@ -1141,7 +1140,6 @@ mod tests {
         let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
         let m = &mods[13];
         assert_eq!(m.destination, generator_types::INITIAL_FILTER_Q);
-        // TS 4.3.0 changed the default resonant modulator amount from 200 to 250.
         assert_eq!(m.transform_amount, 250.0);
         assert!(m.is_default_resonant_modulator);
         assert!(!m.is_effect_modulator);
@@ -1150,8 +1148,6 @@ mod tests {
     #[test]
     fn test_default_mod_14_soft_pedal_filter_fc_negative_amount() {
         // Entry 14 (index 14, last entry) = CC 67 soft pedal → initialFilterFc, amount=-1200.
-        // 4.3.14 changed this from -2400 and removed the CC67->initialAttenuation
-        // and CC8->pan default modulators entirely.
         let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
         let m = &mods[14];
         assert_eq!(m.destination, generator_types::INITIAL_FILTER_FC);

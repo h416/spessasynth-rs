@@ -1,16 +1,9 @@
 //! types.rs
 //! purpose: Common data types for MIDI and RMIDI files.
-//! Ported from: src/midi/types.ts (spessasynth_core 4.3.0)
+//! Ported from: src/midi/types.ts
 //!
-//! TS 4.3.0 added `TimelineEvent` (see `TimelineEvent` below, used by `BasicMIDI.timeline`) and
-//! `SysExAcceptedArray` (a union of `number[] | Uint8Array | Int8Array | Uint8ClampedArray`; in
-//! Rust this is simply `&[u8]`, so no type alias is needed).
-//!
-//! TS 4.3.0 also *removed* `DesiredProgramChange`, `DesiredControllerChange`, and
-//! `DesiredChannelTranspose` from this file — folded into `midi_tools/modify_midi.ts`'s
-//! restructured `ModifyMIDIOptions`. The Rust equivalents were deleted along with the
-//! `modify_midi.rs` 4.3.0 port (see `midi_tools::modify_midi::{ModifyMidiOptions,
-//! ChannelModification, ClearableParameter}`).
+//! TS `SysExAcceptedArray` (`number[] | Uint8Array | Int8Array | Uint8ClampedArray`) is simply
+//! `&[u8]` in Rust, so no type alias is needed.
 
 use chrono::NaiveDateTime;
 
@@ -96,7 +89,7 @@ pub struct TempoChange {
 /// - `Soft`: Immediately jumps the playback position to the loop start point (Touhou / GameMaker style).
 /// - `Hard`: Reprocesses messages up to the loop start to restore the synth state (default).
 ///
-/// Equivalent to: MIDILoop.type ("soft" | "hard"; the `MIDILoopType` alias was inlined in 4.4.0)
+/// Equivalent to: MIDILoop.type ("soft" | "hard")
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum MidiLoopType {
     Soft,
@@ -283,7 +276,7 @@ impl RMIDInfoFourCC {
 
 /// An entry in `BasicMIDI::timeline`: identifies one event by its track number and its index
 /// within that track's event list.
-/// Equivalent to: TimelineEvent (TS 4.3.0)
+/// Equivalent to: TimelineEvent
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TimelineEvent {
     /// The track number of this event.

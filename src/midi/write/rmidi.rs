@@ -1,35 +1,19 @@
-//! rmidi_writer.rs
+//! rmidi.rs
 //! purpose: Write RMIDI (RIFF + MIDI + SoundFont) files.
-//! Ported from: src/midi/write/rmidi.ts (spessasynth_core 4.3.0)
+//! Ported from: src/midi/write/rmidi.ts
 //!
-//! TS 4.3.0 replaced the direct `isXGOn`/`isGSOn`/`isGMOn`/`isGM2On`/`isGSDrumsOn`/`syxToChannel`
-//! SysEx-detector calls (from `utils/sysex_detector.ts`, deleted in 4.3.0) with a single
-//! `MIDIUtils.analyzeSysEx` call whose result is dispatched on `syx.type`. This also broadens
-//! SysEx support: GS/XG SysEx-encoded bank-select/program-change/mono-poly messages are now
-//! recognized and replaced with equivalent regular Controller Change / Program Change events
-//! in-place (see the `AnalyzedMidiMessage::ControllerChange`/`ProgramChange` arms below), so the
-//! downstream bank-select tracking logic picks them up too. `getGsOn` (from the now-removed
-//! `get_gs_on.ts`) became `MIDIUtils.gsReset`. `readRIFFChunk`/`writeRIFFChunkRaw`/
-//! `writeRIFFChunkParts` free functions became `RIFFChunk::read`/`write`/`write_parts` static
-//! methods (migrated below). `correctBankOffsetInternal` also gained a trailing `mid.flush()`
-//! call to keep derived state (loop points, timeline, etc.) consistent after in-place event
-//! mutation/removal.
+//! RMIDI writing is outside the MIDI-to-WAV scope, so this file is not kept in step with TS.
 //!
 //! Note: this Rust file uses its own manual tick-sorted `(ticks, track_idx, event_idx)` scan
 //! instead of `BasicMidi::iterate`'s callback (unlike the TS `mid.iterate((e, trackNum,
 //! eventIndexes) => {...})`), since it already provides equivalent (track_idx, event_idx)
 //! addressing for in-place event replacement without needing `iterate`'s `eventIndexes` plumbing.
 //!
-//! Quirk faithfully preserved from upstream: TS captures `const status = e.statusByte & 0xf0;`
-//! *before* the SysEx branch, then reassigns the *local* `e` to the replacement event for the
-//! `"Controller Change"`/`"Program Change"` SysEx cases (`break`, falling through) — but leaves
-//! `status` unchanged. So the post-SysEx `if (status === MIDIMessageTypes.programChange)` block
-//! (proper patch/preset lookup) never runs for a SysEx-derived Program Change; it falls straight
-//! to the bank-select detector, which only inspects `e.data[0]` (the program number) against
-//! `bankSelect`/`bankSelectLSB`. This looks like an upstream oversight, but per this repo's port
-//! policy we replicate it exactly rather than "fixing" it. See `event_status` (kept stale, used
-//! for the PROGRAM_CHANGE check) vs the fresh `ch_num` computation (uses the *updated* status
-//! byte) below.
+//! Known difference from current TS: `event_status` is taken *before* the SysEx branch and not
+//! recomputed after a SysEx is replaced with a Controller Change / Program Change event, so the
+//! program change block (patch/preset lookup) never runs for a SysEx-derived Program Change
+//! (older TS behaved the same way). TS 4.4.x recomputes `status` after the replacement. The
+//! `ch_num` computation does use the updated status byte.
 
 use crate::midi::basic_midi::BasicMidi;
 use crate::midi::enums::{midi_controllers, midi_message_types};
@@ -157,7 +141,7 @@ fn correct_bank_offset_internal(
     event_list.sort_by_key(|&(ticks, ti, _)| (ticks, ti));
 
     // ── Scan pass ────────────────────────────────────────────────────────────
-    // Note: like TS 4.3.0, all event mutations (program number and bank-select data bytes) are
+    // Note: like TS, all event mutations (program number and bank-select data bytes) are
     // applied *immediately* during the scan, not batched — so a later program change on the
     // same channel reads the already-rewritten value of a shared bank-select event, exactly as
     // `ch.lastBank.data[1] = ...` behaves in rmidi.ts.
@@ -198,7 +182,7 @@ fn correct_bank_offset_internal(
 
         // ── SysEx ────────────────────────────────────────────────────────────
         if event_status == midi_message_types::SYSTEM_EXCLUSIVE {
-            // RMIDI writing is outside the MIDI-to-WAV scope. TS 4.4.1 replaces the event once
+            // RMIDI writing is outside the MIDI-to-WAV scope. TS replaces the event once
             // per analysis result (inserting the extra ones after it) and continues with the last
             // replacement; only the last result is used here. The only multi-result message is the
             // GS tone number (bank select + program change), so the bank select is not inserted.
@@ -1232,12 +1216,12 @@ mod tests {
         assert!(has_bank_select, "bank select should have been inserted");
     }
 
-    // ── 4.3.0: SysEx→CC/PC replacement (MIDIUtils.analyzeSysEx) ─────────────
+    // ── SysEx→CC/PC replacement (MIDIUtils.analyzeSysEx) ─────────────────
 
     #[test]
     fn test_correct_bank_offset_xg_sysex_bank_select_replaced_with_cc() {
         // XG SysEx-encoded Bank Select MSB (a1=0x08 multi-part, channel 0, a3=0x01) should be
-        // replaced in-place with a regular Controller Change (bank select) event — new in 4.3.0.
+        // replaced in-place with a regular Controller Change (bank select) event.
         let xg_bank_select = MidiMessage::new(
             0,
             midi_message_types::SYSTEM_EXCLUSIVE,
@@ -1284,7 +1268,7 @@ mod tests {
     #[test]
     fn test_correct_bank_offset_gs_sysex_program_change_replaced_in_place() {
         // GS SysEx-encoded tone number (program change) on part 1 (→ channel 0) should be
-        // replaced in-place with a regular Program Change event — new in 4.3.0.
+        // replaced in-place with a regular Program Change event.
         let gs_program_change = MidiMessage::new(
             0,
             midi_message_types::SYSTEM_EXCLUSIVE,
@@ -1327,8 +1311,7 @@ mod tests {
 
     #[test]
     fn test_correct_bank_offset_gm_off_sysex_removed_when_system_stays_gm() {
-        // "GM Off" SysEx now also flags the system as GM and gets removed if it stays GM
-        // (previously only "GM On" was recognized at all; 4.3.0 added GM Off detection too).
+        // "GM Off" SysEx also flags the system as GM and gets removed if it stays GM.
         let gm_off_sysex = MidiMessage::new(
             0,
             midi_message_types::SYSTEM_EXCLUSIVE,

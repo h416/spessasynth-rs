@@ -1,11 +1,12 @@
+//! awe32_nrpn.rs
+//! purpose: SoundBlaster AWE32 NRPN generator offset handler for MidiChannel.
+//! Ported from: src/synthesizer/audio_engine/channel/awe32_nrpn.ts
+//!
+//! References:
+//!   <http://archive.gamedev.net/archive/reference/articles/article445.html>
+//!   <https://github.com/user-attachments/files/15757220/adip301.pdf>
+
 use crate::soundbank::basic_soundbank::generator_types::{GENERATORS_AMOUNT, GeneratorType};
-/// awe32.rs
-/// purpose: SoundBlaster AWE32 NRPN generator offset handler for MidiChannel.
-/// Ported from: src/synthesizer/audio_engine/engine_methods/controller_control/data_entry/awe32.ts
-///
-/// References:
-///   http://archive.gamedev.net/archive/reference/articles/article445.html
-///   https://github.com/user-attachments/files/15757220/adip301.pdf
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;

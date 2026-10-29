@@ -1,13 +1,9 @@
 //! other.rs
 //! purpose: Miscellaneous utility functions.
-//! Ported from: src/utils/other.ts (spessasynth_core 4.3.0)
-//!
-//! Note: TS 4.3.0 renamed `consoleColors` to `ConsoleColors` (naming-only, values unchanged).
-//! Rust already uses the idiomatic `console_colors` module with SCREAMING_SNAKE_CASE constants,
-//! so no change was needed for that rename.
+//! Ported from: src/utils/other.ts
 
-/// Seedable, deterministic random generator (new in 4.3.16).
-/// Source - https://stackoverflow.com/a/47593316
+/// Seedable, deterministic random generator.
+/// Source - <https://stackoverflow.com/a/47593316>
 ///
 /// The TypeScript version is a closure over a single `number` held in module scope
 /// (`export const randomGenerator = splitmix32(81_572)`), shared by every processor in the
@@ -75,8 +71,7 @@ pub fn format_time(total_seconds: f64) -> FormattedTime {
 }
 
 /// Converts a byte slice to a space-separated uppercase hex string.
-/// Note: 4.3.0 changed this to only insert a space *between* elements (no trailing space
-/// after the last byte); 4.2.0 always appended a trailing space.
+/// A space is only inserted *between* elements (no trailing space after the last byte).
 /// Equivalent to: arrayToHexString
 pub fn array_to_hex_string(arr: &[u8]) -> String {
     let mut hex_string = String::new();
@@ -203,7 +198,7 @@ mod tests {
 
     #[test]
     fn test_hex_string_no_trailing_space() {
-        // 4.3.0: space is only inserted *between* elements, not after the last one
+        // Space is only inserted *between* elements, not after the last one
         let s = array_to_hex_string(&[0x01, 0x02]);
         assert!(!s.ends_with(' '));
         assert_eq!(s, "01 02");
@@ -213,7 +208,7 @@ mod tests {
 
     #[test]
     fn test_split_mix32_matches_typescript_sequence() {
-        // Reference values produced by the upstream 4.3.16 `randomGenerator` export
+        // Reference values produced by the upstream `randomGenerator` export
         // (splitmix32(81_572)) under Node.
         let mut g = SplitMix32::default();
         let expected = [

@@ -1,5 +1,5 @@
 //! GS User Drum Sets (programs 64 and 65).
-//! Ported from: src/synthesizer/audio_engine/user_drum_set.ts (new in 4.4.0)
+//! Ported from: src/synthesizer/audio_engine/user_drum_set.ts
 //!
 //! A user drum set maps each MIDI key to a key of another GS drum set
 //! (`sourceDrumSet` = bank LSB, `program`, `sourceNoteNumber`).

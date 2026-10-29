@@ -1,5 +1,5 @@
 //! SysEx address maps and drum map numbers.
-//! Ported from: src/midi/midi_tools/sysex_data.ts (new in 4.4.0)
+//! Ported from: src/midi/midi_tools/sysex_data.ts
 //!
 //! Only the drum map numbers are on the WAV rendering path; the address maps are used by
 //! the MIDI editor (not ported).

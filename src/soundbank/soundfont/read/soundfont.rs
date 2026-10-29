@@ -1,6 +1,6 @@
 //! soundfont.rs
 //! purpose: parses a SoundFont2 (.sf2 / .sf3 / .sf2pack) file into a BasicSoundBank.
-//! Ported from: src/soundbank/soundfont/read/soundfont.ts (spessasynth_core 4.3.0)
+//! Ported from: src/soundbank/soundfont/read/soundfont.ts
 
 use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
@@ -381,8 +381,7 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
                 inst.instrument
                     .name
                     .push_str(&x_instruments[i].instrument.name);
-                // TS 4.3.0 fix: shift the extended zone_start_index into the upper 16
-                // bits before OR-ing (previously merged in the low bits, which is wrong).
+                // Shift the extended zone_start_index into the upper 16 bits before OR-ing.
                 inst.zone_start_index |= x_instruments[i].zone_start_index << 16;
             }
             // Recalculate zones_count after extending zone_start_index values
@@ -443,8 +442,7 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
         if x_presets.len() == presets.len() {
             for (i, pres) in presets.iter_mut().enumerate() {
                 pres.preset.name.push_str(&x_presets[i].preset.name);
-                // TS 4.3.0 fix: shift the extended zone_start_index into the upper 16
-                // bits before OR-ing (previously merged in the low bits, which is wrong).
+                // Shift the extended zone_start_index into the upper 16 bits before OR-ing.
                 pres.zone_start_index |= x_presets[i].zone_start_index << 16;
             }
             // Recalculate zones_count after extending zone_start_index values

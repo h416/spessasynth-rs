@@ -1,18 +1,12 @@
 //! preset_zones.rs
 //! purpose: reads preset zones from SoundFont and assigns instruments, generators, modulators.
-//! Ported from: src/soundbank/soundfont/read/preset_zones.ts (spessasynth_core 4.3.0)
+//! Ported from: src/soundbank/soundfont/read/preset_zones.ts
 //!
 //! # TypeScript vs Rust design differences
 //!
 //! ## SoundFontPresetZone
-//! TS 4.2.0: a standalone `class SoundFontPresetZone extends BasicPresetZone` held the
-//! constructor logic (instrument-generator search + validation). TS 4.3.0 removed that class and
-//! inlined the same logic directly into `SoundFontPreset.createSoundFontZone`; the field names
-//! read on generators also changed from `generatorType`/`generatorValue` to `type`/`value`
-//! (naming-only; see `generator.rs`, which already uses `generator_type`/`generator_value` for
-//! both). Rust keeps the pre-existing `SoundFontPresetZone(BasicPresetZone)` newtype: it already
-//! isolates the same constructor logic in one place, so the TS-side class removal has no
-//! Rust-side structural consequence.
+//! TS inlines this in `SoundFontPreset.createSoundFontZone`; Rust keeps it in the
+//! `SoundFontPresetZone(BasicPresetZone)` newtype.
 //! Handles the constructor logic (instrument generator search and validation),
 //! and on success pushes the inner `BasicPresetZone` to the preset.
 //!
@@ -171,7 +165,7 @@ pub fn apply_preset_zones<P: SoundFontPresetZoneSink>(
                     Err(e) => SpessaLog::warn(&e),
                 }
             } else if i == 0 {
-                // Global zone, only the first zone may be global (4.4.0)
+                // Global zone, only the first zone may be global
                 // Equivalent to: preset.globalZone.addGenerators(...gens)
                 //                preset.globalZone.addModulators(...mods)
                 let global = preset.global_zone_mut();

@@ -4,9 +4,10 @@
 //!          delegating to `modify_midi_internal`.
 //! Ported from: src/midi/midi_tools/apply_snapshot.ts
 //!
-//! The snapshot side follows TS 4.4.1. The MIDI editor it hands the changes to
-//! (`modify_midi.rs`) is still the 4.3.0 `modifyMIDIInternal`, not the 4.4.1 `MIDIEditor`
-//! (midi_editor.ts), so only the changes that editor accepts are passed on.
+//! The snapshot side follows the current TS. The MIDI editor it hands the changes to
+//! (`modify_midi.rs`) is the TS 4.3.0 `modifyMIDIInternal`, not the current `MIDIEditor`
+//! (midi_editor.ts, outside the MIDI-to-WAV scope), so only the changes that editor accepts
+//! are passed on.
 //! Not ported (MIDI editing only, no effect on the MIDI-to-WAV output): the per-channel
 //! `midiParams` (locked Channel MIDI Parameters), the global `midiParams`, `userDrumParams`,
 //! `gsInsertionParams` and the `xg*Params` blocks of `ModifyMIDIOptions`.

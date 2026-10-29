@@ -128,7 +128,7 @@ pub struct Voice {
     pub target_key: i16,
 
     /// Polyphonic key pressure (0–127).
-    /// TS 4.4.0 removed this field: modulators read `channel.polyPressures[voice.midiNote]`.
+    /// Not a TS voice field: modulators read `channel.polyPressures[voice.midiNote]`.
     /// Rust keeps a per-voice copy that `compute_modulators` refreshes from the channel
     /// array before every computation, which reads the same value.
     pub pressure: u8,
@@ -400,7 +400,7 @@ impl VoiceContext for Voice {
             let modulator = &self.modulators[index];
             let primary = modulator.primary_source();
             let secondary = modulator.secondary_source();
-            // TS 4.3.0 `isModWheelModulator`: a CC-1 (modulation wheel) source driving
+            // TS `isModWheelModulator`: a CC-1 (modulation wheel) source driving
             // the vibrato/mod LFO pitch depth. Its value is scaled by the channel
             // modulation depth in `computeModulator`. Precomputed on the modulator
             // (see `DecodedModulator::is_mod_wheel_modulator`).
@@ -689,7 +689,7 @@ mod tests {
 
     #[test]
     fn test_setup_resets_tuning_cache() {
-        // 4.3.18: voices are recycled, and render_voice only recomputes `tuning_ratio`
+        // Voices are recycled, and render_voice only recomputes `tuning_ratio`
         // when the rounded cents change — a stale pair would be reused verbatim.
         let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.tuning_cents = 137.0;

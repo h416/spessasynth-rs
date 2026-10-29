@@ -1,18 +1,6 @@
 //! synth_constants.rs
 //! purpose: Synthesizer-wide constants.
-//! Ported from: src/synthesizer/audio_engine/synth_constants.ts (spessasynth_core 4.3.0;
-//! moved out of engine_components/ in the upstream 4.3.0 restructuring)
-//!
-//! Changes from 4.2.0 (reviewed against the 4.3.0 diff):
-//! - Removed: `MIDI_CHANNEL_COUNT` (callers now use a literal 16), and
-//!   `ALL_CHANNELS_OR_DIFFERENT_ACTION` (callers now use a literal -1, matching the
-//!   `deviceID: -1` default in `parameters/system.ts`).
-//! - `SYNTHESIZER_GAIN` (1) was replaced by `SPESSASYNTH_GAIN_FACTOR` (0.6), which is applied
-//!   inside the channel's `updateInternalParams()` gain computation.
-//! - Added: `EFX_SENDS_GAIN_CORRECTION`, `CONTROLLER_TABLE_SIZE` (128 — NOT the same constant
-//!   as the 4.2.0-era `channel/parameters/midi.rs::CONTROLLER_TABLE_SIZE` = 147, which appends
-//!   non-CC modulator-source slots and is still used by the Rust channel's controller table),
-//!   and `SPESSA_BUFSIZE` documentation updates.
+//! Ported from: src/synthesizer/audio_engine/synth_constants.ts
 
 use std::sync::OnceLock;
 
@@ -24,7 +12,7 @@ use crate::synthesizer::types::SynthMethodOptions;
 pub const VOICE_CAP: u32 = 350;
 
 /// Default MIDI drum channel (0-indexed).
-/// Equivalent to: MIDI_DRUM_CHANNEL (renamed from DEFAULT_PERCUSSION in 4.4.0)
+/// Equivalent to: MIDI_DRUM_CHANNEL
 pub const MIDI_DRUM_CHANNEL: u8 = 9;
 
 /// Default bank select and SysEx mode.
@@ -68,7 +56,7 @@ pub const MIN_EXCLUSIVE_LENGTH: f64 = 0.07;
 
 /// This panning factor ensures that spessasynth doesn't stay too loud.
 /// You can set the `gain` system parameter to an inverse of it to negate the effect.
-/// Equivalent to: SPESSASYNTH_GAIN_FACTOR (new in TS 4.3.0)
+/// Equivalent to: SPESSASYNTH_GAIN_FACTOR
 pub const SPESSASYNTH_GAIN_FACTOR: f64 = 0.6;
 
 /// The default buffer size for the synthesizer, in samples.
@@ -78,19 +66,18 @@ pub const SPESSA_BUFSIZE: usize = 128;
 /// This is needed because effects (regular ones) are sent straight from the mono signal,
 /// whereas insertion effects receive the panned audio (twice), which reduces gain by a factor
 /// of cos(pi/4) * cos(pi/4) (master pan + voice pan). This reverses it.
-/// Equivalent to: EFX_SENDS_GAIN_CORRECTION = 2 (4.4.0; was `1 / Math.cos(Math.PI / 4) ** 2`)
+/// Equivalent to: EFX_SENDS_GAIN_CORRECTION = 2
 pub const EFX_SENDS_GAIN_CORRECTION: f64 = 2.0;
 
 /// The amount of MIDI controllers (the 128 real MIDI CCs).
-/// Equivalent to: CONTROLLER_TABLE_SIZE (new in TS 4.3.0's synth_constants.ts; distinct from
-/// the 4.2.0-era 147-entry extended table in `channel/parameters/midi.rs` — see module doc)
+/// Equivalent to: CONTROLLER_TABLE_SIZE
 pub const CONTROLLER_TABLE_SIZE: usize = 128;
 
 /// RPN NULL per MIDI spec.
 /// Equivalent to: DEFAULT_RPN
 pub const DEFAULT_RPN: u8 = 0x7f;
 
-/// NRPN NULL (4.4.0; was 0 in 4.3.x). data_entry ignores 0x7f 0x7f explicitly so that
+/// NRPN NULL. data_entry ignores 0x7f 0x7f explicitly so that
 /// it does not reach the AWE32 handler (0x7f MSB).
 /// Equivalent to: DEFAULT_NRPN
 pub const DEFAULT_NRPN: u8 = 127;

@@ -1,58 +1,16 @@
 //! synthesizer_core.rs
 //! purpose: SynthesizerCore struct — the core synthesis engine which interacts with channels.
-//! Ported from: src/synthesizer/audio_engine/synthesizer_core.ts (spessasynth_core 4.3.0)
+//! Ported from: src/synthesizer/processor.ts (the synthesis core; the API side is
+//! `synthesizer/processor.rs`)
 //!
 //! # Design note
 //! MidiChannel lives in channel/midi_channel.rs. It does not hold a back-reference to
 //! SynthesizerCore (unlike TypeScript's `this.synthCore`), so there is no ownership cycle
 //! between the two structs; methods on MidiChannel receive the needed data as parameters.
 //!
-//! # Changes from 4.2.0 (reviewed against the 4.3.0 diff)
-//! Orchestration-layer changes:
-//! - `masterParameters` split into `midiParameters: GlobalMIDIParameter` +
-//!   `systemParameters: GlobalSystemParameter` (see `parameters/{midi,system}.rs`).
-//!   `enableEffects`/`enableEventSystem` core fields folded into the system parameters.
-//! - `maxBufferSize` (from `SynthProcessorOptions`): all effect input buffers are allocated
-//!   once at that size, the 4.2.0 grow-on-demand path is gone, and rendering more samples
-//!   than `maxBufferSize` panics (TS throws).
-//! - `voiceCount` became private with a public getter.
-//! - `assignVoice` gained the `autoAllocateVoices` path (allocate a new voice instead of
-//!   stealing when the cap is hit; cap grows by 1; logs instead of firing an event). Note:
-//!   TS 4.3.0 has an upstream quirk here — `allocateNewVoices(1)` already pushes the new
-//!   voice and then `this.voices.push(v)` pushes the *same object* again (aliased at two
-//!   indices). A Rust `Vec<Voice>` cannot alias one element at two indices; only the intent
-//!   (allocate one, return it) is ported. The duplicate slot is beyond the cap and unused.
-//! - `resetAllControllers` renamed to `reset`, now firing `Reset(system)` (was
-//!   `allControllerReset`), calling `resetMIDIParameters(system)` and respecting
-//!   `delayLock`. The 4.2.0 post-reset locked-controller / pitch-wheel / channel-pressure
-//!   event-restoration block was removed upstream (TS 4.3.0 fires those from
-//!   `ch.reset(false)` instead) — removed here too. The per-channel reset is split into
-//!   `reset_controllers` + `reset_preset` (TS: `ch.reset(false)`); together they reset the
-//!   same state, but the locked-controller restore events are not fired (events only).
-//! - `setReverbMacro`/`setChorusMacro`/`setDelayMacro`: now guarded by the corresponding
-//!   lock system parameter; an *invalid* macro number warns and returns instead of falling
-//!   back to macro 0 (Room1/Chorus1/Delay1); fires `effectChange`.
-//! - `resetInsertion`: sendLevelToReverb now scaled by `EFX_SENDS_GAIN_CORRECTION`;
-//!   parameter cache grown 20 → 23 entries (params + 3 sends at indices 20/21/22) with the
-//!   new `resetInsertionParams()` helper; fires `effectChange`.
-//! - `getInsertionSnapshot`: `{type, params, channels}` — the separate send-level fields are
-//!   gone (folded into params[20..23]).
-//! - `setMIDIVolume`/`setMasterTuning` were removed upstream (replaced by the
-//!   `midiParameters.volume`/`fineTune` flow applied in the channels' `updateInternalParams`).
-//!   Removed here too; the channels get the parameter sets through
-//!   `update_channels_internal_params`.
-//! - `processMessage` lost its `force` parameter (and the force-kill Note Off branch).
-//! - `createMIDIChannel`: fires `ChannelAdded` (was `newChannel` + `sendChannelProperty`).
-//!   The TS constructor calls `setDrumFlag(true)` on every 16th channel 10; Rust sets
-//!   `drum_channel` and recomputes the internal params the same way.
-//! - The per-channel `updateVoiceCount()` loop at the end of `process()` was removed
-//!   upstream (channel voice-count events move to the channel side) — removed here too.
-//! - `process()` no longer skips voices on muted channels in TS 4.3.0: TS mutes through the
-//!   channel system parameter `isMuted` (note-ons are refused and the notes are stopped by
-//!   `MidiChannel::set_system_parameter`).
-//! - Not ported (API only, no effect on the MIDI-to-WAV output): `ch.destroy()` (Rust drops
-//!   the channels) and `updatePresetList()` (TS reruns program changes and `reset()` when a
-//!   sound bank is added or removed; Rust loads the sound banks before playback).
+//! Not ported (API only, no effect on the MIDI-to-WAV output): `ch.destroy()` (Rust drops
+//! the channels) and `updatePresetList()` (TS reruns program changes and `reset()` when a
+//! sound bank is added or removed; Rust loads the sound banks before playback).
 
 use crate::synthesizer::audio_engine::effects::xg::implementation::chorus::DefaultXGChorus;
 use crate::synthesizer::audio_engine::effects::xg::implementation::insertion::DefaultXGInsertion;
@@ -143,9 +101,8 @@ enum XGInsertionTarget {
 }
 
 /// The core synthesis engine which interacts with channels and holds all synth parameters.
-/// Equivalent to: the engine state of SpessaSynthProcessor (TS 4.4.0 merged the former
-/// `SynthesizerCore` class into the processor; Rust keeps the split so the channels, voices
-/// and effects can be borrowed separately)
+/// Equivalent to: the engine state of SpessaSynthProcessor (TS has no separate core class;
+/// Rust keeps the split so the channels, voices and effects can be borrowed separately)
 pub struct SynthesizerCore {
     /// Voice pool. All voices are pre-allocated.
     /// Equivalent to: voices: Voice[]
@@ -164,7 +121,7 @@ pub struct SynthesizerCore {
     pub sample_rate: f64,
 
     /// The maximum allowed buffer size to render.
-    /// Equivalent to: maxBufferSize (new in TS 4.3.0)
+    /// Equivalent to: maxBufferSize
     pub max_buffer_size: usize,
 
     /// MIDI Tuning Standard table: tunings[program * 128 + key] = note.cents
@@ -173,7 +130,7 @@ pub struct SynthesizerCore {
     pub tunings: Vec<f32>,
 
     /// The global MIDI parameters of the synthesizer.
-    /// Equivalent to: midiParameters (new in TS 4.3.0)
+    /// Equivalent to: midiParameters
     pub midi_parameters: GlobalMIDIParameter,
 
     /// If a Global MIDI parameter is locked (not allowed to change), indexed by
@@ -182,7 +139,7 @@ pub struct SynthesizerCore {
     pub locked_midi_parameters: [bool; GLOBAL_MIDI_PARAMETER_COUNT],
 
     /// The system parameters of the synthesizer.
-    /// Equivalent to: systemParameters (new in TS 4.3.0)
+    /// Equivalent to: systemParameters
     pub system_parameters: GlobalSystemParameter,
 
     /// Current synthesizer time in seconds.
@@ -208,7 +165,7 @@ pub struct SynthesizerCore {
     /// Whether delay effect is active (enabled via SysEx).
     pub gs_delay_active: bool,
 
-    /// Deterministic random generator used for random panning (new in 4.3.16).
+    /// Deterministic random generator used for random panning.
     /// TS keeps this in module scope (`randomGenerator` in `utils/other.ts`); Rust stores
     /// one per core so that renders stay reproducible with several synthesizers in one
     /// process. See `SplitMix32` for the equivalence argument.
@@ -291,7 +248,8 @@ pub struct SynthesizerCore {
     /// Equivalent to: the user drum entries of cachedVoices + purgeCachedPatch
     pub(crate) user_drum_cached_voices: HashMap<u64, (u32, CachedVoiceList)>,
 
-    /// Total active voice count. Private in TS 4.3.0 (`_voiceCount` + getter).
+    /// Total active voice count.
+    /// Equivalent to: _voiceCount (private, read through the voiceCount getter)
     pub(crate) voice_count: u32,
 
     /// Last time voice priorities were assigned (avoids redundant work in a quantum).
@@ -337,7 +295,7 @@ pub struct SynthesizerCore {
     /// 20 parameters (0-19) + 3 sends (indices 20-22).
     /// Index to GS is Addr3 - 3 (for example EFX PARAMETER 1 is 0x03 and here it's 0).
     /// Note: 255 means "no change".
-    /// Equivalent to: gsInsertionParams: Uint8Array(23) (was 20 in 4.2.0)
+    /// Equivalent to: gsInsertionParams: Uint8Array(23)
     pub insertion_params: [u8; 23],
 }
 
@@ -492,8 +450,7 @@ impl SynthesizerCore {
         }
         // No match, assign priorities
         if self.system_parameters.auto_allocate_voices {
-            // Allocate a new voice and return it (see module doc note on the TS 4.3.0
-            // duplicate-push quirk here).
+            // Allocate a new voice and return it
             self.allocate_new_voices(1);
             let new_idx = self.voices.len() - 1;
             self.system_parameters.voice_cap += 1;
@@ -602,11 +559,11 @@ impl SynthesizerCore {
     /// Executes a full system reset of the synthesizer.
     /// This will reset all controllers to their default values,
     /// except for the locked controllers.
-    /// Equivalent to: reset(system = DEFAULT_SYNTH_MODE) (renamed from resetAllControllers)
+    /// Equivalent to: reset(system = DEFAULT_SYNTH_MODE)
     pub fn reset(&mut self, system: MIDISystem) {
         // Call here because there are returns in this function.
         self.call_event(SynthProcessorEvent::Reset(system));
-        // 4.4.0: a reset also stops all notes (gracefully)
+        // A reset also stops all notes (gracefully)
         self.stop_all(false);
         self.reset_midi_parameters(system);
         // Reset private props
@@ -1103,7 +1060,7 @@ impl SynthesizerCore {
                 rev.set_delay_feedback(32);
             }
             _ => {
-                // Check for invalid macros (TS 4.3.0: warn + return instead of Room1 fallback)
+                // Check for invalid macros (warn and return; no Room1 fallback)
                 // Testcase: 18 - Dichromatic Lotus Butterfly ~ Ancients (ZUN).mid
                 SpessaLog::warn(&format!("Invalid reverb macro: {}", macro_num));
                 return;
@@ -1186,7 +1143,7 @@ impl SynthesizerCore {
                 chr.set_depth(127);
             }
             _ => {
-                // Check for invalid macros (TS 4.3.0: warn + return instead of Chorus1 fallback)
+                // Check for invalid macros (warn and return; no Chorus1 fallback)
                 // Testcase: 18 - Dichromatic Lotus Butterfly ~ Ancients (ZUN).mid
                 SpessaLog::warn(&format!("Invalid chorus macro: {}", macro_num));
                 return;
@@ -1303,7 +1260,7 @@ impl SynthesizerCore {
                 dly.set_feedback(40);
             }
             _ => {
-                // Check for invalid macros (TS 4.3.0: warn + return instead of Delay1 fallback)
+                // Check for invalid macros (warn and return; no Delay1 fallback)
                 // Testcase: 18 - Dichromatic Lotus Butterfly ~ Ancients (ZUN).mid
                 SpessaLog::warn(&format!("Invalid delay macro: {}", macro_num));
                 return;
@@ -1318,11 +1275,10 @@ impl SynthesizerCore {
 
     /// Checks if we can disable insertion and delay effects.
     ///
-    /// New in 4.3.16: 4.3.14 latched both flags on (`delayActive ||= ...`) from any GS
-    /// delay SysEx or variation-depth CC, so they could never be turned back off outside a
-    /// full reset. They are now recomputed from the current state at every relevant edit.
+    /// Both flags are recomputed from the current state at every relevant edit (not latched),
+    /// so the delay and insertion effects turn off again once nothing uses them.
     ///
-    /// Equivalent to: updateActiveGSEffects() (renamed from updateActiveEffects in 4.4.0)
+    /// Equivalent to: updateActiveGSEffects()
     pub fn update_active_gs_effects(&mut self) {
         if !self.system_parameters.gs_insertion_lock {
             self.gs_insertion_active = self.midi_channels.iter().any(|c| c.midi_parameters.efx_assign);
@@ -1341,7 +1297,7 @@ impl SynthesizerCore {
     }
 
     /// Resets the insertion parameter cache to "no change" + the default sends.
-    /// Equivalent to: resetGSInsertionParams() (renamed from resetInsertionParams in 4.4.0)
+    /// Equivalent to: resetGSInsertionParams()
     pub(crate) fn reset_insertion_params(&mut self) {
         // No change
         self.insertion_params.fill(255);
@@ -1351,14 +1307,14 @@ impl SynthesizerCore {
     }
 
     /// Resets the insertion effect to defaults.
-    /// Equivalent to: resetGSInsertion() (renamed from resetInsertion in 4.4.0)
+    /// Equivalent to: resetGSInsertion()
     pub fn reset_insertion(&mut self) {
         if self.system_parameters.gs_insertion_lock {
             return;
         }
-        // 4.3.16 dropped the `insertionActive = false` here: the flag is now derived from
-        // the per-channel efxAssign state by `update_active_gs_effects()`, which `reset()`
-        // calls after every channel has been reset.
+        // `gs_insertion_active` is not cleared here: it is derived from the per-channel
+        // efxAssign state by `update_active_gs_effects()`, which `reset()` calls after every
+        // channel has been reset.
         self.select_gs_insertion_processor(None);
         self.insertion_processor.reset();
         self.insertion_processor
@@ -1490,7 +1446,7 @@ impl SynthesizerCore {
     }
 
     /// Destroys the synthesizer, releasing all resources.
-    /// Equivalent to: destroy() (renamed from destroySynthProcessor in 4.4.0)
+    /// Equivalent to: destroy()
     pub fn destroy(&mut self) {
         self.voices.clear();
         // TS calls c.destroy() per channel (see module doc).
@@ -1562,8 +1518,7 @@ impl SynthesizerCore {
         let note = midi_note as u64;
         let vel = velocity as u64;
 
-        // 129x128x128x128x128 array! (4.4.0; was a 128-based key, where the drum MSB 128
-        // collided with LSB 1)
+        // 129x128x128x128x128 array! (129-based so the drum MSB 128 does not collide with LSB 1)
         bank_msb // 129 * 128 ^ 0
             + bank_lsb * 129 // 129 * 128 ^ 0
             + program * 16_512 // 129 * 128 ^ 1

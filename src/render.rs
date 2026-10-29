@@ -79,7 +79,7 @@ pub fn render_midi_to_wav(
         .synth_core
         .reset(DEFAULT_SYNTH_MODE);
 
-    // Enable uncapped voice count (matches the 4.3.0 example, which renders with
+    // Enable uncapped voice count (matches the upstream example, which renders with
     // `setSystemParameter("autoAllocateVoices", true)`; the TS reference WAVs are
     // generated this way, so no voice stealing during offline render).
     seq.synth

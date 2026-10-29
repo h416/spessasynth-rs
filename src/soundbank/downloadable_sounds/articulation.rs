@@ -603,7 +603,7 @@ mod tests {
 
     #[test]
     fn test_to_sf_zone_dls1_no_modulators_added_when_empty() {
-        // TS 4.3.0 no longer injects "no-vibrato" cancellation modulators for DLS1;
+        // No "no-vibrato" cancellation modulators are injected for DLS1;
         // with no connection blocks and no mod-LFO-to-pitch modulator, nothing is added.
         let mut art = DownloadableSoundsArticulation::new();
         art.mode = DlsMode::Dls1;

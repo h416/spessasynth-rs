@@ -1,9 +1,8 @@
 //! Hermite cubic spline interpolation oscillator.
 //! Ported from: src/synthesizer/audio_engine/voice/wavetable_oscillator/hermite.ts
 //!
-//! 4.4.0 moved the interpolated span: it is now between floor (x0) and floor + 1 (x1),
-//! so the 4 points used are floor - 1, floor, floor + 1 and floor + 2.
-//! (Up to 4.3.22 the points were floor .. floor + 3, i.e. one sample later.)
+//! The interpolated span is between floor (x0) and floor + 1 (x1), so the 4 points used are
+//! floor - 1, floor, floor + 1 and floor + 2.
 use super::wavetable_oscillator::WavetableOscillator;
 
 /// Hermite interpolation of 4 points at the distance `t` from `x0`.
@@ -197,7 +196,7 @@ mod tests {
 
     #[test]
     fn hermite_at_integer_cursor_returns_that_sample() {
-        // 4.4.0: x0 is the point at the cursor, so t=0 yields data[cursor]
+        // x0 is the point at the cursor, so t=0 yields data[cursor]
         let mut osc = osc(vec![0.0f32, 1.0, 4.0, 9.0, 16.0, 25.0]);
         let mut buf = vec![0.0f64; 4];
         osc.process(4, 1.0, &mut buf);

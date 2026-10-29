@@ -1,25 +1,13 @@
 //! midi_utils.rs
 //! purpose: General-purpose MIDI message analysis (SysEx GM/GS/XG detection) and GS SysEx
 //! message construction.
-//! Ported from: src/midi/midi_tools/midi_utils.ts (spessasynth_core 4.3.0)
+//! Ported from: src/midi/midi_tools/midi_utils.ts
 //!
-//! TS 4.3.0 introduced this file, which absorbed and replaced two 4.2.0 files:
-//! - `src/midi/midi_tools/get_gs_on.ts` (the `getGsOn` free function, now `MidiUtils::gs_reset`;
-//!   the temporary Rust `get_gs_on` compatibility wrapper was removed)
-//! - `src/utils/sysex_detector.ts` (the `isXGOn`/`isGSOn`/`isGMOn`/`isGM2On`/`isGSDrumsOn`/
-//!   `syxToChannel` free functions, now unified into `MidiUtils::analyze_sysex` which returns
-//!   `AnalyzedMIDIMessage` classifications (a list since 4.4.0) instead of several
-//!   independent booleans, plus
-//!   many previously-unrecognized GS/XG/GM SysEx messages: reverb/chorus/delay/variation/
-//!   insertion effect parameters, master/per-channel key-shift and fine-tune, and — notably —
-//!   GS/XG SysEx-encoded bank-select/program-change/mono-poly messages, which are now converted
-//!   to regular Controller Change / Program Change classifications (see `write/rmidi.rs`, which
-//!   uses this to replace such SysEx events with regular CC/PC events during RMIDI bank
-//!   correction; this is the "wider MIDI/SysEx support" mentioned in the 4.3.0 release notes).
-//!
-//! `analyze_rpn`/`analyze_nrpn` are the channel-parameter-tracker helpers used by
-//! `parameter_tracker.rs` / `modify_midi.rs` / `used_programs_and_keys.rs`, replacing the
-//! pre-4.3.0 `utils/sysex_detector.rs` free functions (now deleted).
+//! `MidiUtils::analyze_sysex` returns a list of `AnalyzedMIDIMessage` classifications, including
+//! GS/XG SysEx-encoded bank-select/program-change/mono-poly messages as regular Controller Change /
+//! Program Change classifications (`write/rmidi.rs` uses this to replace such SysEx events during
+//! RMIDI bank correction). `analyze_rpn`/`analyze_nrpn` are the channel-parameter-tracker helpers
+//! used by `parameter_tracker.rs` / `modify_midi.rs` / `used_programs_and_keys.rs`.
 
 use crate::midi::enums::{
     midi_controllers, midi_message_types, non_registered_lsb, non_registered_msb,
@@ -33,7 +21,7 @@ use crate::midi::midi_message::MidiMessage;
 
 /// The result of analyzing a MIDI System Exclusive message (or, for the RPN/NRPN analyzers not
 /// ported here, a registered/non-registered parameter number).
-/// Equivalent to: AnalyzedMIDIMessage (TS 4.3.0)
+/// Equivalent to: AnalyzedMIDIMessage
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AnalyzedMidiMessage {
     Other,
@@ -57,7 +45,7 @@ pub enum AnalyzedMidiMessage {
     MasterFineTune { value: f64 },
     /// Value in cents.
     FineTune { channel: u8, value: f64 },
-    /// Random pan (new in 4.3.16): a pan of 0 in the XG/GS part parameters selects random
+    /// Random pan: a pan of 0 in the XG/GS part parameters selects random
     /// panning rather than a pan position, so it is a channel MIDI parameter, not a CC.
     /// Equivalent to: { type: "Channel MIDI Param", parameter: "randomPan", value: true }
     RandomPan { channel: u8 },

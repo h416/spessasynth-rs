@@ -1,6 +1,6 @@
 //! basic_soundbank.rs
 //! purpose: BasicSoundBank struct - a single SoundFont2/DLS sound bank.
-//! Ported from: src/soundbank/basic_soundbank/basic_soundbank.ts (spessasynth_core 4.3.0)
+//! Ported from: src/soundbank/basic_soundbank/basic_soundbank.ts
 //!
 //! # Skipped features
 //! - `setSampleFormat()` → SF3/Vorbis compression, out of scope
@@ -17,9 +17,8 @@
 //!
 //! ## `trim`
 //!
-//! TS 4.3.0 reworked `trimSoundBank(mid)` (which internally called `mid.getUsedProgramsAndKeys`)
-//! into `trim(presetData: PresetsWithKeyCombinations)`, taking the already-computed result so
-//! `basic_soundbank.ts` no longer depends on `basic_midi.ts`. Callers now do
+//! TS `trim(presetData: PresetsWithKeyCombinations)` takes the already-computed result, so
+//! `basic_soundbank.ts` does not depend on `basic_midi.ts`. Callers do
 //! `bank.trim(&midi.get_used_programs_and_keys(&bank))` (mirrored 1:1 in Rust — see
 //! `midi_tools::used_programs_and_keys`).
 //!
@@ -392,7 +391,7 @@ impl BasicSoundBank {
 
     /// Sorts presets by patch and updates internal values.
     /// Equivalent to: public flush()
-    /// (TS 4.3.0: presets.sort(MIDIPatchTools.compare.bind(MIDIPatchTools)))
+    /// (TS: presets.sort(MIDIPatchTools.compare.bind(MIDIPatchTools)))
     pub fn flush(&mut self) {
         self.presets.sort_by(|a, b| {
             let pa = MidiPatch {

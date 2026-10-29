@@ -1,44 +1,14 @@
 //! sequencer.rs
 //! purpose: SpessaSynthSequencer struct and core methods.
-//! Ported from: src/sequencer/sequencer.ts (spessasynth_core 4.3.0)
+//! Ported from: src/sequencer/sequencer.ts
 //!
-//! Changes from 4.2.0 (reviewed against the 4.3.0 diff):
-//! - `eventIndexes: number[]` (one cursor per track, resolved via `findFirstEventIndex()`) was
-//!   replaced by a single `index: number` cursor into `BasicMIDI.timeline` (a flattened,
-//!   time-sorted `{tr, ev}` list computed once when the MIDI is flushed).
-//!   `findFirstEventIndex()`/`find_first_event_index()` no longer exists.
-//! - `playingNotes: {midiNote, channel, velocity}[]` (a flat array, linearly scanned by
-//!   `findIndex`/`splice` on every note on/off) became `playingNotes: Map<number, number>[]`
-//!   (one `Map<midiNote, velocity>` per channel). Ported here as `Vec<Vec<(u8, u8)>>` (one
-//!   `(note, velocity)` list per channel) since Rust has no ordered-map in std and channels never
-//!   hold more than a handful of simultaneously-playing notes; `playing_notes_set`/
-//!   `playing_notes_delete` below reproduce `Map.set`/`Map.delete` insertion-order semantics
+//! - TS `playingNotes: Map<number, number>[]` (one `Map<midiNote, velocity>` per channel) is
+//!   `Vec<Vec<(u8, u8)>>` here (one `(note, velocity)` list per channel): channels never hold
+//!   more than a handful of simultaneously-playing notes. `playing_notes_set`/
+//!   `playing_notes_delete` reproduce the `Map.set`/`Map.delete` insertion-order semantics
 //!   (update-in-place does not reorder; delete-then-reinsert moves an entry to the end).
-//! - `shuffleMode` setter no longer reshuffles/reloads as a side effect of being set; it is now a
-//!   plain field write (shuffling only happens on `loadNewSongList`). Ported below.
-//! - `this.synth.currentSynthTime` was renamed to `this.synth.currentTime` (pure rename, same
-//!   `synthCore.currentTime` value — see `processor.ts`'s `get currentTime()` /
-//!   `get currentSynthTime()` in 4.3.0 / 4.2.0 respectively). This Rust file keeps calling the
-//!   existing `SpessaSynthProcessor::current_synth_time()` (out of scope: `processor.rs` is not
-//!   part of this task's file list), which returns the identical value.
-//! - `sendMIDIReset()`'s internal-playback path calls `this.synth.reset()` instead of
-//!   `this.synth.resetAllControllers()`; `synthCore.reset(system = DEFAULT_SYNTH_MODE)` in 4.3.0
-//!   is a rename of `synthCore.resetAllControllers(system)` with the same default and behavior
-//!   (see `synthesizer_core.ts`). This Rust file keeps calling the existing
-//!   `SpessaSynthProcessor::reset_all_controllers(DEFAULT_SYNTH_MODE)` (out of scope:
-//!   `processor.rs`), which is functionally identical.
-//! - `sendMIDIReset()`'s external-playback path now sends a real GS-reset SysEx via
-//!   `sendMIDISysEx(MIDIUtils.gsData(...))` instead of a raw `[midiMessageTypes.reset]` byte.
-//!   Not reachable from this port: `externalMIDIPlayback` (used only by host apps forwarding MIDI
-//!   to real/virtual hardware) is out of scope for this offline-WAV-rendering project and was
-//!   never implemented — every `sendMIDI*` wrapper below only has the internal-synth branch.
-//! - `SpessaSynthWarn`/`SpessaSynthGroup`/`SpessaSynthGroupEnd` calls became
-//!   `SpessaLog::warn`/`SpessaLog::group`/`SpessaLog::group_end` (behavior-identical
-//!   thin wrappers, see `utils/loggin.rs`).
-//! - Cosmetic-only: doc comment wording ("shuffleMode" → "shuffle mode"), `midiControllers` /
-//!   `midiMessageTypes` → `MIDIControllers` / `MIDIMessageTypes` (TS casing convention change;
-//!   Rust's `midi_controllers`/`midi_message_types` modules were already using
-//!   SCREAMING_SNAKE_CASE consts and need no change).
+//! - Not ported: `externalMIDIPlayback` (forwarding MIDI to real/virtual hardware) is outside
+//!   the offline MIDI-to-WAV scope; every `sendMIDI*` wrapper only has the internal-synth branch.
 
 use std::collections::HashMap;
 
@@ -103,7 +73,7 @@ pub struct SpessaSynthSequencer {
 
     /// The current event index in the sorted `timeline` list.
     /// This is used to track which event is currently being processed.
-    /// Equivalent to: index (TS 4.3.0; replaced `eventIndexes: number[]`)
+    /// Equivalent to: index
     pub(crate) index: usize,
 
     /// Time that has been played in the current song.
@@ -119,7 +89,7 @@ pub struct SpessaSynthSequencer {
     pub(crate) absolute_start_time: f64,
 
     /// Currently playing notes (for pause/resume), one `(note, velocity)` list per channel.
-    /// Equivalent to: playingNotes (Map<number, number>[] in TS 4.3.0)
+    /// Equivalent to: playingNotes (Map<number, number>[] in TS)
     pub(crate) playing_notes: Vec<Vec<(u8, u8)>>,
 
     /// MIDI port number for each track.
@@ -230,8 +200,7 @@ impl SpessaSynthSequencer {
     }
 
     /// Sets shuffle mode.
-    /// TS 4.3.0: no longer reshuffles/reloads as a side effect — shuffling only happens on
-    /// `loadNewSongList`. This is a plain field write now.
+    /// A plain field write: shuffling only happens on `loadNewSongList`.
     /// Equivalent to: set shuffleMode(on)
     pub fn set_shuffle_mode(&mut self, on: bool) {
         self.shuffle_mode = on;
@@ -670,7 +639,7 @@ mod tests {
         assert!(seq.paused());
     }
 
-    // -- shuffle_mode setter (4.3.0: plain field write, no side effects) --
+    // -- shuffle_mode setter (plain field write, no side effects) --
 
     #[test]
     fn test_set_shuffle_mode_no_side_effects() {

@@ -2,13 +2,7 @@
 //! purpose: SoundFont2 enumeration constants.
 //! Ported from: src/soundbank/enums.ts
 //!
-//! Note: TS 4.3.0 moved the DLS enums (DLSSources, DLSDestinations, DLSLoopTypes,
-//! DLSTransform) to src/soundbank/downloadable_sounds/enums.ts; the Rust counterparts
-//! now live in soundbank/downloadable_sounds/enums.rs.
-//! TS 4.3.0 also renamed `sampleTypes` → `SampleTypes`, `modulatorSources` →
-//! `ModulatorControllerSources` (type: `ModulatorSourceEnum` → `ModulatorControllerSource`),
-//! `modulatorCurveTypes` → `ModulatorCurveTypes` and `modulatorTransformTypes` →
-//! `ModulatorTransformTypes`. Rust keeps its idiomatic snake_case module names.
+//! The DLS enums are in soundbank/downloadable_sounds/enums.rs, like TS.
 
 // Re-export everything from generator_types.
 // Equivalent to: export * from "./basic_soundbank/generator_types"
@@ -43,7 +37,7 @@ pub mod modulator_sources {
     pub const LINK: u8 = 127;
 }
 
-/// Equivalent to: ModulatorControllerSource (TS 4.2.0 name: ModulatorSourceEnum)
+/// Equivalent to: ModulatorControllerSource
 pub type ModulatorControllerSource = u8;
 
 /// Modulator curve type constants.

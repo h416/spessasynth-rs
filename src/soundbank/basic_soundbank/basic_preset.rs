@@ -166,8 +166,7 @@ impl BasicPreset {
     // Note: a getter and not a constant value for editing purposes.
     /// Checks if this preset is a drum preset (GM/GS or GM2/XG).
     /// `is_xg_bank` corresponds to `parentSoundBank.isXGBank` in TypeScript.
-    /// Equivalent to: public get isDrum() (TS 4.2.0 name: isAnyDrums;
-    /// the separate isXGDrums getter was removed in 4.3.0)
+    /// Equivalent to: public get isDrum()
     pub fn is_drum(&self, is_xg_bank: bool) -> bool {
         self.is_gm_gs_drum || (is_xg_bank && BankSelectHacks::is_xg_drum(self.bank_msb))
     }
@@ -297,7 +296,7 @@ impl BasicPreset {
             // ── Preset generators (offsets) ───────────────────────────────
             // First global, then local (local overrides).
             let mut preset_generators = [0i16; GENERATORS_AMOUNT];
-            // Instrument-only generators are ignored at the preset level (4.4.0)
+            // Instrument-only generators are ignored at the preset level
             for gn in &self.global_zone.generators {
                 if is_instrument_only_generator(gn.generator_type) {
                     continue;

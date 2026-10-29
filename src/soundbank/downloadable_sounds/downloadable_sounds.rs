@@ -620,15 +620,13 @@ mod tests {
 
     #[test]
     fn test_new_default_name() {
-        // TS 4.3.0 changed the default bank name from "Unnamed" to "Unnamed DLS sound bank".
         let dls = DownloadableSounds::new();
         assert_eq!(dls.sound_bank_info.name, "Unnamed DLS sound bank");
     }
 
     #[test]
     fn test_new_default_product() {
-        // TS 4.3.0 moved this default from a read()-time override into the class field
-        // initializer itself.
+        // The default comes from the class field initializer, not a read()-time override.
         let dls = DownloadableSounds::new();
         assert_eq!(
             dls.sound_bank_info.product.as_deref(),
@@ -638,7 +636,6 @@ mod tests {
 
     #[test]
     fn test_new_default_comment_is_none() {
-        // TS 4.3.0 no longer defaults comment to "(no description)".
         let dls = DownloadableSounds::new();
         assert!(dls.sound_bank_info.comment.is_none());
     }
@@ -743,8 +740,8 @@ mod tests {
 
     #[test]
     fn test_read_sets_default_name() {
-        // TS 4.3.0 no longer overrides the name in read(); it uses the class default
-        // "Unnamed DLS sound bank" directly when no INAM chunk is present.
+        // read() does not override the name; the class default "Unnamed DLS sound bank" is
+        // used when no INAM chunk is present.
         let data = make_minimal_dls(0, &[]);
         let dls = DownloadableSounds::read(&data).unwrap();
         assert_eq!(dls.sound_bank_info.name, "Unnamed DLS sound bank");
@@ -999,7 +996,7 @@ mod tests {
 
     #[test]
     fn test_to_sf_comment_not_modified() {
-        // TS 4.3.0 no longer appends a "Converted from DLS to SF2..." note to the comment.
+        // No "Converted from DLS to SF2..." note is appended to the comment.
         let mut dls = DownloadableSounds::new();
         dls.sound_bank_info.comment = Some("Original".to_string());
         let bank = dls.to_sf();
@@ -1052,7 +1049,7 @@ mod tests {
 
     #[test]
     fn test_from_sf_comment_not_modified() {
-        // TS 4.3.0 no longer appends a "Converted from SF2 to DLS..." note to the comment.
+        // No "Converted from SF2 to DLS..." note is appended to the comment.
         let mut bank = BasicSoundBank::new();
         bank.sound_bank_info.comment = Some("Original SF2".to_string());
         let dls = DownloadableSounds::from_sf(&mut bank);

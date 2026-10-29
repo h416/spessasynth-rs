@@ -102,7 +102,7 @@ pub struct ChannelMidiParameter {
 
     /// The dry (direct) level of the channel, 0-127.
     /// Only active in XG with the variation connection set to SYSTEM.
-    /// Equivalent to: dryLevel (new in 4.4.0)
+    /// Equivalent to: dryLevel
     pub dry_level: u8,
 }
 

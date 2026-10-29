@@ -1,6 +1,6 @@
 //! compute_modulator.rs
 //! purpose: function for computing all modulators on a voice.
-//! Ported from: src/synthesizer/audio_engine/engine_components/compute_modulator.ts
+//! Ported from: src/synthesizer/audio_engine/voice/compute_modulator.ts
 //!
 //! # TypeScript vs Rust design differences
 //!
@@ -90,7 +90,7 @@ pub trait ChannelContext {
     fn pitch_wheel_range(&self) -> f64;
 
     /// Poly pressure of a key (persists across notes, like per-note pitch wheels).
-    /// Equivalent to: `this.polyPressures[midiNote]` (new in 4.4.0)
+    /// Equivalent to: `this.polyPressures[midiNote]`
     fn poly_pressure(&self, _midi_note: usize) -> u8 {
         0
     }
@@ -133,7 +133,7 @@ pub trait VoiceContext {
     fn modulator_values(&self) -> &[i16];
 
     /// Sets the poly pressure the polyPressure modulator source reads.
-    /// TS 4.4.0 reads `channel.polyPressures[voice.midiNote]` directly; Rust copies it
+    /// TS reads `channel.polyPressures[voice.midiNote]` directly; Rust copies it
     /// into the voice at the start of every `compute_modulators` call instead.
     fn set_pressure(&mut self, _pressure: u8) {}
 }
@@ -203,8 +203,8 @@ pub fn compute_modulators<C: ChannelContext, V: VoiceContext>(
         let key = voice.midi_note();
         channel.pitch_wheels().get(key).copied().unwrap_or(0)
     } else {
-        // TS 4.3.0: the global pitch wheel now lives on the channel MIDI parameters
-        // (`this._midiParameters.pitchWheel`) instead of the controller table.
+        // TS: the channel pitch wheel lives on the channel MIDI parameters
+        // (`this._midiParameters.pitchWheel`), not in the controller table.
         channel.pitch_wheel()
     };
 

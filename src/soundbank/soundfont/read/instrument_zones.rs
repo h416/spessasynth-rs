@@ -1,18 +1,12 @@
 //! instrument_zones.rs
 //! purpose: reads instrument zones from SoundFont and assigns samples, generators, modulators.
-//! Ported from: src/soundbank/soundfont/read/instrument_zones.ts (spessasynth_core 4.3.0)
+//! Ported from: src/soundbank/soundfont/read/instrument_zones.ts
 //!
 //! # TypeScript vs Rust design differences
 //!
 //! ## SoundFontInstrumentZone
-//! TS 4.2.0: a standalone `class SoundFontInstrumentZone extends BasicInstrumentZone` held the
-//! constructor logic (sampleID search + validation). TS 4.3.0 removed that class and inlined the
-//! same logic directly into `SoundFontInstrument.createSoundFontZone`; the field names read on
-//! generators also changed from `generatorType`/`generatorValue` to `type`/`value` (naming-only;
-//! see `generator.rs`, which already uses `generator_type`/`generator_value` for both).
-//! Rust keeps the pre-existing `SoundFontInstrumentZone(BasicInstrumentZone)` newtype: it already
-//! isolates the same constructor logic (sampleID search and validation) in one place, so the
-//! TS-side class removal has no Rust-side structural consequence.
+//! TS inlines this in `SoundFontInstrument.createSoundFontZone`; Rust keeps it in the
+//! `SoundFontInstrumentZone(BasicInstrumentZone)` newtype.
 //! Handles the constructor logic (sampleID search and validation),
 //! and on success pushes the inner `BasicInstrumentZone` to the instrument.
 //!
@@ -175,7 +169,7 @@ pub fn apply_instrument_zones<I: SoundFontInstrumentZoneSink>(
                     Err(e) => SpessaLog::warn(&e),
                 }
             } else if i == 0 {
-                // Global zone, only the first zone may be global (4.4.0)
+                // Global zone, only the first zone may be global
                 // Equivalent to: instrument.globalZone.addGenerators(...gens)
                 //                instrument.globalZone.addModulators(...mods)
                 let global = instrument.global_zone_mut();

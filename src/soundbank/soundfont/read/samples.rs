@@ -1,6 +1,6 @@
 //! samples.rs
 //! purpose: Parses SoundFont sample headers and audio data.
-//! Ported from: src/soundbank/soundfont/read/samples.ts (spessasynth_core 4.3.0)
+//! Ported from: src/soundbank/soundfont/read/samples.ts
 
 use crate::soundbank::enums::{SampleType, sample_types};
 use crate::utils::indexed_array::IndexedByteArray;
