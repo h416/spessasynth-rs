@@ -313,6 +313,21 @@ impl DefaultGSDelay {
         }
     }
 
+    /// Restores this effect processor instance from a snapshot.
+    /// Equivalent to: applySnapshot(snapshot)
+    pub fn apply_snapshot(&mut self, snapshot: &DelaySnapshot) {
+        self.set_level(snapshot.level);
+        self.set_pre_lowpass(snapshot.pre_lowpass);
+        self.set_time_center(snapshot.time_center);
+        self.set_time_ratio_left(snapshot.time_ratio_left);
+        self.set_time_ratio_right(snapshot.time_ratio_right);
+        self.set_level_center(snapshot.level_center);
+        self.set_level_left(snapshot.level_left);
+        self.set_level_right(snapshot.level_right);
+        self.set_feedback(snapshot.feedback);
+        self.set_send_level_to_reverb(snapshot.send_level_to_reverb);
+    }
+
     fn update_delay_times(&mut self) {
         // Recompute times
         let max_delay = self.buffer.len() as i64 - 1;

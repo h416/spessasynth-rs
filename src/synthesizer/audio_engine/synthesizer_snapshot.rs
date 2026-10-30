@@ -5,12 +5,11 @@
 //! `applySnapshot`/`getSynthesizerSnapshot` are bound to `SpessaSynthProcessor` in TS;
 //! Rust binds them to `SynthesizerCore`, which owns the channels and the effects.
 use crate::midi::drum_parameters::{DrumParameterUtils, UserDrumSetParameter};
-use crate::midi::midi_tools::midi_utils::MidiUtils;
 use crate::synthesizer::audio_engine::channel::channel_snapshot::ChannelSnapshot;
 use crate::synthesizer::audio_engine::channel::midi_channel::DrumLocks;
 use crate::synthesizer::audio_engine::effects::gs::implementation::chorus::ChorusSnapshot;
 use crate::synthesizer::audio_engine::effects::gs::implementation::delay::DelaySnapshot;
-use crate::synthesizer::audio_engine::effects::gs::implementation::insertion::GSInsertionProcessorSnapshot;
+use crate::synthesizer::audio_engine::effects::gs::implementation::insertion::GSInsertionBlockSnapshot;
 use crate::synthesizer::audio_engine::effects::gs::implementation::reverb::ReverbSnapshot;
 use crate::synthesizer::audio_engine::effects::xg::implementation::chorus::XGChorusBlockSnapshot;
 use crate::synthesizer::audio_engine::effects::xg::implementation::insertion::XGInsertionBlockSnapshot;
@@ -55,9 +54,9 @@ pub struct SynthesizerSnapshot {
     /// A snapshot of the delay processor.
     /// Equivalent to: gsDelayProcessor
     pub gs_delay_processor: DelaySnapshot,
-    /// A snapshot of the insertion effect processor.
-    /// Equivalent to: gsInsertionProcessor
-    pub gs_insertion_processor: GSInsertionProcessorSnapshot,
+    /// A snapshot of the GS insertion block.
+    /// Equivalent to: gsInsertionBlock
+    pub gs_insertion_block: GSInsertionBlockSnapshot,
 
     /// A snapshot of the XG reverb block.
     /// Equivalent to: xgReverbBlock
@@ -110,48 +109,10 @@ pub fn apply_snapshot(core: &mut SynthesizerCore, snapshot: &SynthesizerSnapshot
         .any(|c| c.midi_parameters.rx_channel != c.channel as i32);
 
     // Restore effect processors
-    // (Object.entries follows the key order of each processor's getSnapshot)
-    let rev = &snapshot.gs_reverb_processor;
-    core.reverb_processor.set_level(rev.level);
-    core.reverb_processor.set_pre_lowpass(rev.pre_lowpass);
-    core.reverb_processor.set_character(rev.character);
-    core.reverb_processor.set_time(rev.time);
-    core.reverb_processor.set_delay_feedback(rev.delay_feedback);
-    core.reverb_processor.set_pre_delay_time(rev.pre_delay_time);
-    let cho = &snapshot.gs_chorus_processor;
-    core.chorus_processor.set_pre_lowpass(cho.pre_lowpass);
-    core.chorus_processor.set_depth(cho.depth);
-    core.chorus_processor.set_delay(cho.delay);
-    core.chorus_processor.set_send_level_to_delay(cho.send_level_to_delay);
-    core.chorus_processor.set_send_level_to_reverb(cho.send_level_to_reverb);
-    core.chorus_processor.set_rate(cho.rate);
-    core.chorus_processor.set_feedback(cho.feedback);
-    core.chorus_processor.set_level(cho.level);
-    let dly = &snapshot.gs_delay_processor;
-    core.delay_processor.set_level(dly.level);
-    core.delay_processor.set_pre_lowpass(dly.pre_lowpass);
-    core.delay_processor.set_time_center(dly.time_center);
-    core.delay_processor.set_time_ratio_right(dly.time_ratio_right);
-    core.delay_processor.set_time_ratio_left(dly.time_ratio_left);
-    core.delay_processor.set_level_center(dly.level_center);
-    core.delay_processor.set_level_left(dly.level_left);
-    core.delay_processor.set_level_right(dly.level_right);
-    core.delay_processor.set_feedback(dly.feedback);
-    core.delay_processor.set_send_level_to_reverb(dly.send_level_to_reverb);
-
-    // Restore insertion
-    // Call the handler directly so the device ID filter and the port offset do not apply
-    let is = &snapshot.gs_insertion_processor;
-    core.handle_gs(
-        &MidiUtils::gs_data(0x40, 0x03, 0x00, &[(is.r#type >> 8) as u8, (is.r#type & 0x7f) as u8]),
-        0,
-    );
-
-    for i in 0..is.params.len() {
-        if is.params[i] != 255 {
-            core.handle_gs(&MidiUtils::gs_data(0x40, 0x03, (3 + i) as u8, &[is.params[i]]), 0);
-        }
-    }
+    core.reverb_processor.apply_snapshot(&snapshot.gs_reverb_processor);
+    core.chorus_processor.apply_snapshot(&snapshot.gs_chorus_processor);
+    core.delay_processor.apply_snapshot(&snapshot.gs_delay_processor);
+    core.gs_insertion_block.apply_snapshot(&snapshot.gs_insertion_block);
 
     // Restore XG effects
     core.xg_reverb_block.apply_snapshot(&snapshot.xg_reverb_block);
@@ -203,7 +164,7 @@ pub fn get_synthesizer_snapshot(core: &SynthesizerCore) -> SynthesizerSnapshot {
         gs_reverb_processor: core.reverb_processor.get_snapshot(),
         gs_chorus_processor: core.chorus_processor.get_snapshot(),
         gs_delay_processor: core.delay_processor.get_snapshot(),
-        gs_insertion_processor: core.get_gs_insertion_snapshot(),
+        gs_insertion_block: core.gs_insertion_block.get_snapshot(),
         xg_reverb_block: core.xg_reverb_block.get_snapshot(),
         xg_chorus_block: core.xg_chorus_block.get_snapshot(),
         xg_variation_block: core.xg_variation_block.get_snapshot(),
@@ -240,10 +201,10 @@ mod tests {
         assert_eq!(snap.midi_channels.len(), 3);
         assert_eq!(snap.xg_insertion_blocks.len(), core.xg_insertion_blocks.len());
         assert_eq!(snap.user_drum_sets.len(), 2);
-        // Default sends after resetGSInsertionParams: reverb 40, chorus 0, delay 0
-        assert_eq!(snap.gs_insertion_processor.params[20], 40);
-        assert_eq!(snap.gs_insertion_processor.params[21], 0);
-        assert_eq!(snap.gs_insertion_processor.params[22], 0);
+        // Default sends after the insertion reset: reverb 40, chorus 0, delay 0
+        assert_eq!(snap.gs_insertion_block.send_level_to_reverb, 40);
+        assert_eq!(snap.gs_insertion_block.send_level_to_chorus, 0);
+        assert_eq!(snap.gs_insertion_block.send_level_to_delay, 0);
     }
 
     #[test]

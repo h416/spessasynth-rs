@@ -30,10 +30,7 @@ use crate::synthesizer::audio_engine::channel::render_voice::{
 };
 use crate::synthesizer::audio_engine::effects::gs::implementation::chorus::SpessaSynthChorus;
 use crate::synthesizer::audio_engine::effects::gs::implementation::delay::DefaultGSDelay;
-use crate::synthesizer::audio_engine::effects::gs::implementation::insertion::{
-    self, GSInsertionProcessorSnapshot, InsertionProcessor,
-    thru::ThruFx,
-};
+use crate::synthesizer::audio_engine::effects::gs::implementation::insertion::DefaultGSInsertion;
 use crate::synthesizer::audio_engine::effects::gs::implementation::reverb::SpessaSynthReverb;
 use crate::synthesizer::audio_engine::voice::lowpass_filter::LowpassFilter;
 use crate::synthesizer::audio_engine::parameters::midi::{
@@ -43,9 +40,7 @@ use crate::synthesizer::audio_engine::parameters::system::{
     DEFAULT_GLOBAL_SYSTEM_PARAMETERS, GlobalSystemParameter,
 };
 use crate::synthesizer::audio_engine::sound_bank_manager::SoundBankManager;
-use crate::synthesizer::audio_engine::synth_constants::{
-    MIDI_DRUM_CHANNEL, EFX_SENDS_GAIN_CORRECTION,
-};
+use crate::synthesizer::audio_engine::synth_constants::MIDI_DRUM_CHANNEL;
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::types::{
     CachedVoiceList, EffectChangeCallback, EffectKind, SynthProcessorEvent, SynthProcessorOptions,
@@ -264,24 +259,10 @@ pub struct SynthesizerCore {
     /// Equivalent to: sampleTime (private)
     sample_time: f64,
 
-    /// The selected insertion effect processor.
-    /// Equivalent to: gsInsertionProcessor
-    /// TS keeps references to the registered instances and the fallback; Rust moves the
-    /// selected one out of `insertion_effects` / `gs_insertion_fallback` into this field
-    /// (see `select_gs_insertion_processor`).
-    pub insertion_processor: Box<dyn InsertionProcessor>,
-
-    /// Where `insertion_processor` came from: `Some(type)` for a registered processor,
-    /// `None` for the Thru fallback.
-    insertion_slot: Option<u16>,
-
-    /// The registered insertion processors, one instance per type, except the selected one.
-    /// Equivalent to: insertionEffects
-    insertion_effects: HashMap<u16, Box<dyn InsertionProcessor>>,
-
-    /// The Thru fallback, used when unsupported or after a reset. `None` while selected.
-    /// Equivalent to: gsInsertionFallback
-    gs_insertion_fallback: Option<Box<dyn InsertionProcessor>>,
+    /// The synthesizer's GS insertion block.
+    /// Used when the MIDI system is `gm`, `gm2` or `gs`.
+    /// Equivalent to: gsInsertionBlock
+    pub gs_insertion_block: DefaultGSInsertion,
 
     /// True if any channel has insertion enabled (optimization flag).
     pub gs_insertion_active: bool,
@@ -290,13 +271,6 @@ pub struct SynthesizerCore {
     /// Equivalent to: insertionInputL/R
     insertion_input_l: Vec<f32>,
     insertion_input_r: Vec<f32>,
-
-    /// For insertion snapshot tracking.
-    /// 20 parameters (0-19) + 3 sends (indices 20-22).
-    /// Index to GS is Addr3 - 3 (for example EFX PARAMETER 1 is 0x03 and here it's 0).
-    /// Note: 255 means "no change".
-    /// Equivalent to: gsInsertionParams: Uint8Array(23)
-    pub insertion_params: [u8; 23],
 }
 
 impl SynthesizerCore {
@@ -329,7 +303,7 @@ impl SynthesizerCore {
         system_parameters.effects_enabled = options.effects_enabled;
         system_parameters.events_enabled = options.events_enabled;
 
-        let mut core = Self {
+        Self {
             voices,
             midi_channels: Vec::new(),
             sound_bank_manager: SoundBankManager::new(|| {}),
@@ -384,21 +358,11 @@ impl SynthesizerCore {
             last_priority_assignment_time: 0.0,
             event_queue: Vec::new(),
             sample_time: 1.0 / sample_rate,
-            insertion_processor: Box::new(ThruFx::new(sample_rate)),
-            insertion_slot: None,
-            // Register insertion
-            insertion_effects: insertion::gs_insertion_effect_list(sample_rate, buf_size)
-                .into_iter()
-                .map(|p| (p.effect_type(), p))
-                .collect(),
-            gs_insertion_fallback: None,
+            gs_insertion_block: DefaultGSInsertion::new(sample_rate, buf_size),
             gs_insertion_active: false,
             insertion_input_l: vec![0.0; buf_size],
             insertion_input_r: vec![0.0; buf_size],
-            insertion_params: [255u8; 23],
-        };
-        core.reset_insertion_params(); // Initial setup
-        core
+        }
     }
 
     /// Current total amount of voices that are playing.
@@ -576,7 +540,15 @@ impl SynthesizerCore {
         self.set_chorus_macro(2);
         // Delay1 default
         self.set_delay_macro(0);
-        self.reset_insertion();
+        if !self.system_parameters.gs_insertion_lock {
+            self.gs_insertion_block.reset();
+            let efx_type = self.gs_insertion_block.get_type();
+            self.call_event(SynthProcessorEvent::EffectChange(EffectChangeCallback {
+                effect: EffectKind::Insertion,
+                parameter: 0,
+                value: efx_type as i32,
+            }));
+        }
 
         // Reset XG params
         if !self.system_parameters.xg_reverb_lock {
@@ -918,7 +890,7 @@ impl SynthesizerCore {
             } else {
                 // Insertion first
                 if self.gs_insertion_active {
-                    self.insertion_processor.process(
+                    self.gs_insertion_block.process(
                         &self.insertion_input_l,
                         &self.insertion_input_r,
                         left,
@@ -1004,10 +976,15 @@ impl SynthesizerCore {
         if self.system_parameters.gs_reverb_lock {
             return;
         }
+        if macro_num > 7 {
+            // Invalid macros are ignored
+            // Testcase: 18 - Dichromatic Lotus Butterfly ~ Ancients (ZUN).mid
+            SpessaLog::warn(&format!("Invalid reverb macro: {}", macro_num));
+            return;
+        }
         let rev = &mut self.reverb_processor;
         rev.set_level(64);
         rev.set_pre_delay_time(0);
-        rev.set_character(macro_num);
         match macro_num {
             0 => {
                 // Room1
@@ -1019,52 +996,54 @@ impl SynthesizerCore {
             }
             1 => {
                 // Room2
+                rev.set_character(1);
                 rev.set_pre_lowpass(4);
                 rev.set_time(56);
                 rev.set_delay_feedback(0);
             }
             2 => {
                 // Room3
+                rev.set_character(2);
                 rev.set_pre_lowpass(0);
                 rev.set_time(72);
                 rev.set_delay_feedback(0);
             }
             3 => {
                 // Hall1
+                rev.set_character(3);
                 rev.set_pre_lowpass(4);
                 rev.set_time(72);
                 rev.set_delay_feedback(0);
             }
             4 => {
                 // Hall2
+                rev.set_character(4);
                 rev.set_pre_lowpass(0);
                 rev.set_time(64);
                 rev.set_delay_feedback(0);
             }
             5 => {
                 // Plate
+                rev.set_character(5);
                 rev.set_pre_lowpass(0);
                 rev.set_time(88);
                 rev.set_delay_feedback(0);
             }
             6 => {
                 // Delay
+                rev.set_character(6);
                 rev.set_pre_lowpass(0);
                 rev.set_time(32);
                 rev.set_delay_feedback(40);
             }
             7 => {
                 // Panning delay
+                rev.set_character(7);
                 rev.set_pre_lowpass(0);
                 rev.set_time(64);
                 rev.set_delay_feedback(32);
             }
-            _ => {
-                // Check for invalid macros (warn and return; no Room1 fallback)
-                // Testcase: 18 - Dichromatic Lotus Butterfly ~ Ancients (ZUN).mid
-                SpessaLog::warn(&format!("Invalid reverb macro: {}", macro_num));
-                return;
-            }
+            _ => {}
         }
         self.call_event(SynthProcessorEvent::EffectChange(EffectChangeCallback {
             effect: EffectKind::Reverb,
@@ -1079,12 +1058,21 @@ impl SynthesizerCore {
         if self.system_parameters.gs_chorus_lock {
             return;
         }
+        if macro_num > 7 {
+            // Invalid macros are ignored
+            // Testcase: 18 - Dichromatic Lotus Butterfly ~ Ancients (ZUN).mid
+            SpessaLog::warn(&format!("Invalid chorus macro: {}", macro_num));
+            return;
+        }
         let chr = &mut self.chorus_processor;
         chr.set_level(64);
         chr.set_pre_lowpass(0);
         chr.set_delay(127);
         chr.set_send_level_to_delay(0);
         chr.set_send_level_to_reverb(0);
+        // The send to delay changed, so the delay may no longer be needed
+        self.update_active_gs_effects();
+        let chr = &mut self.chorus_processor;
         match macro_num {
             0 => {
                 // Chorus1
@@ -1142,12 +1130,7 @@ impl SynthesizerCore {
                 chr.set_rate(0);
                 chr.set_depth(127);
             }
-            _ => {
-                // Check for invalid macros (warn and return; no Chorus1 fallback)
-                // Testcase: 18 - Dichromatic Lotus Butterfly ~ Ancients (ZUN).mid
-                SpessaLog::warn(&format!("Invalid chorus macro: {}", macro_num));
-                return;
-            }
+            _ => {}
         }
         self.call_event(SynthProcessorEvent::EffectChange(EffectChangeCallback {
             effect: EffectKind::Chorus,
@@ -1160,6 +1143,12 @@ impl SynthesizerCore {
     /// Equivalent to: setDelayMacro(macro)
     pub fn set_delay_macro(&mut self, macro_num: u8) {
         if self.system_parameters.gs_delay_lock {
+            return;
+        }
+        if macro_num > 9 {
+            // Invalid macros are ignored
+            // Testcase: 18 - Dichromatic Lotus Butterfly ~ Ancients (ZUN).mid
+            SpessaLog::warn(&format!("Invalid delay macro: {}", macro_num));
             return;
         }
         let dly = &mut self.delay_processor;
@@ -1259,12 +1248,7 @@ impl SynthesizerCore {
                 dly.set_level_right(67);
                 dly.set_feedback(40);
             }
-            _ => {
-                // Check for invalid macros (warn and return; no Delay1 fallback)
-                // Testcase: 18 - Dichromatic Lotus Butterfly ~ Ancients (ZUN).mid
-                SpessaLog::warn(&format!("Invalid delay macro: {}", macro_num));
-                return;
-            }
+            _ => {}
         }
         self.call_event(SynthProcessorEvent::EffectChange(EffectChangeCallback {
             effect: EffectKind::Delay,
@@ -1288,53 +1272,11 @@ impl SynthesizerCore {
                 false
             } else {
                 self.chorus_processor.send_level_to_delay() > 0
-                    || self.insertion_processor.send_level_to_delay() > 0.0
+                    || self.gs_insertion_block.send_level_to_delay > 0
                     || self.midi_channels.iter().any(|c| {
                         c.midi_controllers[midi_controllers::VARIATION_DEPTH as usize] > 0
                     })
             };
-        }
-    }
-
-    /// Resets the insertion parameter cache to "no change" + the default sends.
-    /// Equivalent to: resetGSInsertionParams()
-    pub(crate) fn reset_insertion_params(&mut self) {
-        // No change
-        self.insertion_params.fill(255);
-        self.insertion_params[20] = 40; // Reverb
-        self.insertion_params[21] = 0; // Chorus
-        self.insertion_params[22] = 0; // Delay
-    }
-
-    /// Resets the insertion effect to defaults.
-    /// Equivalent to: resetGSInsertion()
-    pub fn reset_insertion(&mut self) {
-        if self.system_parameters.gs_insertion_lock {
-            return;
-        }
-        // `gs_insertion_active` is not cleared here: it is derived from the per-channel
-        // efxAssign state by `update_active_gs_effects()`, which `reset()` calls after every
-        // channel has been reset.
-        self.select_gs_insertion_processor(None);
-        self.insertion_processor.reset();
-        self.insertion_processor
-            .set_send_level_to_reverb(40.0 / 127.0 * EFX_SENDS_GAIN_CORRECTION);
-        self.insertion_processor.set_send_level_to_chorus(0.0);
-        self.insertion_processor.set_send_level_to_delay(0.0);
-        self.reset_insertion_params();
-        let efx_type = self.insertion_processor.effect_type();
-        self.call_event(SynthProcessorEvent::EffectChange(EffectChangeCallback {
-            effect: EffectKind::Insertion,
-            parameter: 0,
-            value: efx_type as i32,
-        }));
-    }
-
-    /// Equivalent to: getGSInsertionSnapshot() (protected)
-    pub fn get_gs_insertion_snapshot(&self) -> GSInsertionProcessorSnapshot {
-        GSInsertionProcessorSnapshot {
-            r#type: self.insertion_processor.effect_type(),
-            params: self.insertion_params,
         }
     }
 
@@ -1538,34 +1480,5 @@ impl SynthesizerCore {
         // TS sorts the queue by time after each push.
         self.event_queue
             .sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
-    }
-
-    /// Selects a registered insertion processor (`Some(type)`) or the Thru fallback (`None`),
-    /// returning the previously selected one to where it belongs.
-    /// Equivalent to: `this.gsInsertionProcessor = this.insertionEffects.get(type)` /
-    /// `= this.gsInsertionFallback`
-    pub(crate) fn select_gs_insertion_processor(&mut self, slot: Option<u16>) {
-        if slot == self.insertion_slot {
-            return;
-        }
-        let selected = match slot {
-            Some(efx_type) => self.insertion_effects.remove(&efx_type),
-            None => self.gs_insertion_fallback.take(),
-        }
-        .expect("insertion processor is registered");
-        let previous = std::mem::replace(&mut self.insertion_processor, selected);
-        match self.insertion_slot {
-            Some(efx_type) => {
-                self.insertion_effects.insert(efx_type, previous);
-            }
-            None => self.gs_insertion_fallback = Some(previous),
-        }
-        self.insertion_slot = slot;
-    }
-
-    /// True if an insertion processor of this type is registered.
-    /// Equivalent to: `this.insertionEffects.get(type) !== undefined`
-    pub(crate) fn has_gs_insertion_processor(&self, efx_type: u16) -> bool {
-        self.insertion_slot == Some(efx_type) || self.insertion_effects.contains_key(&efx_type)
     }
 }

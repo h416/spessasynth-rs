@@ -141,6 +141,10 @@ pub struct ChannelPropertyChangeCallback {
 /// The payload of an `effectChange` event.
 /// Equivalent to: EffectChangeEvent (partial — the TS payload also
 /// distinguishes the effect kind via a string union)
+///
+/// Not ported (API only, no effect on the MIDI-to-WAV output): the TS events named by
+/// parameter (a GS macro first reports every parameter it sets, the EFX parameters and
+/// sends). Rust reports the macro and the EFX type only.
 #[derive(Clone, Copy, Debug)]
 pub struct EffectChangeCallback {
     /// Which effect changed: "reverb" | "chorus" | "delay" | "insertion".

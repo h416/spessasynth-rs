@@ -2,19 +2,15 @@
 //! purpose: 4-band stereo parametric EQ insertion effect.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/insertion/stereo_eq.ts
 
-use crate::synthesizer::audio_engine::synth_constants::EFX_SENDS_GAIN_CORRECTION;
 use super::utils::{
     BiquadCoeffs, BiquadState, compute_peaking_eq_coeffs, compute_shelf_coeffs, process_biquad,
 };
 use super::convert::InsertionValueConverter;
-use super::InsertionProcessor;
+use super::insertion_processor::DefaultGSInsertionProcessor;
 
 use std::f64::consts::PI;
 
 pub struct StereoEqFx {
-    send_level_to_reverb: f64,
-    send_level_to_chorus: f64,
-    send_level_to_delay: f64,
     sample_rate: f64,
     level: f64,
     low_freq: f64,
@@ -44,9 +40,6 @@ pub struct StereoEqFx {
 impl StereoEqFx {
     pub fn new(sample_rate: f64) -> Self {
         let mut fx = Self {
-            send_level_to_reverb: 40.0 / 127.0 * EFX_SENDS_GAIN_CORRECTION,
-            send_level_to_chorus: 0.0,
-            send_level_to_delay: 0.0,
             sample_rate,
             level: 1.0,
             low_freq: 400.0,
@@ -84,7 +77,7 @@ impl StereoEqFx {
     }
 }
 
-impl InsertionProcessor for StereoEqFx {
+impl DefaultGSInsertionProcessor for StereoEqFx {
     fn effect_type(&self) -> u16 { 0x0100 }
 
     fn reset(&mut self) {
@@ -112,23 +105,23 @@ impl InsertionProcessor for StereoEqFx {
 
     fn set_parameter(&mut self, parameter: u8, value: u8) {
         match parameter {
-            0x03 => { self.low_freq = if value == 1 { 400.0 } else { 200.0 }; }
-            0x04 => { self.low_gain = value as f64 - 64.0; }
-            0x05 => { self.hi_freq = if value == 1 { 8000.0 } else { 4000.0 }; }
-            0x06 => { self.hi_gain = value as f64 - 64.0; }
-            0x07 => { self.m1_freq = InsertionValueConverter::eq_freq(value); }
-            0x08 => {
+            0 => { self.low_freq = if value == 1 { 400.0 } else { 200.0 }; }
+            1 => { self.low_gain = value as f64 - 64.0; }
+            2 => { self.hi_freq = if value == 1 { 8000.0 } else { 4000.0 }; }
+            3 => { self.hi_gain = value as f64 - 64.0; }
+            4 => { self.m1_freq = InsertionValueConverter::eq_freq(value); }
+            5 => {
                 const Q_TABLE: [f64; 5] = [0.5, 1.0, 2.0, 4.0, 9.0];
                 self.m1_q = Q_TABLE.get(value as usize).copied().unwrap_or(1.0);
             }
-            0x09 => { self.m1_gain = value as f64 - 64.0; }
-            0x0a => { self.m2_freq = InsertionValueConverter::eq_freq(value); }
-            0x0b => {
+            6 => { self.m1_gain = value as f64 - 64.0; }
+            7 => { self.m2_freq = InsertionValueConverter::eq_freq(value); }
+            8 => {
                 const Q_TABLE: [f64; 5] = [0.5, 1.0, 2.0, 4.0, 9.0];
                 self.m2_q = Q_TABLE.get(value as usize).copied().unwrap_or(1.0);
             }
-            0x0c => { self.m2_gain = value as f64 - 64.0; }
-            0x16 => { self.level = value as f64 / 127.0; }
+            9 => { self.m2_gain = value as f64 - 64.0; }
+            19 => { self.level = value as f64 / 127.0; }
             _ => {}
         }
         self.update_coefficients();
@@ -138,13 +131,9 @@ impl InsertionProcessor for StereoEqFx {
         &mut self,
         input_l: &[f32], input_r: &[f32],
         output_l: &mut [f32], output_r: &mut [f32],
-        reverb_out: &mut [f32], chorus_out: &mut [f32], delay_out: &mut [f32],
-        start_index: usize, sample_count: usize,
+        sample_count: usize,
     ) {
         let level = self.level;
-        let rev = self.send_level_to_reverb;
-        let chr = self.send_level_to_chorus;
-        let dly = self.send_level_to_delay;
 
         for i in 0..sample_count {
             let mut sl = input_l[i] as f64;
@@ -159,22 +148,10 @@ impl InsertionProcessor for StereoEqFx {
             sl = process_biquad(sl, &self.hi_coeffs, &mut self.hi_state_l);
             sr = process_biquad(sr, &self.hi_coeffs, &mut self.hi_state_r);
 
-            let idx = start_index + i;
-            output_l[idx] = (output_l[idx] as f64 + sl * level) as f32;
-            output_r[idx] = (output_r[idx] as f64 + sr * level) as f32;
-            let mono = 0.5 * (sl + sr);
-            reverb_out[i] = (reverb_out[i] as f64 + mono * rev) as f32;
-            chorus_out[i] = (chorus_out[i] as f64 + mono * chr) as f32;
-            delay_out[i] = (delay_out[i] as f64 + mono * dly) as f32;
+            output_l[i] = (sl * level) as f32;
+            output_r[i] = (sr * level) as f32;
         }
     }
-
-    fn send_level_to_reverb(&self) -> f64 { self.send_level_to_reverb }
-    fn send_level_to_chorus(&self) -> f64 { self.send_level_to_chorus }
-    fn send_level_to_delay(&self) -> f64 { self.send_level_to_delay }
-    fn set_send_level_to_reverb(&mut self, v: f64) { self.send_level_to_reverb = v; }
-    fn set_send_level_to_chorus(&mut self, v: f64) { self.send_level_to_chorus = v; }
-    fn set_send_level_to_delay(&mut self, v: f64) { self.send_level_to_delay = v; }
 }
 
 fn compute_low_shelf_coeffs(coeffs: &mut BiquadCoeffs, freq: f64, gain_db: f64, sample_rate: f64) {

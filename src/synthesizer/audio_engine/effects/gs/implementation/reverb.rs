@@ -204,6 +204,17 @@ impl SpessaSynthReverb {
         }
     }
 
+    /// Restores this effect processor instance from a snapshot.
+    /// Equivalent to: applySnapshot(snapshot)
+    pub fn apply_snapshot(&mut self, snapshot: &ReverbSnapshot) {
+        self.set_level(snapshot.level);
+        self.set_pre_lowpass(snapshot.pre_lowpass);
+        self.set_character(snapshot.character);
+        self.set_time(snapshot.time);
+        self.set_delay_feedback(snapshot.delay_feedback);
+        self.set_pre_delay_time(snapshot.pre_delay_time);
+    }
+
     fn apply_pre_lpf<'a>(&mut self, input: &'a [f32], sample_count: usize) -> bool {
         if self.pre_lowpass > 0 {
             let a = self.pre_lpf_a;
