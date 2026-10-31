@@ -1,5 +1,7 @@
-// Generated automatically from the spessasynth_core table file by tools/gen_xg_tables.py
-// Do not edit by hand.
+//! delay_tables.rs
+//! purpose: XG DSP lookup tables, generated from the spessasynth_core table file
+//! by tools/gen_xg_tables.py. Do not edit by hand.
+//! Ported from: src/synthesizer/audio_engine/effects/xg/implementation/dsp/delay/delay_tables.ts
 
 /// Delay tap level scale (C level, delay 2 level).
 pub const DELAY_LEVEL: [f32; 128] = [

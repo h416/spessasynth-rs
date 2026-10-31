@@ -1,5 +1,7 @@
-// Generated automatically from the spessasynth_core table file by tools/gen_xg_tables.py
-// Do not edit by hand.
+//! reverb_tables.rs
+//! purpose: XG DSP lookup tables, generated from the spessasynth_core table file
+//! by tools/gen_xg_tables.py. Do not edit by hand.
+//! Ported from: src/synthesizer/audio_engine/effects/xg/implementation/dsp/reverb/reverb_tables.ts
 
 /// Reverb time to damping table index.
 pub const TIME_TABLE: [u8; 72] = [

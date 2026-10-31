@@ -1,4 +1,4 @@
-//! handle_gs.rs
+//! roland.rs
 //! purpose: Handles GS (Roland) system exclusive messages.
 //! Ported from: src/synthesizer/audio_engine/system_exclusive/roland.ts
 //! References:

@@ -1,3 +1,8 @@
+//! render.rs
+//! purpose: Library entry point that renders a MIDI file to WAV with a sound bank.
+//! The render loop follows the upstream example `examples/midi_to_wav_node.ts`;
+//! `RenderOptions` is Rust-only.
+
 use std::fs;
 use std::time::Instant;
 

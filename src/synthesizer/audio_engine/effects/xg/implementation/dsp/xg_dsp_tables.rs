@@ -1,5 +1,7 @@
-// Generated automatically from the spessasynth_core table file by tools/gen_xg_tables.py
-// Do not edit by hand.
+//! xg_dsp_tables.rs
+//! purpose: XG DSP lookup tables, generated from the spessasynth_core table file
+//! by tools/gen_xg_tables.py. Do not edit by hand.
+//! Ported from: src/synthesizer/audio_engine/effects/xg/implementation/dsp/xg_dsp_tables.ts
 
 /// Coefficient word format per variation category * 192 + coefficient index. -1 means unused.
 pub const COEFFICIENT_MODES: [i8; 768] = [

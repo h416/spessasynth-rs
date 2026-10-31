@@ -1,5 +1,7 @@
-// Generated automatically from the spessasynth_core table file by tools/gen_xg_tables.py
-// Do not edit by hand.
+//! auto_wah_tables.rs
+//! purpose: XG DSP lookup tables, generated from the spessasynth_core table file
+//! by tools/gen_xg_tables.py. Do not edit by hand.
+//! Ported from: src/synthesizer/audio_engine/effects/xg/implementation/dsp/auto_wah/auto_wah_tables.ts
 
 /// Auto wah cutoff frequency offset words.
 pub const CUTOFF_OFFSET: [u16; 128] = [

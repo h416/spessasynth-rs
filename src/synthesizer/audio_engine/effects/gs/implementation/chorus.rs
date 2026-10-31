@@ -1,3 +1,7 @@
+//! chorus.rs
+//! purpose: The default GS chorus implementation.
+//! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/chorus.ts
+
 use std::f64::consts::PI;
 
 const CHORUS_GAIN: f64 = 1.3;

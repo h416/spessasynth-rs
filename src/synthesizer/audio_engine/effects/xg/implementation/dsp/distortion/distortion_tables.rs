@@ -1,5 +1,7 @@
-// Generated automatically from the spessasynth_core table file by tools/gen_xg_tables.py
-// Do not edit by hand.
+//! distortion_tables.rs
+//! purpose: XG DSP lookup tables, generated from the spessasynth_core table file
+//! by tools/gen_xg_tables.py. Do not edit by hand.
+//! Ported from: src/synthesizer/audio_engine/effects/xg/implementation/dsp/distortion/distortion_tables.ts
 
 /// The distortion output level curve (1.0 at 127).
 pub const OUTPUT_LEVEL: [f32; 128] = [
