@@ -2,12 +2,11 @@
 //! purpose: 8-stage all-pass phaser insertion effect.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/insertion/phaser.ts
 
-use crate::synthesizer::audio_engine::synth_constants::EFX_SENDS_GAIN_CORRECTION;
 use super::utils::{
     BiquadCoeffs, BiquadState, apply_shelves, compute_shelf_coeffs,
 };
 use super::convert::InsertionValueConverter;
-use super::InsertionProcessor;
+use super::insertion_processor::DefaultGSInsertionProcessor;
 
 use std::f64::consts::PI;
 
@@ -19,9 +18,6 @@ const FEEDBACK: f64 = 0.9;
 const PHASE_START: f64 = 0.35;
 
 pub struct PhaserFx {
-    send_level_to_reverb: f64,
-    send_level_to_chorus: f64,
-    send_level_to_delay: f64,
     sample_rate: f64,
     manual: f64,
     manual_offset: f64,
@@ -50,9 +46,6 @@ pub struct PhaserFx {
 impl PhaserFx {
     pub fn new(sample_rate: f64) -> Self {
         let mut fx = Self {
-            send_level_to_reverb: 40.0 / 127.0 * EFX_SENDS_GAIN_CORRECTION,
-            send_level_to_chorus: 0.0,
-            send_level_to_delay: 0.0,
             sample_rate,
             manual: 620.0,
             manual_offset: MANUAL_OFFSET,
@@ -104,15 +97,49 @@ impl PhaserFx {
         compute_shelf_coeffs(&mut self.low_shelf_coef, self.low_gain, 200.0, self.sample_rate, true);
         compute_shelf_coeffs(&mut self.high_shelf_coef, self.hi_gain, 4000.0, self.sample_rate, false);
     }
+}
 
-    /// The body of `process`. `write(i, out_l, out_r)` mixes one sample into the outputs.
-    /// Split out because `PhAutoWahFx` passes one buffer as every output (TS aliases them),
-    /// which Rust cannot express with separate `&mut` slices.
-    pub(super) fn process_with(
+impl DefaultGSInsertionProcessor for PhaserFx {
+    fn effect_type(&self) -> u16 { 0x0120 }
+
+    fn reset(&mut self) {
+        self.phase = PHASE_START;
+        self.set_manual(620.0);
+        self.rate = 0.85;
+        self.depth = 64.0 / DEPTH_DIV;
+        self.reso = 16.0 / 127.0;
+        self.mix = 1.0;
+        self.low_gain = 0.0;
+        self.hi_gain = 0.0;
+        self.level = 104.0 / 127.0;
+        self.low_shelf_state_l.reset();
+        self.low_shelf_state_r.reset();
+        self.high_shelf_state_l.reset();
+        self.high_shelf_state_r.reset();
+        self.update_shelves();
+        self.clear_all_pass();
+    }
+
+    fn set_parameter(&mut self, parameter: u8, value: u8) {
+        match parameter {
+            0 => { self.set_manual(InsertionValueConverter::manual(value)); }
+            1 => { self.rate = InsertionValueConverter::rate1(value); }
+            2 => { self.depth = value as f64 / DEPTH_DIV; }
+            3 => { self.reso = value as f64 / 127.0; }
+            4 => { self.mix = value as f64 / 127.0; }
+            16 => { self.low_gain = value as f64 - 64.0; }
+            17 => { self.hi_gain = value as f64 - 64.0; }
+            19 => { self.level = value as f64 / 127.0; }
+            _ => {}
+        }
+        self.update_shelves();
+    }
+
+    fn process(
         &mut self,
         input_l: &[f32], input_r: &[f32],
+        output_l: &mut [f32], output_r: &mut [f32],
         sample_count: usize,
-        mut write: impl FnMut(usize, f64, f64),
     ) {
         let level = self.level;
         let manual = self.manual;
@@ -168,75 +195,11 @@ impl PhaserFx {
             let out_l_val = (sl + ap_l * mix) * level;
             let out_r_val = (sr + ap_r * mix) * level;
 
-            write(i, out_l_val, out_r_val);
+            output_l[i] = out_l_val as f32;
+            output_r[i] = out_r_val as f32;
         }
         self.phase = phase;
         self.prev_l = prev_l;
         self.prev_r = prev_r;
     }
-}
-
-impl InsertionProcessor for PhaserFx {
-    fn effect_type(&self) -> u16 { 0x0120 }
-
-    fn reset(&mut self) {
-        self.phase = PHASE_START;
-        self.set_manual(620.0);
-        self.rate = 0.85;
-        self.depth = 64.0 / DEPTH_DIV;
-        self.reso = 16.0 / 127.0;
-        self.mix = 1.0;
-        self.low_gain = 0.0;
-        self.hi_gain = 0.0;
-        self.level = 104.0 / 127.0;
-        self.low_shelf_state_l.reset();
-        self.low_shelf_state_r.reset();
-        self.high_shelf_state_l.reset();
-        self.high_shelf_state_r.reset();
-        self.update_shelves();
-        self.clear_all_pass();
-    }
-
-    fn set_parameter(&mut self, parameter: u8, value: u8) {
-        match parameter {
-            0x03 => { self.set_manual(InsertionValueConverter::manual(value)); }
-            0x04 => { self.rate = InsertionValueConverter::rate1(value); }
-            0x05 => { self.depth = value as f64 / DEPTH_DIV; }
-            0x06 => { self.reso = value as f64 / 127.0; }
-            0x07 => { self.mix = value as f64 / 127.0; }
-            0x13 => { self.low_gain = value as f64 - 64.0; }
-            0x14 => { self.hi_gain = value as f64 - 64.0; }
-            0x16 => { self.level = value as f64 / 127.0; }
-            _ => {}
-        }
-        self.update_shelves();
-    }
-
-    fn process(
-        &mut self,
-        input_l: &[f32], input_r: &[f32],
-        output_l: &mut [f32], output_r: &mut [f32],
-        reverb_out: &mut [f32], chorus_out: &mut [f32], delay_out: &mut [f32],
-        start_index: usize, sample_count: usize,
-    ) {
-        let rev = self.send_level_to_reverb;
-        let chr = self.send_level_to_chorus;
-        let dly = self.send_level_to_delay;
-        self.process_with(input_l, input_r, sample_count, |i, out_l_val, out_r_val| {
-            let idx = start_index + i;
-            output_l[idx] = (output_l[idx] as f64 + out_l_val) as f32;
-            output_r[idx] = (output_r[idx] as f64 + out_r_val) as f32;
-            let mono = (out_l_val + out_r_val) * 0.5;
-            reverb_out[i] = (reverb_out[i] as f64 + mono * rev) as f32;
-            chorus_out[i] = (chorus_out[i] as f64 + mono * chr) as f32;
-            delay_out[i] = (delay_out[i] as f64 + mono * dly) as f32;
-        });
-    }
-
-    fn send_level_to_reverb(&self) -> f64 { self.send_level_to_reverb }
-    fn send_level_to_chorus(&self) -> f64 { self.send_level_to_chorus }
-    fn send_level_to_delay(&self) -> f64 { self.send_level_to_delay }
-    fn set_send_level_to_reverb(&mut self, v: f64) { self.send_level_to_reverb = v; }
-    fn set_send_level_to_chorus(&mut self, v: f64) { self.send_level_to_chorus = v; }
-    fn set_send_level_to_delay(&mut self, v: f64) { self.send_level_to_delay = v; }
 }

@@ -1,3 +1,7 @@
+//! chorus.rs
+//! purpose: The default GS chorus implementation.
+//! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/chorus.ts
+
 use std::f64::consts::PI;
 
 const CHORUS_GAIN: f64 = 1.3;
@@ -242,6 +246,19 @@ impl SpessaSynthChorus {
             rate: self.rate,
             feedback: self.feedback,
         }
+    }
+
+    /// Restores this effect processor instance from a snapshot.
+    /// Equivalent to: applySnapshot(snapshot)
+    pub fn apply_snapshot(&mut self, snapshot: &ChorusSnapshot) {
+        self.set_level(snapshot.level);
+        self.set_pre_lowpass(snapshot.pre_lowpass);
+        self.set_feedback(snapshot.feedback);
+        self.set_delay(snapshot.delay);
+        self.set_rate(snapshot.rate);
+        self.set_depth(snapshot.depth);
+        self.set_send_level_to_reverb(snapshot.send_level_to_reverb);
+        self.set_send_level_to_delay(snapshot.send_level_to_delay);
     }
 }
 

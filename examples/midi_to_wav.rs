@@ -72,6 +72,8 @@ fn print_usage() {
     println!("  --no-effects         Disable reverb/chorus/delay/insertion effects");
     println!("  --system <name>=<value>  Set a system parameter (repeatable):");
     println!("                       customVibrato, drumLock, userDrumLock, nrpnParamLock,");
+    println!("                       gsReverbLock, gsChorusLock, gsDelayLock, gsInsertionLock,");
+    println!("                       xgReverbLock, xgChorusLock, xgVariationLock, xgInsertionLock,");
     println!("                       pitchBasedKeyShift (true|false)");
     println!("                       fineTune, keyShift, pan, gain (number)");
 }
@@ -156,6 +158,14 @@ fn main() {
                         "drumLock" => GlobalSystemParameterChange::DrumLock(b()?),
                         "userDrumLock" => GlobalSystemParameterChange::UserDrumLock(b()?),
                         "nrpnParamLock" => GlobalSystemParameterChange::NrpnParamLock(b()?),
+                        "gsReverbLock" => GlobalSystemParameterChange::GsReverbLock(b()?),
+                        "gsChorusLock" => GlobalSystemParameterChange::GsChorusLock(b()?),
+                        "gsDelayLock" => GlobalSystemParameterChange::GsDelayLock(b()?),
+                        "gsInsertionLock" => GlobalSystemParameterChange::GsInsertionLock(b()?),
+                        "xgReverbLock" => GlobalSystemParameterChange::XgReverbLock(b()?),
+                        "xgChorusLock" => GlobalSystemParameterChange::XgChorusLock(b()?),
+                        "xgVariationLock" => GlobalSystemParameterChange::XgVariationLock(b()?),
+                        "xgInsertionLock" => GlobalSystemParameterChange::XgInsertionLock(b()?),
                         "pitchBasedKeyShift" => {
                             GlobalSystemParameterChange::PitchBasedKeyShift(b()?)
                         }

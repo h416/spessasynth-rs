@@ -1,4 +1,4 @@
-//! handle_gs.rs
+//! roland.rs
 //! purpose: Handles GS (Roland) system exclusive messages.
 //! Ported from: src/synthesizer/audio_engine/system_exclusive/roland.ts
 //! References:
@@ -12,9 +12,10 @@ use crate::synthesizer::audio_engine::channel::parameters::midi::ChannelMidiPara
 use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::{
     sys_ex_logging, sys_ex_not_recognized,
 };
-use crate::synthesizer::audio_engine::synth_constants::EFX_SENDS_GAIN_CORRECTION;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
-use crate::synthesizer::types::GlobalMIDIParameterChangeCallback;
+use crate::synthesizer::types::{
+    EffectChangeCallback, EffectKind, GlobalMIDIParameterChangeCallback, SynthProcessorEvent,
+};
 use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::spessa_synth_info;
 use crate::utils::byte_functions::string::read_binary_string;
@@ -587,56 +588,49 @@ impl SynthesizerCore {
                             }
                         }
                     } else if syx[5] == 0x03 {
-                        // EFX (Insertion Effect) Parameter
+                        // EFX Parameter
+                        if self.system_parameters.gs_insertion_lock {
+                            return;
+                        }
                         let addr3 = syx[6];
                         let data = syx[7].min(127);
 
                         if addr3 >= 0x03 && addr3 <= 0x16 {
-                            // EFX parameter set
-                            self.insertion_processor.set_parameter(addr3, data);
-                            if (addr3 - 3) < 20 {
-                                self.insertion_params[(addr3 - 3) as usize] = data;
-                            }
+                            self.gs_insertion_block.set_parameter(addr3 - 0x03, data);
                             spessa_synth_info(&format!("GS EFX Parameter {} = {}", addr3 - 2, data));
                             return;
                         }
                         match addr3 {
                             0x00 => {
-                                // EFX Type selection (16-bit: data << 8 | syx[8])
+                                // EFX Type
                                 let efx_type = (data as u16) << 8 | syx.get(8).copied().unwrap_or(0) as u16;
-                                if self.has_gs_insertion_processor(efx_type) {
-                                    spessa_synth_info(&format!("GS EFX Type: {:04X}", efx_type));
-                                    self.select_gs_insertion_processor(Some(efx_type));
-                                } else {
-                                    self.select_gs_insertion_processor(None);
-                                    spessa_synth_info(&format!("Unsupported EFX processor: {:04X}, using Thru", efx_type));
-                                }
-                                self.reset_insertion_params();
-                                self.insertion_processor.reset();
+                                spessa_synth_info(&format!("GS EFX Type: {:04X}", efx_type));
+                                self.gs_insertion_block.set_type(efx_type);
+                                // The type change resets the send to delay
+                                self.update_active_gs_effects();
+                                // Special case: 16-bit value
+                                self.call_event(SynthProcessorEvent::EffectChange(EffectChangeCallback {
+                                    effect: EffectKind::Insertion,
+                                    parameter: 0,
+                                    value: efx_type as i32,
+                                }));
                             }
 
                             0x17 => {
-                                // EFX send level to reverb.
-                                // TS scales the raw send by EFX_SENDS_GAIN_CORRECTION.
-                                self.insertion_processor.set_send_level_to_reverb(
-                                    (data as f64 / 127.0) * EFX_SENDS_GAIN_CORRECTION,
-                                );
+                                // To reverb
+                                self.gs_insertion_block.send_level_to_reverb = data;
                                 spessa_synth_info(&format!("GS EFX Send Level to Reverb: {}", data));
                             }
 
                             0x18 => {
-                                // EFX send level to chorus.
-                                self.insertion_processor.set_send_level_to_chorus(
-                                    (data as f64 / 127.0) * EFX_SENDS_GAIN_CORRECTION,
-                                );
+                                // To chorus
+                                self.gs_insertion_block.send_level_to_chorus = data;
                                 spessa_synth_info(&format!("GS EFX Send Level to Chorus: {}", data));
                             }
 
                             0x19 => {
-                                // EFX send level to delay.
-                                self.insertion_processor.set_send_level_to_delay(
-                                    (data as f64 / 127.0) * EFX_SENDS_GAIN_CORRECTION,
-                                );
+                                // To delay
+                                self.gs_insertion_block.send_level_to_delay = data;
                                 self.update_active_gs_effects();
                                 spessa_synth_info(&format!("GS EFX Send Level to Delay: {}", data));
                             }
@@ -647,6 +641,20 @@ impl SynthesizerCore {
                         }
                     } else if syx[5] == 0x01 {
                         // This is also a global system parameter
+                        let a3 = syx[6];
+                        let is_reverb = (0x30..=0x37).contains(&a3);
+                        let is_chorus = (0x38..=0x40).contains(&a3);
+                        let is_delay = (0x50..=0x5a).contains(&a3);
+                        // Disable effect editing if locked
+                        if is_reverb && self.system_parameters.gs_reverb_lock {
+                            return;
+                        }
+                        if is_chorus && self.system_parameters.gs_chorus_lock {
+                            return;
+                        }
+                        if is_delay && self.system_parameters.gs_delay_lock {
+                            return;
+                        }
                         match syx[6] {
                             0x00 => {
                                 // Patch name

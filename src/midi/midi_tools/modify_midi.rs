@@ -141,7 +141,7 @@ pub struct ChannelModification {
 /// TS 4.3.0's `InsertionProcessorSnapshot` (`type`/`params`/`channels`), the shape the 4.3.0
 /// `modifyMIDIInternal` ported here takes for `insertionParams`.
 ///
-/// The synthesizer snapshot holds the current `GSInsertionProcessorSnapshot`, which has no
+/// The synthesizer snapshot holds the current `GSInsertionBlockSnapshot`, which has no
 /// `channels` (the per-channel flag is the channel's `efxAssign` MIDI parameter), so
 /// `apply_snapshot.rs` does not pass it on (see its module doc).
 #[derive(Clone, Debug)]

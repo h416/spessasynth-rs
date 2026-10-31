@@ -1,3 +1,7 @@
+//! reverb.rs
+//! purpose: The default GS reverb implementation.
+//! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/reverb.ts
+
 use crate::synthesizer::audio_engine::effects::implementation::dattorro::DattorroReverb;
 use crate::synthesizer::audio_engine::effects::implementation::delay_line::DelayLine;
 
@@ -202,6 +206,17 @@ impl SpessaSynthReverb {
             delay_feedback: self.delay_feedback,
             pre_delay_time: self.pre_delay_time,
         }
+    }
+
+    /// Restores this effect processor instance from a snapshot.
+    /// Equivalent to: applySnapshot(snapshot)
+    pub fn apply_snapshot(&mut self, snapshot: &ReverbSnapshot) {
+        self.set_level(snapshot.level);
+        self.set_pre_lowpass(snapshot.pre_lowpass);
+        self.set_character(snapshot.character);
+        self.set_time(snapshot.time);
+        self.set_delay_feedback(snapshot.delay_feedback);
+        self.set_pre_delay_time(snapshot.pre_delay_time);
     }
 
     fn apply_pre_lpf<'a>(&mut self, input: &'a [f32], sample_count: usize) -> bool {
