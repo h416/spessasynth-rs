@@ -215,6 +215,11 @@ pub type CachedVoiceList =
 
 /// Synthesizer processor options.
 /// Equivalent to: SynthProcessorOptions
+///
+/// Not ported (API only, no effect on the MIDI-to-WAV output): the options that replace the
+/// built-in effects with user implementations (`gsReverbProcessor`, `gsChorusProcessor`,
+/// `gsDelayProcessor`, `gsInsertionBlock`, `xgReverbBlock`, `xgChorusBlock`, `xgVariationBlock`,
+/// `xgInsertionBlocks`). MIDI cannot select them; the built-in effects are always used.
 #[derive(Clone, Debug)]
 pub struct SynthProcessorOptions {
     /// The maximum buffer size the synthesizer can render at once.
