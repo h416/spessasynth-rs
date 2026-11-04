@@ -1,6 +1,7 @@
 //! MIDI note-off handler for MidiChannel.
 //! Ported from: src/synthesizer/audio_engine/channel/note_off.ts
 use crate::midi::enums::midi_controllers;
+use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 use crate::synthesizer::audio_engine::synth_constants::MIN_NOTE_LENGTH;
 use crate::synthesizer::audio_engine::voice::voice::Voice;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
@@ -76,10 +77,14 @@ impl MidiChannel {
                     && v.note_id == note_id
                     && !v.is_in_release
                 {
-                    if sustain {
-                        v.is_held = true;
-                    } else {
-                        v.release_voice(current_time, MIN_NOTE_LENGTH);
+                    // Voices that ignore note off play out on their own (XG drum "Rcv Note Off")
+                    // They are not held either, so the sustain pedal does not release them
+                    if v.modulated_generators[gt::IGNORE_NOTE_OFF as usize] == 0 {
+                        if sustain {
+                            v.is_held = true;
+                        } else {
+                            v.release_voice(current_time, MIN_NOTE_LENGTH);
+                        }
                     }
                     vc += 1;
                     if vc >= self.voice_count {

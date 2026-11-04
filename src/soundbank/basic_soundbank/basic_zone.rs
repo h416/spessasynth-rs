@@ -143,7 +143,7 @@ impl BasicZone {
     pub fn add_generators(&mut self, generators: &[Generator]) {
         for g in generators {
             match g.generator_type {
-                gt::SAMPLE_ID | gt::INSTRUMENT => {
+                gt::INVALID | gt::SAMPLE_ID | gt::INSTRUMENT => {
                     // Don't add these; they have their own properties on subclasses
                 }
                 gt::VEL_RANGE => {

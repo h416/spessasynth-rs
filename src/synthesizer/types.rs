@@ -220,6 +220,8 @@ pub type CachedVoiceList =
 /// built-in effects with user implementations (`gsReverbProcessor`, `gsChorusProcessor`,
 /// `gsDelayProcessor`, `gsInsertionBlock`, `xgReverbBlock`, `xgChorusBlock`, `xgVariationBlock`,
 /// `xgInsertionBlocks`). MIDI cannot select them; the built-in effects are always used.
+/// Also `decodedSampleBudget`: it only drops decoded sample data to save memory and decodes the
+/// same data again when played; Rust keeps everything (the TS default, `Infinity`).
 #[derive(Clone, Debug)]
 pub struct SynthProcessorOptions {
     /// The maximum buffer size the synthesizer can render at once.

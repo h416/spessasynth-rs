@@ -140,6 +140,21 @@ enum SendTarget {
     Shared,
 }
 
+/// Computes the LFO value for the given phase.
+/// Both waveforms are at zero and rising at the default start phase of 0.25.
+/// `phase`: the LFO phase, from 0 to 1. `waveform`: 0 for triangle, 1 for sawtooth.
+/// Returns the LFO value, from -1 to 1.
+/// Equivalent to: getLfoValue(phase, waveform)
+fn get_lfo_value(phase: f64, waveform: i16) -> f64 {
+    if waveform == 1 {
+        // Rising sawtooth
+        let p = phase + 0.25;
+        return 2.0 * (if p >= 1.0 { p - 1.0 } else { p }) - 1.0;
+    }
+    // Triangle
+    1.0 - 4.0 * (phase - 0.5).abs()
+}
+
 impl MidiChannel {
     /// Renders a voice to the stereo output buffer.
     /// `sample_count` is the only thing needed as the buffers are 0-based.
@@ -151,6 +166,11 @@ impl MidiChannel {
         sample_count: usize,
         core: &mut RenderVoiceContext,
     ) {
+        // Delayed voice start (SFE): nothing runs until the voice starts
+        if time_now < voice.start_time {
+            voice.has_rendered = true;
+            return;
+        }
         // Check if release
         if !voice.is_in_release && time_now >= voice.release_start_time {
             // Release the voice here
@@ -163,6 +183,7 @@ impl MidiChannel {
                 voice.is_active = false;
             }
             voice.mod_env.start_release(&voice.modulated_generators);
+            voice.mod_env2.start_release(&voice.modulated_generators);
 
             // Looping mode 3
             if voice.looping_mode == 3 {
@@ -238,10 +259,20 @@ impl MidiChannel {
                     + modulated[gt::VIB_LFO_RATE as usize] as f64 / 100.0)
                     .max(0.0);
                 let rate_inc = (vib_freq_hz * sample_count as f64) / sample_rate;
-                let vib_lfo_value = 1.0 - 4.0 * (voice.vib_lfo_phase - 0.5).abs();
+                let mut vib_lfo_value = get_lfo_value(
+                    voice.vib_lfo_phase,
+                    modulated[gt::VIB_LFO_WAVEFORM as usize],
+                );
                 voice.vib_lfo_phase += rate_inc;
                 if voice.vib_lfo_phase >= 1.0 {
                     voice.vib_lfo_phase -= 1.0;
+                }
+                // Fade in (SFE)
+                if voice.vib_lfo_fade > 0.0 {
+                    let fade = (time_now - voice.vib_lfo_start_time) / voice.vib_lfo_fade;
+                    if fade < 1.0 {
+                        vib_lfo_value *= fade;
+                    }
                 }
                 cents += vib_lfo_value * vib_pitch_depth;
                 // Low pass frequency
@@ -273,10 +304,20 @@ impl MidiChannel {
                     + modulated[gt::MOD_LFO_RATE as usize] as f64 / 100.0)
                     .max(0.0);
                 let rate_inc = (mod_freq_hz * sample_count as f64) / sample_rate;
-                let mod_lfo_value = 1.0 - 4.0 * (voice.mod_lfo_phase - 0.5).abs();
+                let mut mod_lfo_value = get_lfo_value(
+                    voice.mod_lfo_phase,
+                    modulated[gt::MOD_LFO_WAVEFORM as usize],
+                );
                 voice.mod_lfo_phase += rate_inc;
                 if voice.mod_lfo_phase >= 1.0 {
                     voice.mod_lfo_phase -= 1.0;
+                }
+                // Fade in (SFE)
+                if voice.mod_lfo_fade > 0.0 {
+                    let fade = (time_now - voice.mod_lfo_start_time) / voice.mod_lfo_fade;
+                    if fade < 1.0 {
+                        mod_lfo_value *= fade;
+                    }
                 }
                 cents += mod_lfo_value * mod_pitch_depth;
                 // Vol env volume offset
@@ -317,6 +358,15 @@ impl MidiChannel {
             // Apply values
             lowpass_excursion += mod_env * mod_env_filter_depth as f64;
             cents += mod_env * mod_env_pitch_depth as f64;
+        }
+
+        // Second mod env (SFE)
+        let mod_env2_pitch_depth = modulated[gt::MOD_ENV2_TO_PITCH as usize];
+        let mod_env2_filter_depth = modulated[gt::MOD_ENV2_TO_FILTER_FC as usize];
+        if mod_env2_filter_depth != 0 || mod_env2_pitch_depth != 0 {
+            let mod_env2 = voice.mod_env2.process(voice.release_start_time, time_now);
+            lowpass_excursion += mod_env2 * mod_env2_filter_depth as f64;
+            cents += mod_env2 * mod_env2_pitch_depth as f64;
         }
 
         // Default resonant modulator: it does not affect the filter gain (neither XG nor GS did that)
@@ -484,7 +534,12 @@ impl MidiChannel {
             }
 
             // The final cutoff for this calculation
-            let target_cutoff = f.current_initial_fc + lowpass_excursion;
+            let mut target_cutoff = f.current_initial_fc + lowpass_excursion;
+            // Cutoff ceiling (SFE), 13500 means no ceiling
+            let max_cutoff = modulated[gt::MAX_FILTER_FC as usize] as f64;
+            if max_cutoff < 13_500.0 && target_cutoff > max_cutoff {
+                target_cutoff = max_cutoff;
+            }
             let modulated_resonance = modulated[gt::INITIAL_FILTER_Q as usize];
             // Note:
             // the check for initialFC is because of the filter optimization

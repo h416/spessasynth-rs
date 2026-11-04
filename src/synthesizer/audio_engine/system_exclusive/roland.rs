@@ -635,6 +635,19 @@ impl SynthesizerCore {
                                 spessa_synth_info(&format!("GS EFX Send Level to Delay: {}", data));
                             }
 
+                            0x1b..=0x1e => {
+                                // EFX control source and depth 1, 2
+                                let block = &mut self.gs_insertion_block;
+                                let (parameter, field) = match addr3 {
+                                    0x1b => ("controlSource1", &mut block.control_source1),
+                                    0x1c => ("controlDepth1", &mut block.control_depth1),
+                                    0x1d => ("controlSource2", &mut block.control_source2),
+                                    _ => ("controlDepth2", &mut block.control_depth2),
+                                };
+                                *field = data;
+                                spessa_synth_info(&format!("GS EFX {}: {}", parameter, data));
+                            }
+
                             _ => {
                                 sys_ex_not_recognized(syx, "Roland GS EFX");
                             }

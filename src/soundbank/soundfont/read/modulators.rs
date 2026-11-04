@@ -2,6 +2,7 @@
 //! purpose: reads SF2 modulator records from a pmod/imod RIFF chunk.
 //! Ported from: src/soundbank/soundfont/read/modulators.ts
 
+use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 use crate::soundbank::basic_soundbank::modulator::DecodedModulator;
 use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, signed_int16};
 use crate::utils::riff_chunk::RIFFChunk;
@@ -9,8 +10,9 @@ use crate::utils::riff_chunk::RIFFChunk;
 /// Reads SF2 modulator records from a pmod or imod RIFF chunk.
 /// Each record is 10 bytes: sourceEnum(2) + destination(2) + amount(2) + secSourceEnum(2) + transformType(2).
 /// The terminal record (all zeros) is automatically stripped.
-/// Equivalent to: `readModulators(modulatorChunk)`
-pub fn read_modulators(modulator_chunk: &mut RIFFChunk) -> Vec<DecodedModulator> {
+/// `allow_sfe_generators`: if destinations above endOper are allowed (SFE banks).
+/// Equivalent to: `readModulators(modulatorChunk, allowSFEGenerators)`
+pub fn read_modulators(modulator_chunk: &mut RIFFChunk, allow_sfe_generators: bool) -> Vec<DecodedModulator> {
     let mut mods: Vec<DecodedModulator> = Vec::new();
 
     while modulator_chunk.data.len() > modulator_chunk.data.current_index {
@@ -24,13 +26,17 @@ pub fn read_modulators(modulator_chunk: &mut RIFFChunk) -> Vec<DecodedModulator>
         let secondary_source_enum = read_little_endian_indexed(&mut modulator_chunk.data, 2) as u16;
         let transform_type = read_little_endian_indexed(&mut modulator_chunk.data, 2) as u16;
 
-        mods.push(DecodedModulator::new(
+        let mut decoded = DecodedModulator::new(
             source_enum,
             secondary_source_enum,
             destination,
             amount,
             transform_type,
-        ));
+        );
+        if !allow_sfe_generators && decoded.destination > gt::END_OPER {
+            decoded.destination = gt::INVALID;
+        }
+        mods.push(decoded);
     }
 
     // Remove terminal record
@@ -72,14 +78,14 @@ mod tests {
             10,
             IndexedByteArray::from_vec(vec![0u8; 10]),
         );
-        let result = read_modulators(&mut chunk);
+        let result = read_modulators(&mut chunk, true);
         assert!(result.is_empty());
     }
 
     #[test]
     fn test_single_modulator() {
         let mut chunk = make_modulators_chunk(&[(0x0502, 0x000A, 960, 0x0000, 0x0000)]);
-        let result = read_modulators(&mut chunk);
+        let result = read_modulators(&mut chunk, true);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].source_enum, 0x0502);
         assert_eq!(result[0].destination, 0x000A);
@@ -95,7 +101,7 @@ mod tests {
             (0x0102, 0x0011, -960, 0x0000, 0x0000),
         ];
         let mut chunk = make_modulators_chunk(&entries);
-        let result = read_modulators(&mut chunk);
+        let result = read_modulators(&mut chunk, true);
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].source_enum, 0x0502);
         assert_eq!(result[1].source_enum, 0x0102);
@@ -106,7 +112,7 @@ mod tests {
     fn test_terminal_record_is_stripped() {
         // One real modulator + terminal → only 1 returned
         let mut chunk = make_modulators_chunk(&[(1, 2, 100, 3, 4)]);
-        let result = read_modulators(&mut chunk);
+        let result = read_modulators(&mut chunk, true);
         assert_eq!(result.len(), 1);
         // Confirm the terminal (all-zero) was not included
         assert_ne!(result[0].source_enum, 0);
@@ -115,7 +121,7 @@ mod tests {
     #[test]
     fn test_negative_amount_parsed_correctly() {
         let mut chunk = make_modulators_chunk(&[(0x0000, 0x0000, -1, 0x0000, 0x0000)]);
-        let result = read_modulators(&mut chunk);
+        let result = read_modulators(&mut chunk, true);
         assert_eq!(result[0].transform_amount, -1.0);
     }
 
@@ -125,7 +131,7 @@ mod tests {
             (0x0000, 0x0000, i16::MAX, 0x0000, 0x0000),
             (0x0000, 0x0000, i16::MIN, 0x0000, 0x0000),
         ]);
-        let result = read_modulators(&mut chunk);
+        let result = read_modulators(&mut chunk, true);
         assert_eq!(result[0].transform_amount, i16::MAX as f64);
         assert_eq!(result[1].transform_amount, i16::MIN as f64);
     }
@@ -134,7 +140,7 @@ mod tests {
     fn test_all_fields_read_in_correct_order() {
         // Verify field order: src(2) dst(2) amt(2) sec(2) tfm(2)
         let mut chunk = make_modulators_chunk(&[(0x00AA, 0x000B, 500, 0x00CC, 0x0001)]);
-        let result = read_modulators(&mut chunk);
+        let result = read_modulators(&mut chunk, true);
         assert_eq!(result[0].source_enum, 0x00AA);
         assert_eq!(result[0].destination, 0x000B);
         assert_eq!(result[0].transform_amount, 500.0);
@@ -145,7 +151,7 @@ mod tests {
     #[test]
     fn test_cursor_exhausted_after_read() {
         let mut chunk = make_modulators_chunk(&[(1, 2, 3, 4, 5)]);
-        read_modulators(&mut chunk);
+        read_modulators(&mut chunk, true);
         // 1 real + 1 terminal = 20 bytes total
         assert_eq!(chunk.data.current_index, 20);
         assert_eq!(chunk.data.current_index, chunk.data.len());

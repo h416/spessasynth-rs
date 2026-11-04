@@ -422,22 +422,56 @@ impl SynthesizerCore {
             // -----------------------------------------------------------------------
             let modulated_copy = self.voices[voice_idx].modulated_generators;
             let target_key = self.voices[voice_idx].target_key;
-            let start_time = self.voices[voice_idx].start_time;
 
+            // Delayed voice start (SFE): everything below runs from the delayed start time
+            let voice_delay = modulated_copy[gt::DELAY_VOICE as usize];
+            if voice_delay > -12_000 {
+                self.voices[voice_idx].start_time += timecents_to_seconds(voice_delay as i32);
+            }
+            let start = self.voices[voice_idx].start_time;
+
+            // Initialize the volume envelope (non-realtime)
             self.voices[voice_idx]
                 .vol_env
                 .init(&modulated_copy, target_key);
+            // Initialize the modulation envelopes (non-realtime)
             self.voices[voice_idx]
                 .mod_env
-                .init(&modulated_copy, start_time, target_key);
+                .init(&modulated_copy, start, target_key);
+            self.voices[voice_idx]
+                .mod_env2
+                .init(&modulated_copy, start, target_key);
             self.voices[voice_idx].filter.init();
 
             // Calculate LFO start times
-            let now = self.current_time;
-            self.voices[voice_idx].vib_lfo_start_time = now
+            let v = &mut self.voices[voice_idx];
+            v.vib_lfo_start_time = start
                 + timecents_to_seconds(modulated_copy[gt::DELAY_VIB_LFO as usize] as i32);
-            self.voices[voice_idx].mod_lfo_start_time = now
+            v.mod_lfo_start_time = start
                 + timecents_to_seconds(modulated_copy[gt::DELAY_MOD_LFO as usize] as i32);
+            // LFO fade in and start phase (SFE)
+            let vib_fade = modulated_copy[gt::FADE_VIB_LFO as usize];
+            v.vib_lfo_fade = if vib_fade > -12_000 {
+                timecents_to_seconds(vib_fade as i32)
+            } else {
+                0.0
+            };
+            let mod_fade = modulated_copy[gt::FADE_MOD_LFO as usize];
+            v.mod_lfo_fade = if mod_fade > -12_000 {
+                timecents_to_seconds(mod_fade as i32)
+            } else {
+                0.0
+            };
+            v.vib_lfo_phase +=
+                (modulated_copy[gt::VIB_LFO_START_PHASE as usize] as f64 % 360.0) / 360.0;
+            if v.vib_lfo_phase >= 1.0 {
+                v.vib_lfo_phase -= 1.0;
+            }
+            v.mod_lfo_phase +=
+                (modulated_copy[gt::MOD_LFO_START_PHASE as usize] as f64 % 360.0) / 360.0;
+            if v.mod_lfo_phase >= 1.0 {
+                v.mod_lfo_phase -= 1.0;
+            }
 
             // -----------------------------------------------------------------------
             // Compute sample offsets (from modulatedGenerators)
