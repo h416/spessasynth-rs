@@ -15,6 +15,7 @@
 
 
 use crate::midi::enums::midi_message_types;
+use crate::synthesizer::enums::gs_insertion_control_sources;
 use crate::synthesizer::audio_engine::channel::midi_channel::DrumLocks;
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
@@ -131,6 +132,18 @@ impl SynthesizerCore {
             self.midi_channels[channel].pitch_wheel(voices, pitch, midi_note, events_enabled);
         for ev in events {
             self.call_event(ev);
+        }
+    }
+
+    /// Passes a controller to the EFX control sources of the GS insertion block if this part has EFX assigned.
+    /// `source` is a control change number or a `gs_insertion_control_sources` value,
+    /// `value` the controller value (14-bit for pitch bend).
+    /// Equivalent to: MidiChannel.efxControl(source, value)
+    pub fn efx_control(&mut self, channel: usize, source: u8, value: i32) {
+        if source != gs_insertion_control_sources::OFF
+            && self.midi_channels[channel].midi_parameters.efx_assign
+        {
+            self.gs_insertion_block.set_controller_value(source, value);
         }
     }
 
@@ -281,12 +294,14 @@ impl SynthesizerCore {
                         // LSB | (MSB << 7)
                         let pitch = ((message[2] as i16) << 7) | message[1] as i16;
                         self.pitch_wheel_channel(channel, pitch, -1);
+                        self.efx_control(channel, gs_insertion_control_sources::PITCH_BEND, pitch as i32);
                     }
                     midi_message_types::CONTROLLER_CHANGE => {
                         if message.len() < 3 {
                             return;
                         }
                         self.controller_change_channel(channel, message[1], message[2]);
+                        self.efx_control(channel, message[1], message[2] as i32);
                     }
                     midi_message_types::PROGRAM_CHANGE => {
                         if message.len() < 2 {
@@ -305,6 +320,11 @@ impl SynthesizerCore {
                             return;
                         }
                         self.channel_pressure_channel(channel, message[1]);
+                        self.efx_control(
+                            channel,
+                            gs_insertion_control_sources::CHANNEL_PRESSURE,
+                            message[1] as i32,
+                        );
                     }
                     _ => {}
                 }
@@ -508,6 +528,7 @@ impl SpessaSynthProcessor {
     pub fn controller_change(&mut self, channel: usize, controller: u8, value: u8) {
         for channel in self.synth_core.routed_channels(channel) {
             self.synth_core.controller_change_channel(channel, controller, value);
+            self.synth_core.efx_control(channel, controller, value as i32);
         }
     }
 
@@ -540,6 +561,11 @@ impl SpessaSynthProcessor {
     pub fn channel_pressure(&mut self, channel: usize, pressure: u8) {
         for channel in self.synth_core.routed_channels(channel) {
             self.synth_core.channel_pressure_channel(channel, pressure);
+            self.synth_core.efx_control(
+                channel,
+                gs_insertion_control_sources::CHANNEL_PRESSURE,
+                pressure as i32,
+            );
         }
     }
 
@@ -547,8 +573,15 @@ impl SpessaSynthProcessor {
     /// pitch: 0–16383 (8192 = center); midi_note: -1 for the regular pitch wheel.
     /// Equivalent to: pitchWheel(channel, pitch, midiNote = -1)
     pub fn pitch_wheel(&mut self, channel: usize, pitch: i16, midi_note: i32) {
+        // The per-note pitch wheel is not an EFX control source
+        let source = if midi_note == -1 {
+            gs_insertion_control_sources::PITCH_BEND
+        } else {
+            gs_insertion_control_sources::OFF
+        };
         for channel in self.synth_core.routed_channels(channel) {
             self.synth_core.pitch_wheel_channel(channel, pitch, midi_note);
+            self.synth_core.efx_control(channel, source, pitch as i32);
         }
     }
 

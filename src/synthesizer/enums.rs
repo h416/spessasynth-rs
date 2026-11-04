@@ -13,6 +13,21 @@ pub mod interpolation_types {
 /// Equivalent to: InterpolationType
 pub type InterpolationType = u8;
 
+/// The special EFX control sources of a GS insertion block (EFX CONTROL SOURCE 1/2).
+/// Values `1-95` select the control change with that number, other values are off.
+/// Equivalent to: GSInsertionControlSources
+pub mod gs_insertion_control_sources {
+    /// No control.
+    pub const OFF: u8 = 0;
+    /// Channel aftertouch (channel pressure).
+    pub const CHANNEL_PRESSURE: u8 = 0x70;
+    /// Pitch bend.
+    pub const PITCH_BEND: u8 = 0x71;
+}
+
+/// Equivalent to: GSInsertionControlSource
+pub type GSInsertionControlSource = u8;
+
 #[cfg(test)]
 mod tests {
     use super::interpolation_types as interp;

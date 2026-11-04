@@ -37,8 +37,10 @@ const PERCEIVED_CB_SILENCE: f64 = 900.0;
 /// Applies a volume envelope (DAHDSR) to a voice.
 ///
 /// Stage mapping (state field):
-///   0 = delay, 1 = attack, 2 = hold/peak, 3 = decay, 4 = sustain
+///   0 = delay, 1 = attack, 2 = hold/peak, 3 = decay,
+///   5 = decay 2 (SFE, runs between decay and sustain), 4 = sustain
 ///   Release is indicated by `entered_release`.
+///   Decay 2 is 5 so the sustain keeps its number (voice priorities use it).
 ///
 /// Equivalent to: VolumeEnvelope class
 pub struct VolumeEnvelope {
@@ -48,7 +50,7 @@ pub struct VolumeEnvelope {
     /// The current attenuation of the envelope in cB.
     /// Equivalent to: attenuationCb
     pub attenuation_cb: f64,
-    /// The current stage of the volume envelope (0–4).
+    /// The current stage of the volume envelope (0–5).
     /// Equivalent to: state
     pub state: u8,
 
@@ -83,6 +85,12 @@ pub struct VolumeEnvelope {
     /// Sustain level in cB.
     /// Equivalent to: sustainCb
     pub(crate) sustain_cb: f64,
+    /// The second decay duration in samples.
+    /// Equivalent to: decay2Duration
+    decay2_duration: f64,
+    /// The level the second decay ends on in cB. Equal to sustainCb without a second decay.
+    /// Equivalent to: sustain2Cb
+    sustain2_cb: f64,
     /// Sample index where the delay phase ends.
     /// Equivalent to: delayEnd
     delay_end: f64,
@@ -95,6 +103,9 @@ pub struct VolumeEnvelope {
     /// Sample index where the decay phase ends.
     /// Equivalent to: decayEnd
     pub(crate) decay_end: f64,
+    /// Sample index where the second decay phase ends.
+    /// Equivalent to: decay2End
+    decay2_end: f64,
     /// Whether the envelope has entered the release phase.
     /// Equivalent to: enteredRelease
     entered_release: bool,
@@ -123,10 +134,13 @@ impl VolumeEnvelope {
             decay_duration: 0.0,
             release_duration: 0.0,
             sustain_cb: 0.0,
+            decay2_duration: 0.0,
+            sustain2_cb: 0.0,
             delay_end: 0.0,
             attack_end: 0.0,
             hold_end: 0.0,
             decay_end: 0.0,
+            decay2_end: 0.0,
             entered_release: false,
             can_end_on_silent_sustain: false,
         }
@@ -171,12 +185,14 @@ impl VolumeEnvelope {
         self.release_start_cb = CB_SILENCE;
         self.release_start_time_samples = 0.0;
         self.release_duration = 0.0;
-        self.can_end_on_silent_sustain =
-            modulated_generators[gt::SUSTAIN_VOL_ENV as usize] as f64 >= PERCEIVED_CB_SILENCE;
-
         // Sustain level (clamped to CB_SILENCE).
         self.sustain_cb =
             (modulated_generators[gt::SUSTAIN_VOL_ENV as usize] as f64).min(CB_SILENCE);
+        self.sustain2_cb = (self.sustain_cb
+            + modulated_generators[gt::SUSTAIN2_VOL_ENV as usize] as f64)
+            .min(CB_SILENCE)
+            .max(0.0);
+        self.can_end_on_silent_sustain = self.sustain2_cb >= PERCEIVED_CB_SILENCE;
 
         // Attack duration.
         self.attack_duration =
@@ -205,6 +221,12 @@ impl VolumeEnvelope {
         ) + self.attack_end;
 
         self.decay_end = self.decay_duration + self.hold_end;
+
+        // Decay 2 uses the same rate convention (time for 100dB) and key scaling as decay
+        self.decay2_duration = self.timecents_to_samples(
+            (modulated_generators[gt::DECAY2_VOL_ENV as usize] as f64 + key_num_addition) as i32,
+        ) * ((self.sustain2_cb - self.sustain_cb).abs() / CB_SILENCE);
+        self.decay2_end = self.decay2_duration + self.decay_end;
 
         // If the voice has no meaningful delay/attack (within one update interval),
         // jump directly to the hold/peak stage.
@@ -282,9 +304,15 @@ impl VolumeEnvelope {
                     (1.0 - (self.decay_end - self.release_start_time_samples) / self.decay_duration)
                         * sustain_cb
                 }
+                5 => {
+                    // Decay 2 stage: interpolate between sustainCb and sustain2Cb.
+                    (1.0 - (self.decay2_end - self.release_start_time_samples) / self.decay2_duration)
+                        * (self.sustain2_cb - sustain_cb)
+                        + sustain_cb
+                }
                 _ => {
                     // Sustain stage (or unknown).
-                    sustain_cb
+                    self.sustain2_cb
                 }
             };
 
@@ -372,11 +400,24 @@ impl VolumeEnvelope {
                     gain_target * cb_attenuation_to_gain_f64(self.attenuation_cb) as f64;
                 return true;
             }
-            self.state += 1;
+            self.state = 5;
+        }
+
+        // Decay 2 phase: linear centibel ramp from sustain to sustain 2.
+        if self.state == 5 {
+            if sample_time < self.decay2_end {
+                self.attenuation_cb = (1.0 - (self.decay2_end - sample_time) / self.decay2_duration)
+                    * (self.sustain2_cb - self.sustain_cb)
+                    + self.sustain_cb;
+                self.output_gain =
+                    gain_target * cb_attenuation_to_gain_f64(self.attenuation_cb) as f64;
+                return true;
+            }
+            self.state = 4;
         }
 
         // Sustain phase: stay at sustain.
-        if self.can_end_on_silent_sustain && self.sustain_cb >= PERCEIVED_CB_SILENCE {
+        if self.can_end_on_silent_sustain && self.sustain2_cb >= PERCEIVED_CB_SILENCE {
             // Make sure to end on silence.
             // https://github.com/spessasus/spessasynth_core/issues/57
             self.attenuation_cb = CB_SILENCE;
@@ -384,8 +425,8 @@ impl VolumeEnvelope {
             return false;
         }
 
-        self.attenuation_cb = self.sustain_cb;
-        self.output_gain = gain_target * cb_attenuation_to_gain_f64(self.sustain_cb) as f64;
+        self.attenuation_cb = self.sustain2_cb;
+        self.output_gain = gain_target * cb_attenuation_to_gain_f64(self.sustain2_cb) as f64;
         true
     }
 }
@@ -618,6 +659,7 @@ mod tests {
         let mut env = new_env();
         env.state = 4;
         env.sustain_cb = 200.0;
+        env.sustain2_cb = 200.0;
 
         let expected_gain = cb_attenuation_to_gain(200) as f64;
         env.process(64, 1.0);
@@ -644,6 +686,7 @@ mod tests {
         let mut env = new_env();
         env.state = 4;
         env.sustain_cb = 960.0;
+        env.sustain2_cb = 960.0;
         env.can_end_on_silent_sustain = true;
 
         let active = env.process(32, 1.0);

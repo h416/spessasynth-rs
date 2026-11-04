@@ -183,6 +183,8 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
     let type_str = read_binary_string_indexed(&mut main_file_array, 4).to_lowercase();
     verify_texts(&type_str, &["sfbk", "sfpk", "sfen"]);
     let is_sf2_pack = type_str == "sfpk";
+    // Generators and modulator destinations above endOper are only read from SFE banks
+    let is_sfe = type_str == "sfen";
 
     // ── INFO chunk ───────────────────────────────────────────────────────────
     let mut info_chunk = RIFFChunk::read(&mut main_file_array, rf64, true);
@@ -212,7 +214,7 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
             }
             // DMOD: custom default modulators override
             "DMOD" => {
-                let raw_mods = read_modulators(&mut chunk);
+                let raw_mods = read_modulators(&mut chunk, is_sfe);
                 bank.default_modulators = decoded_mods_to_mods(raw_mods);
                 bank.custom_default_modulators = true;
             }
@@ -367,8 +369,8 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
     }
 
     // ── Read instruments ─────────────────────────────────────────────────────
-    let instrument_generators = read_generators(&mut igen_chunk);
-    let instrument_modulators = decoded_mods_to_mods(read_modulators(&mut imod_chunk));
+    let instrument_generators = read_generators(&mut igen_chunk, is_sfe);
+    let instrument_modulators = decoded_mods_to_mods(read_modulators(&mut imod_chunk, is_sfe));
     // Keep the terminal record (EOI) when extending, the last zone count needs its index
     let extend_instruments = x_chunks.is_some();
     let mut instruments = read_instruments(&mut inst_chunk, extend_instruments);
@@ -430,8 +432,8 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
     }
 
     // ── Read presets ─────────────────────────────────────────────────────────
-    let preset_generators = read_generators(&mut pgen_chunk);
-    let preset_modulators = decoded_mods_to_mods(read_modulators(&mut pmod_chunk));
+    let preset_generators = read_generators(&mut pgen_chunk, is_sfe);
+    let preset_modulators = decoded_mods_to_mods(read_modulators(&mut pmod_chunk, is_sfe));
     // Keep the terminal record (EOP) when extending, the last zone count needs its index
     let extend_presets = x_chunks.is_some();
     let mut presets = read_presets(&mut phdr_chunk, extend_presets);

@@ -6,7 +6,9 @@ use crate::soundbank::basic_soundbank::modulator::DecodedModulator;
 use crate::soundbank::basic_soundbank::modulator_source::{SF2Channel, VoiceModInputs};
 use crate::synthesizer::audio_engine::voice::compute_modulator::VoiceContext;
 use crate::synthesizer::audio_engine::voice::lowpass_filter::LowpassFilter;
-use crate::synthesizer::audio_engine::voice::modulation_envelope::ModulationEnvelope;
+use crate::synthesizer::audio_engine::voice::modulation_envelope::{
+    MOD_ENV_2_GENERATORS, MOD_ENV_GENERATORS, ModulationEnvelope,
+};
 use crate::synthesizer::audio_engine::voice::volume_envelope::VolumeEnvelope;
 use crate::synthesizer::audio_engine::voice::wavetable_oscillator::WavetableOscillator;
 use crate::synthesizer::audio_engine::parameters::system::DEFAULT_GLOBAL_SYSTEM_PARAMETERS;
@@ -73,6 +75,10 @@ pub struct Voice {
     /// Modulation envelope (controls pitch/filter over time).
     /// Equivalent to: modEnv: ModulationEnvelope
     pub mod_env: ModulationEnvelope,
+
+    /// The second modulation envelope (SFE).
+    /// Equivalent to: modEnv2
+    pub mod_env2: ModulationEnvelope,
 
     /// Volume envelope (controls amplitude over time).
     /// Equivalent to: volEnv: VolumeEnvelope
@@ -200,9 +206,17 @@ pub struct Voice {
     /// Equivalent to: vibLfoStartTime
     pub vib_lfo_start_time: f64,
 
+    /// Fade in time of the vibrato LFO in seconds, 0 means no fade (SFE).
+    /// Equivalent to: vibLfoFade
+    pub vib_lfo_fade: f64,
+
     /// Start time of the modulation LFO (set in note_on).
     /// Equivalent to: modLfoStartTime
     pub mod_lfo_start_time: f64,
+
+    /// Fade in time of the modulation LFO in seconds, 0 means no fade (SFE).
+    /// Equivalent to: modLfoFade
+    pub mod_lfo_fade: f64,
 
     /// Current phase (0..1) of the vibrato LFO triangle wave.
     /// Equivalent to: vibLfoPhase
@@ -238,7 +252,8 @@ impl Voice {
             modulated_generators: [0; GENERATORS_AMOUNT],
             modulators: Vec::new(),
             modulator_values: Vec::new(),
-            mod_env: ModulationEnvelope::new(),
+            mod_env: ModulationEnvelope::new(MOD_ENV_GENERATORS),
+            mod_env2: ModulationEnvelope::new(MOD_ENV_2_GENERATORS),
             vol_env: VolumeEnvelope::new(sample_rate, buffer_size),
             resonance_offset: 0.0,
             priority: 0,
@@ -270,6 +285,8 @@ impl Voice {
             pitch_offset: 0.0,
             vib_lfo_start_time: 0.0,
             mod_lfo_start_time: 0.0,
+            vib_lfo_fade: 0.0,
+            mod_lfo_fade: 0.0,
             vib_lfo_phase: 0.0,
             mod_lfo_phase: 0.0,
             note_id: 0,

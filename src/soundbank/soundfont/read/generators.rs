@@ -7,6 +7,7 @@
 //! as a private `read_generator()` function that returns a `Generator` directly.
 
 use crate::soundbank::basic_soundbank::generator::Generator;
+use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::read_little_endian_indexed;
 use crate::utils::riff_chunk::RIFFChunk;
@@ -27,12 +28,19 @@ fn read_generator(data_array: &mut IndexedByteArray) -> Generator {
 
 /// Reads all SF2 generator records from a pgen or igen RIFF chunk.
 /// The terminal record (all zeros) is automatically stripped.
-/// Equivalent to: `readGenerators(generatorChunk)`
-pub fn read_generators(generator_chunk: &mut RIFFChunk) -> Vec<Generator> {
+/// `allow_sfe_generators`: if generators above endOper are allowed (SFE banks).
+/// Equivalent to: `readGenerators(generatorChunk, allowSFEGenerators)`
+pub fn read_generators(generator_chunk: &mut RIFFChunk, allow_sfe_generators: bool) -> Vec<Generator> {
     let mut gens: Vec<Generator> = Vec::new();
 
     while generator_chunk.data.len() > generator_chunk.data.current_index {
-        gens.push(read_generator(&mut generator_chunk.data));
+        let mut generator = read_generator(&mut generator_chunk.data);
+        // SF2 2.04 section 8.1.2: unknown generators are ignored
+        // They are kept in the list as invalid since the zones index into it
+        if !allow_sfe_generators && generator.generator_type > gt::END_OPER {
+            generator.generator_type = gt::INVALID;
+        }
+        gens.push(generator);
     }
 
     // Remove terminal record
@@ -43,7 +51,6 @@ pub fn read_generators(generator_chunk: &mut RIFFChunk) -> Vec<Generator> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
     use crate::utils::indexed_array::IndexedByteArray;
     use crate::utils::riff_chunk::RIFFChunk;
 
@@ -70,7 +77,7 @@ mod tests {
             4,
             IndexedByteArray::from_vec(vec![0u8; 4]),
         );
-        let result = read_generators(&mut chunk);
+        let result = read_generators(&mut chunk, true);
         assert!(result.is_empty());
     }
 
@@ -78,7 +85,7 @@ mod tests {
     fn test_single_generator() {
         // pan (17) = 0x0011, value = 100 = 0x0064
         let mut chunk = make_generators_chunk(&[(gt::PAN, 100)]);
-        let result = read_generators(&mut chunk);
+        let result = read_generators(&mut chunk, true);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].generator_type, gt::PAN);
         assert_eq!(result[0].generator_value, 100);
@@ -92,7 +99,7 @@ mod tests {
             (gt::REVERB_EFFECTS_SEND, 200),
         ];
         let mut chunk = make_generators_chunk(&entries);
-        let result = read_generators(&mut chunk);
+        let result = read_generators(&mut chunk, true);
         assert_eq!(result.len(), 3);
         assert_eq!(result[0].generator_type, gt::PAN);
         assert_eq!(result[0].generator_value, 50);
@@ -106,7 +113,7 @@ mod tests {
     fn test_terminal_record_stripped() {
         // 1 real entry + terminal → only 1 returned
         let mut chunk = make_generators_chunk(&[(gt::PAN, 0)]);
-        let result = read_generators(&mut chunk);
+        let result = read_generators(&mut chunk, true);
         assert_eq!(result.len(), 1);
     }
 
@@ -114,7 +121,7 @@ mod tests {
     fn test_negative_value_parsed_correctly() {
         // Negative attenuation — the real-world case mentioned in the comment
         let mut chunk = make_generators_chunk(&[(gt::INITIAL_ATTENUATION, -100)]);
-        let result = read_generators(&mut chunk);
+        let result = read_generators(&mut chunk, true);
         assert_eq!(result[0].generator_value, -100);
     }
 
@@ -124,7 +131,7 @@ mod tests {
         // (validation is intentionally skipped in ReadGenerator / read_generator)
         let out_of_range: i16 = 20000;
         let mut chunk = make_generators_chunk(&[(gt::INITIAL_FILTER_FC, out_of_range)]);
-        let result = read_generators(&mut chunk);
+        let result = read_generators(&mut chunk, true);
         assert_eq!(result[0].generator_value, out_of_range);
     }
 
@@ -136,7 +143,7 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, // terminal
         ];
         let mut chunk = RIFFChunk::new("pgen".to_string(), 8, IndexedByteArray::from_vec(bytes));
-        let result = read_generators(&mut chunk);
+        let result = read_generators(&mut chunk, true);
         assert_eq!(result[0].generator_type, gt::PAN);
     }
 
@@ -148,7 +155,7 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, // terminal
         ];
         let mut chunk = RIFFChunk::new("pgen".to_string(), 8, IndexedByteArray::from_vec(bytes));
-        let result = read_generators(&mut chunk);
+        let result = read_generators(&mut chunk, true);
         assert_eq!(result[0].generator_value, -100);
     }
 
@@ -156,7 +163,7 @@ mod tests {
     fn test_cursor_exhausted_after_read() {
         // 2 real entries + terminal = 3 records × 4 bytes = 12 bytes
         let mut chunk = make_generators_chunk(&[(gt::PAN, 0), (gt::REVERB_EFFECTS_SEND, 0)]);
-        read_generators(&mut chunk);
+        read_generators(&mut chunk, true);
         assert_eq!(chunk.data.current_index, 12);
         assert_eq!(chunk.data.current_index, chunk.data.len());
     }
@@ -164,7 +171,7 @@ mod tests {
     #[test]
     fn test_i16_min_max_values() {
         let mut chunk = make_generators_chunk(&[(gt::PAN, i16::MAX), (gt::PAN, i16::MIN)]);
-        let result = read_generators(&mut chunk);
+        let result = read_generators(&mut chunk, true);
         assert_eq!(result[0].generator_value, i16::MAX);
         assert_eq!(result[1].generator_value, i16::MIN);
     }

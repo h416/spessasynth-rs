@@ -50,12 +50,59 @@ static CONVEX_ATTACK: LazyLock<Vec<f32>> = LazyLock::new(|| {
 });
 
 // ---------------------------------------------------------------------------
+// ModulationEnvelopeGenerators
+// ---------------------------------------------------------------------------
+
+/// The generators that control one modulation envelope.
+/// Equivalent to: interface ModulationEnvelopeGenerators
+#[derive(Clone, Copy, Debug)]
+pub struct ModulationEnvelopeGenerators {
+    pub delay: usize,
+    pub attack: usize,
+    pub hold: usize,
+    pub decay: usize,
+    pub sustain: usize,
+    pub release: usize,
+    pub key_num_to_hold: usize,
+    pub key_num_to_decay: usize,
+}
+
+/// The SF2 modulation envelope.
+/// Equivalent to: MOD_ENV_GENERATORS
+pub const MOD_ENV_GENERATORS: ModulationEnvelopeGenerators = ModulationEnvelopeGenerators {
+    delay: gt::DELAY_MOD_ENV as usize,
+    attack: gt::ATTACK_MOD_ENV as usize,
+    hold: gt::HOLD_MOD_ENV as usize,
+    decay: gt::DECAY_MOD_ENV as usize,
+    sustain: gt::SUSTAIN_MOD_ENV as usize,
+    release: gt::RELEASE_MOD_ENV as usize,
+    key_num_to_hold: gt::KEY_NUM_TO_MOD_ENV_HOLD as usize,
+    key_num_to_decay: gt::KEY_NUM_TO_MOD_ENV_DECAY as usize,
+};
+
+/// The second modulation envelope (SFE).
+/// Equivalent to: MOD_ENV_2_GENERATORS
+pub const MOD_ENV_2_GENERATORS: ModulationEnvelopeGenerators = ModulationEnvelopeGenerators {
+    delay: gt::DELAY_MOD_ENV2 as usize,
+    attack: gt::ATTACK_MOD_ENV2 as usize,
+    hold: gt::HOLD_MOD_ENV2 as usize,
+    decay: gt::DECAY_MOD_ENV2 as usize,
+    sustain: gt::SUSTAIN_MOD_ENV2 as usize,
+    release: gt::RELEASE_MOD_ENV2 as usize,
+    key_num_to_hold: gt::KEY_NUM_TO_MOD_ENV2_HOLD as usize,
+    key_num_to_decay: gt::KEY_NUM_TO_MOD_ENV2_DECAY as usize,
+};
+
+// ---------------------------------------------------------------------------
 // ModulationEnvelope
 // ---------------------------------------------------------------------------
 
 /// Calculates the modulation envelope for a voice.
 /// Equivalent to: class ModulationEnvelope
 pub struct ModulationEnvelope {
+    /// The generators this envelope reads.
+    /// Equivalent to: gens
+    gens: ModulationEnvelopeGenerators,
     /// Attack duration in seconds.
     /// Equivalent to: attackDuration
     attack_duration: f64,
@@ -106,9 +153,10 @@ impl ModulationEnvelope {
     }
 
     /// Creates a new ModulationEnvelope with all fields at zero / false.
-    /// Equivalent to: new ModulationEnvelope()
-    pub fn new() -> Self {
+    /// Equivalent to: new ModulationEnvelope(gens)
+    pub fn new(gens: ModulationEnvelopeGenerators) -> Self {
         Self {
+            gens,
             attack_duration: 0.0,
             decay_duration: 0.0,
             hold_duration: 0.0,
@@ -199,7 +247,7 @@ impl ModulationEnvelope {
         self.entered_release = true;
 
         // Min is set to -7200 to prevent lowpass clicks
-        let release_tc = (modulated_generators[gt::RELEASE_MOD_ENV as usize] as i32).max(-7200);
+        let release_tc = (modulated_generators[self.gens.release] as i32).max(-7200);
         let release_time = Self::tc2sec(release_tc);
 
         // Release time is from full level to 0%; scale by the actual start level
@@ -216,16 +264,16 @@ impl ModulationEnvelope {
     pub fn init(&mut self, modulated_generators: &[i16], start_time: f64, target_key: i16) {
         self.entered_release = false;
         self.sustain_level =
-            1.0 - modulated_generators[gt::SUSTAIN_MOD_ENV as usize] as f64 / 1000.0;
+            1.0 - modulated_generators[self.gens.sustain] as f64 / 1000.0;
 
         self.attack_duration =
-            Self::tc2sec(modulated_generators[gt::ATTACK_MOD_ENV as usize] as i32);
+            Self::tc2sec(modulated_generators[self.gens.attack] as i32);
 
         // Decay time with key excursion
         let decay_key_excursion_cents = (60 - target_key as i32) as f64
-            * modulated_generators[gt::KEY_NUM_TO_MOD_ENV_DECAY as usize] as f64;
+            * modulated_generators[self.gens.key_num_to_decay] as f64;
         let decay_time = Self::tc2sec(
-            (modulated_generators[gt::DECAY_MOD_ENV as usize] as f64 + decay_key_excursion_cents)
+            (modulated_generators[self.gens.decay] as f64 + decay_key_excursion_cents)
                 as i32,
         );
         // Decay time is from 100% to 0%; scale to reach the actual sustain level
@@ -233,15 +281,15 @@ impl ModulationEnvelope {
 
         // Hold time with key excursion
         let hold_key_excursion_cents = (60 - target_key as i32) as f64
-            * modulated_generators[gt::KEY_NUM_TO_MOD_ENV_HOLD as usize] as f64;
+            * modulated_generators[self.gens.key_num_to_hold] as f64;
         self.hold_duration = Self::tc2sec(
-            (hold_key_excursion_cents + modulated_generators[gt::HOLD_MOD_ENV as usize] as f64)
+            (hold_key_excursion_cents + modulated_generators[self.gens.hold] as f64)
                 as i32,
         );
 
         // Compute absolute phase end times
         self.delay_end = start_time
-            + Self::tc2sec(modulated_generators[gt::DELAY_MOD_ENV as usize] as i32);
+            + Self::tc2sec(modulated_generators[self.gens.delay] as i32);
         self.attack_end = self.delay_end + self.attack_duration;
         self.hold_end = self.attack_end + self.hold_duration;
         self.decay_end = self.hold_end + self.decay_duration;
@@ -250,7 +298,7 @@ impl ModulationEnvelope {
 
 impl Default for ModulationEnvelope {
     fn default() -> Self {
-        Self::new()
+        Self::new(MOD_ENV_GENERATORS)
     }
 }
 
@@ -298,7 +346,7 @@ mod tests {
 
     #[test]
     fn test_new_default_values() {
-        let env = ModulationEnvelope::new();
+        let env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         assert!(approx_eq(env.sustain_level, 0.0));
         assert!(approx_eq(env.current_value, 0.0));
         assert!(!env.entered_release);
@@ -307,7 +355,7 @@ mod tests {
 
     #[test]
     fn test_default_trait_equals_new() {
-        let a = ModulationEnvelope::new();
+        let a = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         let b = ModulationEnvelope::default();
         assert!(approx_eq(a.sustain_level, b.sustain_level));
         assert!(!a.entered_release && !b.entered_release);
@@ -352,7 +400,7 @@ mod tests {
 
     #[test]
     fn test_init_resets_entered_release() {
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         env.entered_release = true;
         env.init(&default_gens(), 0.0, 60);
         assert!(!env.entered_release);
@@ -362,7 +410,7 @@ mod tests {
     fn test_init_sustain_level_from_generator() {
         // sustainModEnv = 500 → sustain_level = 1 - 500/1000 = 0.5
         let gens = gens_with(default_gens(), gt::SUSTAIN_MOD_ENV, 500);
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         env.init(&gens, 0.0, 60);
         assert!(
             (env.sustain_level - 0.5).abs() < 0.001,
@@ -374,7 +422,7 @@ mod tests {
     #[test]
     fn test_init_sustain_level_default_is_one() {
         // Default sustainModEnv = 0 → sustain_level = 1 - 0/1000 = 1.0
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         env.init(&default_gens(), 0.0, 60);
         assert!(
             (env.sustain_level - 1.0).abs() < 0.001,
@@ -387,7 +435,7 @@ mod tests {
     fn test_init_delay_end_includes_start_time() {
         // delayModEnv = i16::MIN → timecents_to_seconds → 0, so delay_end = start_time
         let gens = gens_with(default_gens(), gt::DELAY_MOD_ENV, i16::MIN);
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         let start_time = 2.5;
         env.init(&gens, start_time, 60);
         assert!((env.delay_end - start_time).abs() < 0.001);
@@ -395,21 +443,21 @@ mod tests {
 
     #[test]
     fn test_init_attack_end_after_delay_end() {
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         env.init(&default_gens(), 0.0, 60);
         assert!(env.attack_end >= env.delay_end);
     }
 
     #[test]
     fn test_init_hold_end_after_attack_end() {
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         env.init(&default_gens(), 0.0, 60);
         assert!(env.hold_end >= env.attack_end);
     }
 
     #[test]
     fn test_init_decay_end_after_hold_end() {
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         env.init(&default_gens(), 0.0, 60);
         assert!(env.decay_end >= env.hold_end);
     }
@@ -418,7 +466,7 @@ mod tests {
     fn test_init_nonzero_attack_timecents_gives_positive_duration() {
         // attackModEnv = 0 timecents → 2^(0/1200) = 1.0 second
         let gens = gens_with(default_gens(), gt::ATTACK_MOD_ENV, 0);
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         env.init(&gens, 0.0, 60);
         assert!(env.attack_duration > 0.9 && env.attack_duration < 1.1);
     }
@@ -431,7 +479,7 @@ mod tests {
     fn test_process_delay_returns_zero() {
         // Large delay: delayModEnv = 0 tc → 1-second delay.
         let gens = gens_with(default_gens(), gt::DELAY_MOD_ENV, 0);
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         env.init(&gens, 0.0, 60);
         // current_time = 0 < delay_end (≈1s) → delay phase
         let val = env.process(f64::INFINITY, 0.0);
@@ -446,7 +494,7 @@ mod tests {
     fn test_process_hold_returns_one() {
         // Instant DAHDSR, then set hold manually to verify
         let gens = gens_instant();
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         env.init(&gens, 0.0, 60);
         // After delay=0, attack=0, we're in hold phase immediately.
         // Set hold_end to future to stay in hold.
@@ -465,7 +513,7 @@ mod tests {
     #[test]
     fn test_process_sustain_returns_sustain_level() {
         let gens = gens_with(gens_instant(), gt::SUSTAIN_MOD_ENV, 600);
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         env.init(&gens, 0.0, 60);
         // Past decay_end → sustain
         let val = env.process(f64::INFINITY, 10_000.0);
@@ -488,7 +536,7 @@ mod tests {
             let g = gens_with(g, gt::DECAY_MOD_ENV, 0); // 1 second decay
             gens_with(g, gt::SUSTAIN_MOD_ENV, 500) // sustain = 0.5
         };
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         env.init(&gens, 0.0, 60);
         // At decay start (hold_end) → should be near MODENV_PEAK
         let val_start = env.process(f64::INFINITY, env.hold_end);
@@ -515,7 +563,7 @@ mod tests {
             let g = gens_with(default_gens(), gt::DELAY_MOD_ENV, i16::MIN);
             gens_with(g, gt::ATTACK_MOD_ENV, 0) // 1 second
         };
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         env.init(&gens, 0.0, 60);
         // At the midpoint of the attack → use CONVEX_ATTACK[500]
         let midpoint = env.attack_end / 2.0;
@@ -530,7 +578,7 @@ mod tests {
 
     #[test]
     fn test_start_release_sets_entered_release() {
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         env.init(&default_gens(), 0.0, 60);
         env.start_release(&default_gens());
         assert!(env.entered_release);
@@ -538,7 +586,7 @@ mod tests {
 
     #[test]
     fn test_start_release_captures_current_value_as_start_level() {
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         env.current_value = 0.75;
         env.start_release(&default_gens());
         assert!(
@@ -551,7 +599,7 @@ mod tests {
     #[test]
     fn test_start_release_duration_zero_for_zero_current_value() {
         // If current_value = 0 (still in delay), release_duration should be 0
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         env.current_value = 0.0;
         env.start_release(&default_gens());
         assert!(approx_eq(env.release_duration, 0.0));
@@ -561,7 +609,7 @@ mod tests {
     fn test_start_release_uses_release_mod_env_generator() {
         // releaseModEnv = 0 tc → 1 second; release_duration = 1.0 * start_level
         let gens = gens_with(default_gens(), gt::RELEASE_MOD_ENV, 0);
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         env.current_value = 1.0;
         env.start_release(&gens);
         // release_duration ≈ 1.0 second
@@ -576,7 +624,7 @@ mod tests {
     fn test_start_release_clamps_to_minus_7200() {
         // releaseModEnv = -32768 (i16::MIN) → clamped to -7200 timecents
         let gens = gens_with(default_gens(), gt::RELEASE_MOD_ENV, i16::MIN);
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         env.current_value = 1.0;
         env.start_release(&gens);
         // timecents_to_seconds(-7200) = 2^(-7200/1200) = 2^(-6) ≈ 0.015625
@@ -594,7 +642,7 @@ mod tests {
 
     #[test]
     fn test_process_release_returns_zero_when_start_level_is_zero() {
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         env.entered_release = true;
         env.release_start_level = 0.0;
         let val = env.process(0.0, 1.0);
@@ -603,7 +651,7 @@ mod tests {
 
     #[test]
     fn test_process_release_decreases_over_time() {
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         env.entered_release = true;
         env.release_start_level = 1.0;
         env.release_duration = 2.0; // 2-second release
@@ -619,7 +667,7 @@ mod tests {
 
     #[test]
     fn test_process_release_clamps_to_zero() {
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         env.entered_release = true;
         env.release_start_level = 1.0;
         env.release_duration = 1.0;
@@ -632,7 +680,7 @@ mod tests {
 
     #[test]
     fn test_process_release_at_start_returns_full_level() {
-        let mut env = ModulationEnvelope::new();
+        let mut env = ModulationEnvelope::new(MOD_ENV_GENERATORS);
         env.entered_release = true;
         env.release_start_level = 0.8;
         env.release_duration = 2.0;
