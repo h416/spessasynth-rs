@@ -4,7 +4,7 @@
 use std::sync::LazyLock;
 
 use super::prelude::*;
-use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::blocks::first_order_filter::{DC_BLOCKER_HZ, FirstOrderFilter};
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::blocks::first_order_filter::{DC_BLOCKER_HZ, FirstOrderFilter, damp_corner};
 use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::blocks::mono_mix::MonoMix;
 use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::blocks::mono_pan::MonoPan;
 use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::blocks::noise_generator::{NoiseGenerator, set_column_high_pass, set_column_low_pass};
@@ -131,9 +131,9 @@ pub struct GSLoFi2 {
 
 impl GSLoFi2 {
     pub fn new(sample_rate: f64, _memory: &mut DelayMemory) -> Self {
-        // The radio noise: a chaotic map through a one-pole of pole 0.5 at 32 kHz (3.5 kHz)
+        // The radio noise: a chaotic map through a one-pole of pole 0.5 at 32 kHz (3.68 kHz), like SCCore.dll
         let mut radio_noise = FirstOrderFilter::new(sample_rate);
-        radio_noise.set_damp(3500.0);
+        radio_noise.set_damp(damp_corner(0.5));
         let mut effect = Self {
             base: GSEffectBase::new(sample_rate, None, DEFAULTS, LIMITS, &[]),
             mix: MonoMix::new(sample_rate),
@@ -172,7 +172,7 @@ impl GSLoFi2 {
             self.radio_phase -= 1.0;
         }
         self.seed = self.seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-        // A noise of mean -0.27 and RMS 0.49 like the chaotic map (at 32 kHz), then the 3.5 kHz low pass
+        // A noise of mean -0.27 and RMS 0.49 like the chaotic map (at 32 kHz), then the 3.68 kHz low pass
         self.radio_noise_value = RADIO_NOISE_GAIN
             * self
                 .radio_noise

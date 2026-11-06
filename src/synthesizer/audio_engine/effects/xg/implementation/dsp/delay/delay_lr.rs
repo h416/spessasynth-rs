@@ -9,6 +9,9 @@ use super::xg_delay::{
     XGDelayBase, XGDelayKind, CONNECTION_PARAMETERS, LEFT_BASE, LIST_DAMP_A, LIST_DAMP_B,
 };
 
+// Dry/wet push list
+const LIST_MIX: &[usize] = &[0xb2, 0xb5, 0xb8, 0xbb];
+
 const PARAMETER_RANGES: XGParameterRanges = &[
     (0, 1, 7150),
     (1, 1, 7150),
@@ -79,7 +82,7 @@ pub(super) fn convert(d: &mut XGDelayBase, param: usize) {
             w[0xb8] = w[0xb2];
             w[0xb5] = (wet & 0x3_ff) as u16;
             w[0xbb] = w[0xb5];
-            d.push_coefficients_all(&[0xb2, 0xb5, 0xb8, 0xbb]);
+            d.push_coefficients_all(LIST_MIX);
         }
         12 | 13 => d.design_low_equalizer(p(d, 12), p(d, 13), false),
         14 | 15 => d.design_high_equalizer(p(d, 14), p(d, 15)),

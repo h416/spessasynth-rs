@@ -6,6 +6,10 @@ use super::super::xg_stereo_variation_program::XGStereoVariationProgram;
 use super::super::xg_variation_program::variation_layout;
 use super::xg_tremolo::{XGTremoloBase, XGTremoloKind, LIST_SHAPE_LEFT, LIST_SHAPE_RIGHT};
 
+// Input mode push lists
+const LIST_INPUT_COEFFICIENT: &[usize] = &[0xaa, 0xb4, 0xb9];
+const LIST_INPUT_ADDRESS: &[usize] = &[0x3b, 0x2d, 0x2e];
+
 const PARAMETER_RANGES: XGParameterRanges =
     &[(5, 8, 40), (6, 52, 76), (7, 28, 58), (8, 52, 76), (13, 4, 124), (14, 0, 1)];
 
@@ -93,8 +97,8 @@ pub(super) fn convert(d: &mut XGTremoloBase, param: usize) {
                 a[0x2d] = 0x4_01;
                 a[0x2e] = 0x4_02;
             }
-            d.push_coefficients_all(&[0xaa, 0xb4, 0xb9]);
-            d.program.push_addresses_all(&[0x3b, 0x2d, 0x2e]);
+            d.push_coefficients_all(LIST_INPUT_COEFFICIENT);
+            d.program.push_addresses_all(LIST_INPUT_ADDRESS);
             d.convert(5);
             d.convert(7);
         }

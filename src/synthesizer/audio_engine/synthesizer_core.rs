@@ -30,6 +30,9 @@ use crate::synthesizer::audio_engine::channel::render_voice::{
 };
 use crate::synthesizer::audio_engine::effects::gs::implementation::chorus::SpessaSynthChorus;
 use crate::synthesizer::audio_engine::effects::gs::implementation::delay::DefaultGSDelay;
+use crate::synthesizer::audio_engine::effects::gs::implementation::equalizer::{
+    DEFAULT_GS_EQUALIZER, DefaultGSEqualizer,
+};
 use crate::synthesizer::audio_engine::effects::gs::implementation::insertion::DefaultGSInsertion;
 use crate::synthesizer::audio_engine::effects::gs::implementation::reverb::SpessaSynthReverb;
 use crate::synthesizer::audio_engine::voice::lowpass_filter::LowpassFilter;
@@ -271,6 +274,16 @@ pub struct SynthesizerCore {
     /// Equivalent to: insertionInputL/R
     insertion_input_l: Vec<f32>,
     insertion_input_r: Vec<f32>,
+
+    /// The synthesizer's GS equalizer processor.
+    /// Used when the MIDI system is `gm`, `gm2` or `gs`.
+    /// Equivalent to: gsEqualizerProcessor
+    pub gs_equalizer_processor: DefaultGSEqualizer,
+
+    /// Stereo equalizer input buffers (Float32Array, fixed at max_buffer_size).
+    /// Equivalent to: equalizerInputL/R
+    equalizer_input_l: Vec<f32>,
+    equalizer_input_r: Vec<f32>,
 }
 
 impl SynthesizerCore {
@@ -362,6 +375,9 @@ impl SynthesizerCore {
             gs_insertion_active: false,
             insertion_input_l: vec![0.0; buf_size],
             insertion_input_r: vec![0.0; buf_size],
+            gs_equalizer_processor: DefaultGSEqualizer::new(sample_rate),
+            equalizer_input_l: vec![0.0; buf_size],
+            equalizer_input_r: vec![0.0; buf_size],
         }
     }
 
@@ -525,7 +541,7 @@ impl SynthesizerCore {
     /// except for the locked controllers.
     /// Equivalent to: reset(system = DEFAULT_SYNTH_MODE)
     pub fn reset(&mut self, system: MIDISystem) {
-        // Call here because there are returns in this function.
+        // Listeners get this before anything is reset
         self.call_event(SynthProcessorEvent::Reset(system));
         // A reset also stops all notes (gracefully)
         self.stop_all(false);
@@ -540,6 +556,19 @@ impl SynthesizerCore {
         self.set_chorus_macro(2);
         // Delay1 default
         self.set_delay_macro(0);
+        if !self.system_parameters.gs_equalizer_lock {
+            self.gs_equalizer_processor.apply_snapshot(&DEFAULT_GS_EQUALIZER);
+            let eq = self.gs_equalizer_processor.get_snapshot();
+            for (parameter, value) in
+                [eq.low_frequency, eq.low_gain, eq.high_frequency, eq.high_gain].into_iter().enumerate()
+            {
+                self.call_event(SynthProcessorEvent::EffectChange(EffectChangeCallback {
+                    effect: EffectKind::Equalizer,
+                    parameter: parameter as u8,
+                    value: value as i32,
+                }));
+            }
+        }
         if !self.system_parameters.gs_insertion_lock {
             self.gs_insertion_block.reset();
             let efx_type = self.gs_insertion_block.get_type();
@@ -610,7 +639,7 @@ impl SynthesizerCore {
 
     /// Renders audio for the current quantum.
     /// The main rendering pipeline, renders all voices and processes the effects:
-    /// voices -> (insertion) -> chorus -> delay -> reverb -> stereo output.
+    /// voices -> (insertion) -> (equalizer) -> chorus -> delay -> reverb -> stereo output.
     /// Equivalent to: process(left, right, startIndex, sampleCount)
     pub fn render_audio(
         &mut self,
@@ -637,6 +666,7 @@ impl SynthesizerCore {
         let is_xg = self.midi_parameters.system == MIDISystem::Xg;
         let variation_insertion = self.xg_variation_block.insertion_mode;
         let fx = self.system_parameters.effects_enabled;
+        let eq = fx && !is_xg;
 
         // For XG, renderVoice always checks if insertion is assigned to bypass effect sends
         // Cache it here
@@ -667,6 +697,10 @@ impl SynthesizerCore {
         if self.gs_insertion_active {
             self.insertion_input_l.fill(0.0);
             self.insertion_input_r.fill(0.0);
+        }
+        if eq {
+            self.equalizer_input_l.fill(0.0);
+            self.equalizer_input_r.fill(0.0);
         }
         for c in self.midi_channels.iter_mut() {
             // And voice count
@@ -775,15 +809,20 @@ impl SynthesizerCore {
 
             // If a channel has insertion assigned (or variation in insertion mode) then its sends are routed globally (not in renderVoice)
             // If effectsEnabled is false it does not matter, so the code here can also be skipped.
+            // The reverb and chorus gains apply here too, like they do in renderVoice
+            let reverb_gain = self.system_parameters.reverb_gain;
+            let chorus_gain = self.system_parameters.chorus_gain;
             for ch in self.midi_channels.iter() {
                 if !ch.xg_insertion_assigned {
                     continue;
                 }
 
-                let rev_send =
-                    (ch.midi_controllers[midi_controllers::REVERB_DEPTH as usize] >> 7) as f64 / 127.0;
-                let cho_send =
-                    (ch.midi_controllers[midi_controllers::CHORUS_DEPTH as usize] >> 7) as f64 / 127.0;
+                let rev_send = (reverb_gain
+                    * (ch.midi_controllers[midi_controllers::REVERB_DEPTH as usize] >> 7) as f64)
+                    / 127.0;
+                let cho_send = (chorus_gain
+                    * (ch.midi_controllers[midi_controllers::CHORUS_DEPTH as usize] >> 7) as f64)
+                    / 127.0;
                 if rev_send <= 0.0 && cho_send <= 0.0 {
                     continue;
                 }
@@ -824,6 +863,17 @@ impl SynthesizerCore {
                         (self.insertion_input_l[i] as f64 + output_left[i]) as f32;
                     self.insertion_input_r[i] =
                         (self.insertion_input_r[i] as f64 + output_right[i]) as f32;
+                }
+                continue;
+            }
+
+            // Into the equalizer instead of the output
+            if eq && ch.midi_parameters.eq_enabled {
+                for i in 0..sample_count {
+                    self.equalizer_input_l[i] =
+                        (self.equalizer_input_l[i] as f64 + output_left[i]) as f32;
+                    self.equalizer_input_r[i] =
+                        (self.equalizer_input_r[i] as f64 + output_right[i]) as f32;
                 }
                 continue;
             }
@@ -890,14 +940,33 @@ impl SynthesizerCore {
             } else {
                 // Insertion first
                 if self.gs_insertion_active {
+                    // The send EQ switch routes the insertion output into the equalizer
+                    let to_equalizer = eq && self.gs_insertion_block.send_eq_switch;
+                    let (out_l, out_r, out_start): (&mut [f32], &mut [f32], usize) = if to_equalizer {
+                        (&mut self.equalizer_input_l, &mut self.equalizer_input_r, 0)
+                    } else {
+                        (&mut left[..], &mut right[..], start_index)
+                    };
                     self.gs_insertion_block.process(
                         &self.insertion_input_l,
                         &self.insertion_input_r,
-                        left,
-                        right,
+                        out_l,
+                        out_r,
                         &mut self.gs_reverb_input,
                         &mut self.gs_chorus_input,
                         &mut self.gs_delay_input,
+                        out_start,
+                        sample_count,
+                    );
+                }
+
+                // Then the equalizer, the system effects do not pass through it
+                if eq {
+                    self.gs_equalizer_processor.process(
+                        &self.equalizer_input_l,
+                        &self.equalizer_input_r,
+                        left,
+                        right,
                         start_index,
                         sample_count,
                     );
@@ -1451,21 +1520,24 @@ impl SynthesizerCore {
     /// Computes the cache key for a given patch+note+velocity.
     /// Equivalent to: getCachedVoiceIndex(patch, midiNote, velocity) (private)
     pub(crate) fn get_cached_voice_index(&self, patch: &MidiPatch, midi_note: u8, velocity: u8) -> u64 {
-        let (bank_msb, bank_lsb) = if patch.is_gm_gs_drum {
-            (128u64, 0u64)
+        // Bank MSB is 0-127, GM/GS drums use 128-255 so they stay apart from melodic patches
+        // The drum MSB and LSB both pick the kit
+        let bank_msb = if patch.is_gm_gs_drum {
+            128 + patch.bank_msb as u64
         } else {
-            (patch.bank_msb as u64, patch.bank_lsb as u64)
+            patch.bank_msb as u64
         };
+        let bank_lsb = patch.bank_lsb as u64;
         let program = patch.program as u64;
         let note = midi_note as u64;
         let vel = velocity as u64;
 
-        // 129x128x128x128x128 array! (129-based so the drum MSB 128 does not collide with LSB 1)
-        bank_msb // 129 * 128 ^ 0
-            + bank_lsb * 129 // 129 * 128 ^ 0
-            + program * 16_512 // 129 * 128 ^ 1
-            + 2_113_536 * note // 129 * 128 ^ 2
-            + 270_532_608 * vel // 129 * 128 ^ 3
+        // 256x128x128x128x128 array!
+        bank_msb // 1
+            + bank_lsb * 256 // 256 * 128 ^ 0
+            + program * 32_768 // 256 * 128 ^ 1
+            + 4_194_304 * note // 256 * 128 ^ 2
+            + 536_870_912 * vel // 256 * 128 ^ 3
     }
 
     /// Pushes a callback to the event queue to be called at the given time.

@@ -8,12 +8,16 @@
 use super::xg_dsp_program::{fround, XGDSPProgram};
 use super::xg_variation_program::XGVariationState;
 
-// Input low shelf push lists (b0, b1, a1), the shelf is split into two sections
+// Input section push lists (b0, b1, a1). The 3-band EQ splits its low shelf over them,
+// The distortion family and the early reflections put a high pass and a low pass there
 pub const LIST_LOW_A: &[usize] = &[0x70, 0x6f, 0x71];
 pub const LIST_LOW_B: &[usize] = &[0x73, 0x72, 0x74];
 
 /// The category 2 coefficients that the original never writes.
 pub const UNWRITTEN_CATEGORY_2: &[usize] = &[0x75, 0x7a, 0x7d, 0x80, 0xae];
+
+// Mono input level push list
+const LIST_MONO_INPUT: &[usize] = &[0x6d, 0x6e];
 
 /// The category 2 index.
 pub const CATEGORY: usize = 2;
@@ -149,7 +153,7 @@ pub fn mono_input_level<P: super::xg_dsp_program::XGProgram + ?Sized>(p: &mut P)
     let w = &mut p.program_mut().coefficient_words;
     w[0x6d] = word;
     w[0x6e] = word;
-    p.push_coefficients_all(&[0x6d, 0x6e]);
+    p.push_coefficients_all(LIST_MONO_INPUT);
 }
 
 /// Equivalent to: XGMonoVariationProgram.pushCoefficients

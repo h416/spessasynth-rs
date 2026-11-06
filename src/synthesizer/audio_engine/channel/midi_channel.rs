@@ -915,6 +915,7 @@ impl MidiChannel {
             EfxAssign(v) => {
                 self.midi_parameters.efx_assign = v;
             }
+            EqEnabled(v) => self.midi_parameters.eq_enabled = v,
             Cc1(v) => self.midi_parameters.cc1 = v,
             Cc2(v) => self.midi_parameters.cc2 = v,
             DrumMap(v) => self.midi_parameters.drum_map = v,

@@ -9,6 +9,7 @@ use crate::synthesizer::audio_engine::channel::channel_snapshot::ChannelSnapshot
 use crate::synthesizer::audio_engine::channel::midi_channel::DrumLocks;
 use crate::synthesizer::audio_engine::effects::gs::implementation::chorus::ChorusSnapshot;
 use crate::synthesizer::audio_engine::effects::gs::implementation::delay::DelaySnapshot;
+use crate::synthesizer::audio_engine::effects::gs::implementation::equalizer::GSEqualizerParameter;
 use crate::synthesizer::audio_engine::effects::gs::implementation::insertion::GSInsertionBlockSnapshot;
 use crate::synthesizer::audio_engine::effects::gs::implementation::reverb::ReverbSnapshot;
 use crate::synthesizer::audio_engine::effects::xg::implementation::chorus::XGChorusBlockSnapshot;
@@ -54,6 +55,9 @@ pub struct SynthesizerSnapshot {
     /// A snapshot of the delay processor.
     /// Equivalent to: gsDelayProcessor
     pub gs_delay_processor: DelaySnapshot,
+    /// A snapshot of the equalizer processor.
+    /// Equivalent to: gsEqualizerProcessor
+    pub gs_equalizer_processor: GSEqualizerParameter,
     /// A snapshot of the GS insertion block.
     /// Equivalent to: gsInsertionBlock
     pub gs_insertion_block: GSInsertionBlockSnapshot,
@@ -112,6 +116,7 @@ pub fn apply_snapshot(core: &mut SynthesizerCore, snapshot: &SynthesizerSnapshot
     core.reverb_processor.apply_snapshot(&snapshot.gs_reverb_processor);
     core.chorus_processor.apply_snapshot(&snapshot.gs_chorus_processor);
     core.delay_processor.apply_snapshot(&snapshot.gs_delay_processor);
+    core.gs_equalizer_processor.apply_snapshot(&snapshot.gs_equalizer_processor);
     core.gs_insertion_block.apply_snapshot(&snapshot.gs_insertion_block);
 
     // Restore XG effects
@@ -120,7 +125,12 @@ pub fn apply_snapshot(core: &mut SynthesizerCore, snapshot: &SynthesizerSnapshot
     core.xg_variation_block.apply_snapshot(&snapshot.xg_variation_block);
     for i in 0..core.xg_insertion_blocks.len() {
         let insertion = &mut core.xg_insertion_blocks[i];
-        insertion.apply_snapshot(&snapshot.xg_insertion_blocks[i]);
+        // The synth may have more insertion blocks than the snapshot
+        if i < snapshot.xg_insertion_blocks.len() {
+            insertion.apply_snapshot(&snapshot.xg_insertion_blocks[i]);
+        } else {
+            insertion.reset();
+        }
     }
 
     // Restore user drum sets
@@ -164,6 +174,7 @@ pub fn get_synthesizer_snapshot(core: &SynthesizerCore) -> SynthesizerSnapshot {
         gs_reverb_processor: core.reverb_processor.get_snapshot(),
         gs_chorus_processor: core.chorus_processor.get_snapshot(),
         gs_delay_processor: core.delay_processor.get_snapshot(),
+        gs_equalizer_processor: core.gs_equalizer_processor.get_snapshot(),
         gs_insertion_block: core.gs_insertion_block.get_snapshot(),
         xg_reverb_block: core.xg_reverb_block.get_snapshot(),
         xg_chorus_block: core.xg_chorus_block.get_snapshot(),

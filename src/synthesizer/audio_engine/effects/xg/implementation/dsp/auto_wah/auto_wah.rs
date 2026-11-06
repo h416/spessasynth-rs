@@ -18,6 +18,9 @@ const LIST_LOW_RIGHT: &[usize] = &[0x70, 0x6f, 0x71];
 const LIST_LOW_LEFT: &[usize] = &[0x81, 0x80, 0x82];
 const LIST_HIGH_RIGHT: &[usize] = &[0x73, 0x72, 0x74];
 const LIST_HIGH_LEFT: &[usize] = &[0x84, 0x83, 0x85];
+// Dry/wet push lists
+const LIST_OUTPUT: &[usize] = &[0xb9, 0xba];
+const LIST_DRY_WET: &[usize] = &[0xab, 0xad];
 
 pub const TYPE: u16 = 0x4e_00;
 /// Equivalent to: static memorySize = 0
@@ -226,8 +229,8 @@ impl XGAutoWah {
                 w[0xb9] = w[0xab];
                 w[0xad] = to_u16(PAN_RIGHT[mix] as i32);
                 w[0xba] = w[0xad];
-                self.push_coefficients_all(&[0xb9, 0xba]);
-                self.push_coefficients_all(&[0xab, 0xad]);
+                self.push_coefficients_all(LIST_OUTPUT);
+                self.push_coefficients_all(LIST_DRY_WET);
             }
             _ => {}
         }

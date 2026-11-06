@@ -48,6 +48,9 @@ pub struct GlobalSystemParameter {
     pub gs_delay_gain: f64,
     /// If the synthesizer should prevent editing of the GS delay parameters.
     pub gs_delay_lock: bool,
+    /// If the synthesizer should prevent editing of the GS equalizer parameters.
+    /// To lock the channel equalizer switch, lock the channel's `eqEnabled` MIDI parameter instead.
+    pub gs_equalizer_lock: bool,
     /// The XG variation gain when in system mode.
     pub xg_variation_gain: f64,
     /// If the synthesizer should prevent editing of the XG variation block.
@@ -112,6 +115,8 @@ pub const DEFAULT_GLOBAL_SYSTEM_PARAMETERS: GlobalSystemParameter = GlobalSystem
     gs_delay_gain: 1.0,
     gs_delay_lock: false,
 
+    gs_equalizer_lock: false,
+
     xg_variation_gain: 1.0,
     xg_variation_lock: false,
 
@@ -160,6 +165,7 @@ pub enum GlobalSystemParameterChange {
     XgChorusLock(bool),
     GsDelayGain(f64),
     GsDelayLock(bool),
+    GsEqualizerLock(bool),
     XgVariationGain(f64),
     XgVariationLock(bool),
     GsInsertionLock(bool),
@@ -183,7 +189,7 @@ impl GlobalSystemParameter {
     /// All parameters with their values, in the key order of
     /// `DEFAULT_GLOBAL_SYSTEM_PARAMETERS`.
     /// Equivalent to: Object.entries(systemParameters)
-    pub fn entries(&self) -> [GlobalSystemParameterChange; 29] {
+    pub fn entries(&self) -> [GlobalSystemParameterChange; 30] {
         use GlobalSystemParameterChange as C;
         [
             C::EffectsEnabled(self.effects_enabled),
@@ -198,6 +204,7 @@ impl GlobalSystemParameter {
             C::XgChorusLock(self.xg_chorus_lock),
             C::GsDelayGain(self.gs_delay_gain),
             C::GsDelayLock(self.gs_delay_lock),
+            C::GsEqualizerLock(self.gs_equalizer_lock),
             C::XgVariationGain(self.xg_variation_gain),
             C::XgVariationLock(self.xg_variation_lock),
             C::GsInsertionLock(self.gs_insertion_lock),
@@ -245,6 +252,7 @@ impl SynthesizerCore {
             C::XgChorusLock(v) => set_or_return!(xg_chorus_lock, v),
             C::GsDelayGain(v) => set_or_return!(gs_delay_gain, v),
             C::GsDelayLock(v) => set_or_return!(gs_delay_lock, v),
+            C::GsEqualizerLock(v) => set_or_return!(gs_equalizer_lock, v),
             C::XgVariationGain(v) => set_or_return!(xg_variation_gain, v),
             C::XgVariationLock(v) => set_or_return!(xg_variation_lock, v),
             C::GsInsertionLock(v) => set_or_return!(gs_insertion_lock, v),

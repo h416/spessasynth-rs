@@ -44,51 +44,47 @@ pub struct MidiPatchFull {
 
 /// Converts a MidiPatch to its string representation.
 /// The format is:
-/// - `DRUM:program` for `isGMGSDrum` set to `true`.
+/// - `DRUM:bankMSB:bankLSB:program` for `isGMGSDrum` set to `true`.
 /// - `bankLSB:bankMSB:program` for `isGMGSDrum` set to `false`.
 /// Equivalent to: MIDIPatchTools.toMIDIString
 pub fn to_midi_string(patch: &MidiPatch) -> String {
     if patch.is_gm_gs_drum {
-        format!("DRUM:{}", patch.program)
+        format!("DRUM:{}:{}:{}", patch.bank_msb, patch.bank_lsb, patch.program)
     } else {
         format!("{}:{}:{}", patch.bank_lsb, patch.bank_msb, patch.program)
     }
 }
 
-/// Parses a MidiPatch from its string representation.
+/// Parses a MidiPatch from its string representation (the [`to_midi_string`] format).
 /// Equivalent to: MIDIPatchTools.fromMIDIString
 pub fn from_midi_string(s: &str) -> Result<MidiPatch, String> {
     let parts: Vec<&str> = s.split(':').collect();
-    if parts.len() > 3 || parts.len() < 2 {
+    let parse = |part: &str| part.parse::<u8>().map_err(|e| format!("Invalid MIDI string: {e}"));
+    if s.starts_with("DRUM") {
+        // DRUM:MSB:LSB:program,
+        // DRUM:program (older format LSB = 0)
+        // Or LSB:MSB:program
+        if parts.len() != 4 && parts.len() != 2 {
+            return Err(format!("Invalid MIDI string: {s}"));
+        }
+        let long = parts.len() == 4;
+        return Ok(MidiPatch {
+            bank_msb: if long { parse(parts[1])? } else { 0 },
+            bank_lsb: if long { parse(parts[2])? } else { 0 },
+            program: parse(parts[parts.len() - 1])?,
+            is_gm_gs_drum: true,
+        });
+    }
+    // LSB:MSB:program
+    if parts.len() != 3 {
         return Err(format!("Invalid MIDI string: {s}"));
     }
-    if s.starts_with("DRUM") {
-        let program = parts[1]
-            .parse::<u8>()
-            .map_err(|e| format!("Invalid MIDI string: {e}"))?;
-        Ok(MidiPatch {
-            bank_msb: 0,
-            bank_lsb: 0,
-            program,
-            is_gm_gs_drum: true,
-        })
-    } else {
-        let bank_lsb = parts[0]
-            .parse::<u8>()
-            .map_err(|e| format!("Invalid MIDI string: {e}"))?;
-        let bank_msb = parts[1]
-            .parse::<u8>()
-            .map_err(|e| format!("Invalid MIDI string: {e}"))?;
-        let program = parts[2]
-            .parse::<u8>()
-            .map_err(|e| format!("Invalid MIDI string: {e}"))?;
-        Ok(MidiPatch {
-            bank_lsb,
-            bank_msb,
-            program,
-            is_gm_gs_drum: false,
-        })
-    }
+    Ok(MidiPatch {
+        bank_lsb: parse(parts[0])?,
+        bank_msb: parse(parts[1])?,
+        program: parse(parts[2])?,
+        is_gm_gs_drum: false,
+    })
 }
 
 /// Converts a MidiPatchFull to its string representation.
@@ -132,15 +128,20 @@ pub fn from_full_midi_string(s: &str) -> Result<MidiPatchFull, String> {
 /// Equivalent to: MIDIPatchTools.matches
 pub fn matches(patch1: &MidiPatch, patch2: &MidiPatch) -> bool {
     if patch1.is_gm_gs_drum || patch2.is_gm_gs_drum {
-        // For drums only compare programs
-        return patch1.is_gm_gs_drum == patch2.is_gm_gs_drum && patch1.program == patch2.program;
+        // Drum kits are told apart by the program,
+        // The MSB and the LSB
+        return patch1.is_gm_gs_drum == patch2.is_gm_gs_drum
+            && patch1.program == patch2.program
+            && patch1.bank_msb == patch2.bank_msb
+            && patch1.bank_lsb == patch2.bank_lsb;
     }
     patch1.program == patch2.program
         && patch1.bank_lsb == patch2.bank_lsb
         && patch1.bank_msb == patch2.bank_msb
 }
 
-/// A comparison function for sorting, ordering the patches in ascending order.
+/// A comparison function for sorting, ordering the patches in ascending order:
+/// by program, then bank MSB, then bank LSB, with GM/GS drums last.
 /// Equivalent to: MIDIPatchTools.compare (the drum check comes before the program
 /// comparison)
 pub fn compare(a: &MidiPatch, b: &MidiPatch) -> Ordering {
@@ -259,9 +260,16 @@ pub fn select_patch<'a>(
 
     // No exact match...
     if is_gm_gs_drum {
-        // GM/GS drums: check for the exact program match
-        if let Some(i) =
-            (0..patches.len()).find(|&i| patches[i].is_gm_gs_drum && patches[i].program == program)
+        // GM/GS drums: same program and LSB (the kit map), then the program alone
+        if let Some(i) = (0..patches.len())
+            .find(|&i| {
+                patches[i].is_gm_gs_drum
+                    && patches[i].program == program
+                    && patches[i].bank_lsb == bank_lsb
+            })
+            .or_else(|| {
+                (0..patches.len()).find(|&i| patches[i].is_gm_gs_drum && patches[i].program == program)
+            })
         {
             return_replacement(i);
             return &patches[i];
@@ -279,7 +287,7 @@ pub fn select_patch<'a>(
         return &patches[i];
     }
     if xg_drums {
-        // XG drums: Look for exact bank and program match
+        // XG drums: Look for an XG drum kit with the same program
         if let Some(i) = (0..patches.len())
             .find(|&i| patches[i].program == program && is_drum[i] && !patches[i].is_gm_gs_drum)
         {
@@ -382,7 +390,7 @@ mod tests {
 
     #[test]
     fn test_to_midi_string_drum() {
-        assert_eq!(to_midi_string(&drum(25)), "DRUM:25");
+        assert_eq!(to_midi_string(&drum(25)), "DRUM:0:0:25");
     }
 
     #[test]
@@ -451,7 +459,7 @@ mod tests {
             name: "Standard Kit".to_string(),
             is_drum: true,
         };
-        assert_eq!(to_full_midi_string(&np), "DRUM:0 D Standard Kit");
+        assert_eq!(to_full_midi_string(&np), "DRUM:0:0:0 D Standard Kit");
     }
 
     // --- from_full_midi_string ---

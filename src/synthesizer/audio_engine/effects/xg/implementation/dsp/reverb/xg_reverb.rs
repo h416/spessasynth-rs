@@ -10,7 +10,7 @@ use super::super::xg_dsp_program::{
 };
 use super::super::xg_dsp_tables::{DELAY_TABLE, DENSITY_TABLE, MIX_DRY, MIX_WET};
 use super::reverb_tables::{
-    DAMP_FEEDBACK, DAMP_FILTER, DIFFUSION_SCALE, DIFFUSION_STEP, DIFFUSION_TABLE, ROOM_GAIN,
+    DAMP_FEEDBACK, DAMP_INPUT, DIFFUSION_SCALE, DIFFUSION_STEP, DIFFUSION_TABLE, ROOM_GAIN,
     ROOM_SIZE, ROOM_STEP, ROOM_TIME_OFFSET, TIME_OFFSETS, TIME_TABLE,
 };
 
@@ -63,11 +63,11 @@ const ADDRESS_LIST: &[usize] = &[
 // Converter push lists
 const LIST_HPF: &[usize] = &[0x2e, 0x2d, 0x2f];
 const LIST_LPF: &[usize] = &[0x31, 0x30, 0x32];
-/// Diffusion allpass addresses, 4 per line: base, density tap, write, read.
+/// Damped delay line addresses, 4 per line: write, feedback read, left output tap, right output tap.
 const LIST_DIFFUSION: &[usize] = &[
     0x1f, 0x0c, 0x00, 0x04, 0x21, 0x1c, 0x01, 0x05, 0x22, 0x1e, 0x02, 0x06, 0x23, 0x20, 0x03, 0x07,
 ];
-/// Damping line coefficients, 3 per line: feedback, filter, filter.
+/// Damping line coefficients, 3 per line: input, read and previous read gains.
 const LIST_TIME: &[usize] = &[0x5b, 0x5a, 0x59, 0x5e, 0x5d, 0x5c, 0x64, 0x63, 0x62, 0x67, 0x66, 0x65];
 const LIST_DENSITY_ADDRESS: &[usize] = &[0x10, 0x0b, 0x15, 0x0d, 0x18, 0x12, 0x1d, 0x17];
 const LIST_DENSITY_COEFFICIENT: &[usize] = &[
@@ -257,13 +257,15 @@ impl XGReverb {
     /// Writes one damping line's coefficient words.
     fn write_damping(&mut self, index: usize, list: &[usize], offset: usize) {
         let w = &mut self.program.coefficient_words;
-        w[list[offset]] = DAMP_FEEDBACK[index];
-        let filter = if index > 0xca { 0xff } else { DAMP_FILTER[index] };
-        w[list[offset + 1]] = filter;
-        w[list[offset + 2]] = filter;
+        w[list[offset]] = DAMP_INPUT[index];
+        // Both taps of the feedback filter get the same gain
+        let feedback = if index > 0xca { 0xff } else { DAMP_FEEDBACK[index] };
+        w[list[offset + 1]] = feedback;
+        w[list[offset + 2]] = feedback;
     }
 
-    /// Places the diffusion allpasses from the diffusion parameter.
+    /// Places the delay line read and output taps from the diffusion parameter.
+    /// The diffusion spreads the left and right output taps of each line apart.
     fn diffusion(&mut self) {
         let scale = DIFFUSION_SCALE[self.program.param(1) as usize] as i32;
         let row = self.preset.gain * 8;
@@ -457,7 +459,7 @@ impl XGReverb {
         self.write_damping(((extra + base) & 0xff) as usize, LIST_TIME, offset);
     }
 
-    /// Places a diffusion allpass from a room dimension.
+    /// Places a delay line's length and output taps from a room dimension.
     fn room_diffusion(&mut self, step: usize, size: i32, offset: usize) {
         let scale = DIFFUSION_SCALE[self.program.param(1) as usize] as i32;
         let p = &mut self.program;
@@ -475,7 +477,7 @@ impl XGReverb {
         }
     }
 
-    /// Updates one dimension's damping line and allpass, then pushes them.
+    /// Updates one dimension's delay line (damping, length and taps), then pushes it.
     fn room_dimension(&mut self, dimension: usize, step: usize, size: i32, line: usize) {
         self.room_time(dimension, size, line * 3);
         self.room_diffusion(step, size, line * 4);
@@ -544,7 +546,7 @@ impl XGProgram for XGReverb {
         let feedback = c(0x33);
         let (d1a, d1b, d1c, d1d) = (c(0x29), c(0x2a), c(0x2b), c(0x2c));
         let (d2a, d2b, d2c, d2d) = (c(0x38), c(0x39), c(0x3a), c(0x3b));
-        // Damping lines: feedback-filter, input, read
+        // Damping lines: previous read, read and input gains
         let (k0z, k0r, k0i) = (c(0x59), c(0x5a), c(0x5b));
         let (k1z, k1r, k1i) = (c(0x5c), c(0x5d), c(0x5e));
         let (k2z, k2r, k2i) = (c(0x62), c(0x63), c(0x64));

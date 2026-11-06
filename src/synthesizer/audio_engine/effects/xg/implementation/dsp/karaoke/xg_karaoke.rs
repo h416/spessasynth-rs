@@ -21,6 +21,11 @@ const LIST_DELAY: &[usize] = &[0x34, 0x2b, 0x2f];
 const LIST_DENSITY_COEFFICIENT: &[usize] =
     &[0x79, 0x78, 0x77, 0x76, 0x7d, 0x7c, 0x7b, 0x7a, 0xb2, 0xb1, 0xb0, 0xaf, 0xa4, 0xa3, 0xa2, 0xa1];
 const LIST_DENSITY_ADDRESS: &[usize] = &[0x28, 0x25, 0x29, 0x26, 0x3c, 0x37, 0x36, 0x33];
+// Dry/wet and mono input level push lists
+const LIST_DRY: &[usize] = &[0xb9];
+const LIST_WET: &[usize] = &[0xbb];
+const LIST_DRY_WET: &[usize] = &[0xae, 0xac];
+const LIST_MONO_INPUT: &[usize] = &[0x6d, 0x6e];
 
 /// The converter index of the mono input level, which depends on the connection.
 const MONO_INPUT: usize = 16;
@@ -187,9 +192,9 @@ impl XGKaraokeBase {
                 w[0xb9] = w[0xac];
                 w[0xae] = (MIX_WET[mix] as i32 & 0x3_ff) as u16;
                 w[0xbb] = w[0xae];
-                self.push_coefficients_all(&[0xb9]);
-                self.push_coefficients_all(&[0xbb]);
-                self.push_coefficients_all(&[0xae, 0xac]);
+                self.push_coefficients_all(LIST_DRY);
+                self.push_coefficients_all(LIST_WET);
+                self.push_coefficients_all(LIST_DRY_WET);
             }
             10 => {
                 let density = p(self, 10);
@@ -208,7 +213,7 @@ impl XGKaraokeBase {
                 let word = if self.program.insertion { 0xb5 } else { 0x1_6a };
                 self.program.coefficient_words[0x6d] = word;
                 self.program.coefficient_words[0x6e] = word;
-                self.push_coefficients_all(&[0x6d, 0x6e]);
+                self.push_coefficients_all(LIST_MONO_INPUT);
             }
             _ => {}
         }

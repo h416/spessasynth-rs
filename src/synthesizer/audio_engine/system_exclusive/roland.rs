@@ -17,7 +17,7 @@ use crate::synthesizer::types::{
     EffectChangeCallback, EffectKind, GlobalMIDIParameterChangeCallback, SynthProcessorEvent,
 };
 use crate::soundbank::types::MIDISystem;
-use crate::utils::loggin::spessa_synth_info;
+use crate::utils::loggin::{spessa_synth_info, SpessaLog};
 use crate::utils::byte_functions::string::read_binary_string;
 use crate::midi::midi_tools::sysex_data::{DEFAULT_GS_DRUM_MAP, MELODIC_MAP};
 use crate::midi::drum_parameters::UserDrumSetParameterChange;
@@ -587,6 +587,23 @@ impl SynthesizerCore {
                                 sys_ex_not_recognized(syx, "Roland GS");
                             }
                         }
+                    } else if syx[5] == 0x02 {
+                        // Equalizer
+                        if self.system_parameters.gs_equalizer_lock {
+                            return;
+                        }
+                        let a3 = syx[6];
+                        let data = syx[7].min(127);
+                        if !self.gs_equalizer_processor.set_parameter(a3, data) {
+                            SpessaLog::gs_fail("Equalizer", &[a3], "");
+                            return;
+                        }
+                        spessa_synth_info(&format!("GS EQ parameter {}: {}", a3, data));
+                        self.call_event(SynthProcessorEvent::EffectChange(EffectChangeCallback {
+                            effect: EffectKind::Equalizer,
+                            parameter: a3,
+                            value: data as i32,
+                        }));
                     } else if syx[5] == 0x03 {
                         // EFX Parameter
                         if self.system_parameters.gs_insertion_lock {
@@ -646,6 +663,16 @@ impl SynthesizerCore {
                                 };
                                 *field = data;
                                 spessa_synth_info(&format!("GS EFX {}: {}", parameter, data));
+                            }
+
+                            0x1f => {
+                                // Send EQ switch, 0 is off and anything else is on
+                                let on = data != 0;
+                                self.gs_insertion_block.send_eq_switch = on;
+                                spessa_synth_info(&format!(
+                                    "GS EFX Send EQ Switch: {}",
+                                    if on { "ON" } else { "OFF" }
+                                ));
                             }
 
                             _ => {
@@ -858,6 +885,18 @@ impl SynthesizerCore {
                                     if efx { "ON" } else { "OFF" }
                                 ));
                                 self.update_active_gs_effects();
+                            }
+                            0x20 => {
+                                // EQ on/off
+                                let eq = message_value == 1;
+                                self.midi_channels[channel].set_midi_parameter(
+                                    ChannelMidiParameterValue::EqEnabled(eq),
+                                );
+                                spessa_synth_info(&format!(
+                                    "EQ for {}: {}",
+                                    channel,
+                                    if eq { "ON" } else { "OFF" }
+                                ));
                             }
                             _ => {
                                 sys_ex_not_recognized(syx, "Roland GS Patch Part Parameter");

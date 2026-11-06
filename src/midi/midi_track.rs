@@ -13,7 +13,7 @@ pub struct MidiTrack {
     pub name: String,
     /// The MIDI port number used by the track.
     pub port: u32,
-    /// Set of MIDI channels used by the track in the sequence.
+    /// The MIDI channel numbers (0-15) that have note on events in this track.
     pub channels: HashSet<u8>,
     /// All the MIDI messages of this track.
     pub events: Vec<MidiMessage>,

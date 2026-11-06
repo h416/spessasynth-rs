@@ -59,6 +59,13 @@ pub struct ChannelMidiParameter {
     /// Equivalent to: efxAssign
     pub efx_assign: bool,
 
+    /// Indicates whether this channel passes through the GS equalizer (see `DefaultGSEqualizer`).
+    /// Default is `true`, like on the Sound Canvas.
+    /// Channels with `efx_assign` enabled ignore this.
+    /// Their equalizer routing is set by the insertion block's `send_eq_switch` instead.
+    /// Equivalent to: eqEnabled
+    pub eq_enabled: bool,
+
     /// CC1 for GS controller matrix (arbitrary MIDI controller). Default 16.
     /// Equivalent to: cc1
     pub cc1: MidiController,
@@ -121,6 +128,7 @@ pub enum ChannelMidiParameterValue {
     RandomPan(bool),
     AssignMode(u8),
     EfxAssign(bool),
+    EqEnabled(bool),
     Cc1(MidiController),
     Cc2(MidiController),
     DrumMap(u8),
@@ -143,6 +151,7 @@ pub const DEFAULT_CHANNEL_MIDI_PARAMETERS: ChannelMidiParameter = ChannelMidiPar
     random_pan: false,
     assign_mode: 2,
     efx_assign: false,
+    eq_enabled: true,
     cc1: 0x10,
     cc2: 0x11,
     drum_map: 0,
@@ -166,6 +175,7 @@ pub enum ChannelMidiParameterKey {
     RandomPan,
     AssignMode,
     EfxAssign,
+    EqEnabled,
     Cc1,
     Cc2,
     DrumMap,
@@ -175,7 +185,7 @@ pub enum ChannelMidiParameterKey {
 }
 
 /// The number of [`ChannelMidiParameterKey`]s.
-pub const CHANNEL_MIDI_PARAMETER_COUNT: usize = 17;
+pub const CHANNEL_MIDI_PARAMETER_COUNT: usize = 18;
 
 impl ChannelMidiParameterValue {
     /// The parameter this value is for.
@@ -194,6 +204,7 @@ impl ChannelMidiParameterValue {
             V::RandomPan(_) => K::RandomPan,
             V::AssignMode(_) => K::AssignMode,
             V::EfxAssign(_) => K::EfxAssign,
+            V::EqEnabled(_) => K::EqEnabled,
             V::Cc1(_) => K::Cc1,
             V::Cc2(_) => K::Cc2,
             V::DrumMap(_) => K::DrumMap,
@@ -222,6 +233,7 @@ impl ChannelMidiParameter {
             V::RandomPan(self.random_pan),
             V::AssignMode(self.assign_mode),
             V::EfxAssign(self.efx_assign),
+            V::EqEnabled(self.eq_enabled),
             V::Cc1(self.cc1),
             V::Cc2(self.cc2),
             V::DrumMap(self.drum_map),

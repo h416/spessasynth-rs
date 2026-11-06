@@ -16,7 +16,7 @@ cargo run --release --example midi_to_wav -- GeneralUser-GS.sf2 J-cycle.mid J-cy
 
 ## Differences from the original
 
-This is a partial port of [spessasynth_core v4.4.5](https://github.com/spessasus/spessasynth_core/releases/tag/v4.4.5),
+This is a partial port of [spessasynth_core v4.4.8](https://github.com/spessasus/spessasynth_core/releases/tag/v4.4.8),
 ported file-by-file and function-by-function. The following limitations apply:
 
 - **MIDI to WAV offline rendering only** — real-time playback and other features are not included
@@ -26,10 +26,10 @@ ported file-by-file and function-by-function. The following limitations apply:
 
 ## Accuracy
 
-The renderer is verified against the upstream TypeScript spessasynth_core v4.4.5. Rendering the
+The renderer is verified against the upstream TypeScript spessasynth_core v4.4.8. Rendering the
 same MIDI + SoundFont at 48000 Hz and 44100 Hz, every output sample matches the reference within
-**±1 (16-bit)** across the test corpus, including the GS and XG (reverb, chorus, variation and
-insertion) effects — i.e. bit-accurate up to the last-place rounding difference inherent to
+**±1 (16-bit)** across the test corpus, including the GS and XG (reverb, chorus, variation, insertion and
+GS equalizer) effects — i.e. bit-accurate up to the last-place rounding difference inherent to
 f64-vs-f64 float ordering between the two languages. Under 0.02% of samples differ at all, and none
 by more than 1.
 
@@ -53,7 +53,7 @@ cargo run --release --example midi_to_wav -- <soundfont.sf2> <input.mid> <output
 | `-r`, `--sample-rate <hz>` | Output sample rate (default: 44100) |
 | `--no-normalize` | Disable audio normalization |
 | `--no-effects` | Disable reverb/chorus/delay/insertion effects |
-| `--system <name>=<value>` | Set a system parameter (repeatable): `customVibrato`, `drumLock`, `userDrumLock`, `nrpnParamLock` (`true`/`false`), `fineTune`, `keyShift`, `pan`, `gain` (number) |
+| `--system <name>=<value>` | Set a system parameter (repeatable): `customVibrato`, `drumLock`, `userDrumLock`, `nrpnParamLock`, `gs*Lock`/`xg*Lock` (e.g. `gsEqualizerLock`) (`true`/`false`), `fineTune`, `keyShift`, `pan`, `gain`, `reverbGain`, `chorusGain` (number), `interpolationType` (0 linear, 1 nearest, 2 hermite (default), 3 sinc32, 4 sinc128) |
 | `-h`, `--help` | Show help |
 
 ```bash
@@ -104,7 +104,7 @@ fn main() {
 
 ## Credits
 
-- [SpessaSynth](https://github.com/spessasus/SpessaSynth) by spessasus - Original TypeScript implementation (spessasynth_core v4.4.5)
+- [SpessaSynth](https://github.com/spessasus/SpessaSynth) by spessasus - Original TypeScript implementation (spessasynth_core v4.4.8)
 - Rust port by h416
 - Ported with the assistance of [Claude Code](https://claude.ai/code)
 

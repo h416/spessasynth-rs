@@ -141,11 +141,15 @@ enum SendTarget {
 }
 
 /// Computes the LFO value for the given phase.
-/// Both waveforms are at zero and rising at the default start phase of 0.25.
-/// `phase`: the LFO phase, from 0 to 1. `waveform`: 0 for triangle, 1 for sawtooth.
+/// All waveforms are at zero and rising at the default start phase of 0.25.
+/// `phase`: the LFO phase, from 0 to 1. `waveform`: 0 for triangle, 1 for sawtooth, 2 for sine.
 /// Returns the LFO value, from -1 to 1.
 /// Equivalent to: getLfoValue(phase, waveform)
 fn get_lfo_value(phase: f64, waveform: i16) -> f64 {
+    if waveform == 2 {
+        // Sine
+        return (TWO_PI * (phase - 0.25)).sin();
+    }
     if waveform == 1 {
         // Rising sawtooth
         let p = phase + 0.25;
@@ -156,8 +160,9 @@ fn get_lfo_value(phase: f64, waveform: i16) -> f64 {
 }
 
 impl MidiChannel {
-    /// Renders a voice to the stereo output buffer.
-    /// `sample_count` is the only thing needed as the buffers are 0-based.
+    /// Renders a voice into one of the channel's voice send buffers,
+    /// which are later mixed into the stereo output and the effect sends.
+    /// `sample_count` is the number of samples to render (the buffers are 0-based, so no offset is needed).
     /// Equivalent to: renderVoice(voice, timeNow, sampleCount)
     pub fn render_voice(
         &mut self,
@@ -213,17 +218,18 @@ impl MidiChannel {
 
         // MIDI Tuning Standard
         // Use `midiNote` here since it was used for selecting the preset if tuning was active
-        if let Some(preset) = &self.preset {
-            let tuning = core.tunings[preset.program as usize * 128 + voice.midi_note as usize];
-            if tuning != -1.0 {
-                // Tuning is encoded as float
-                // For example: 60.56 means key 60 and 56 cents (or 0.56 semitones)
-                // Override key
-                let tuning = tuning as f64;
-                target_key = tuning.trunc() as i16;
-                // Add microtonal tuning
-                semitones += tuning - target_key as f64;
-            }
+        // The preset can be gone while voices play (a removed bank),
+        // But the patch is always there for us!
+        let program = self.preset.as_ref().map_or(self.patch.program, |p| p.program);
+        let tuning = core.tunings[program as usize * 128 + voice.midi_note as usize];
+        if tuning != -1.0 {
+            // Tuning is encoded as float
+            // For example: 60.56 means key 60 and 56 cents (or 0.56 semitones)
+            // Override key
+            let tuning = tuning as f64;
+            target_key = tuning.trunc() as i16;
+            // Add microtonal tuning
+            semitones += tuning - target_key as f64;
         }
 
         // Portamento

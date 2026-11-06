@@ -4,7 +4,7 @@
 use super::crossfade::Crossfade;
 use super::delay_line::DelayLine;
 use super::delay_memory::DelayMemory;
-use super::first_order_filter::{DC_BLOCKER_HZ, FirstOrderFilter};
+use super::first_order_filter::{DC_BLOCKER_HZ, FirstOrderFilter, damp_corner};
 
 /// The lines of the reverb. Each holds what one stage writes: the pre delay, the diffuser's three allpasses, then per
 /// tank the first allpass, its output (the first delay segment), the second allpass and its output (the second
@@ -114,7 +114,7 @@ const LINE_LENGTHS: [f64; 12] = [
 ];
 
 /// How many host samples later the whole forward path runs, and how much earlier the outputs read, so that even the
-/// shortest pre delay is read band-limited (the interpolator needs 7 newer samples). The outputs read 141 32 kHz
+/// shortest pre delay is read band-limited (the interpolator needs 7 newer samples). The outputs read 140 32 kHz
 /// samples or more, so they have room.
 const LOOKAHEAD: f64 = 8.0;
 
@@ -123,13 +123,6 @@ const ALLPASS: f64 = 0.5;
 
 /// The pre delay line's write and read gains.
 const PRE_GAIN: f64 = (127.0 / 128.0) * (127.0 / 128.0);
-
-/// The corner of the hardware's one-pole low pass `(1 - B) x + B y[n-1]` at 32 kHz (-3 dB, the inverse of
-/// `FirstOrderFilter::set_damp`). `pole` is B.
-fn damp_corner(pole: f64) -> f64 {
-    let k = (1.0 + pole * pole) / (2.0 * pole);
-    ((2.0 - k).acos() * 32_000.0) / (2.0 * std::f64::consts::PI)
-}
 
 /// The Reverb: a mono input through a DC blocker and an input low pass into a pre delay, a diffuser of three
 /// Schroeder allpasses and a delay, then two independent tanks (allpass, delay, allpass, delay, a damping low pass

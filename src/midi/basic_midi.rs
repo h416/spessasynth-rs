@@ -324,11 +324,21 @@ impl BasicMidi {
                         x if x == midi_message_types::CONTROLLER_CHANGE => {
                             if !data.is_empty() {
                                 match data[0] {
-                                    // Touhou / RPG Maker loop start.
-                                    // For Touhou and RPG Maker, the data value must be 0.
-                                    2 | 111 => {
+                                    // Touhou
+                                    2 => {
+                                        // For Touhou, the data value must be 0.
                                         if data.get(1).copied().unwrap_or(0) == 0 {
                                             loop_start = Some(ticks);
+                                        }
+                                    }
+                                    // RPG Maker
+                                    111 => {
+                                        // The data value must be 0 here too.
+                                        if data.get(1).copied().unwrap_or(0) == 0 {
+                                            loop_start = Some(ticks);
+                                            // RPG Maker players seek straight back to the marker.
+                                            // Nothing is reset or replayed (see EasyRPG Player and mkxp-z)
+                                            loop_type = MidiLoopType::Soft;
                                         }
                                     }
                                     // EMIDI/XMI loop start (cc116) and EMIDI global
