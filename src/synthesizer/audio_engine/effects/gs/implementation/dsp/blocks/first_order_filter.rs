@@ -16,6 +16,14 @@ pub fn prewarp(frequency: f64, sample_rate: f64) -> f64 {
     ((std::f64::consts::PI * frequency.min(sample_rate * 0.49)) / sample_rate).tan()
 }
 
+/// The corner of the hardware's one-pole low pass `(1 - B) x + B y[n-1]` at 32 kHz (-3 dB, the inverse of
+/// `FirstOrderFilter::set_damp`). `pole` is B.
+/// Equivalent to: dampCorner(pole)
+pub fn damp_corner(pole: f64) -> f64 {
+    let k = (1.0 + pole * pole) / (2.0 * pole);
+    ((2.0 - k).acos() * 32_000.0) / (2.0 * std::f64::consts::PI)
+}
+
 /// A first order section, `y = b0 x + b1 x[n-1] + a1 y[n-1]`, designed with the bilinear transform.
 /// The tone filters, the shelves and the DC blockers of the Sound Canvas are all this section.
 #[derive(Clone)]

@@ -187,7 +187,7 @@ impl BasicPreset {
         crate::soundbank::basic_soundbank::midi_patch::matches(&self_patch, patch)
     }
 
-    /// Returns the MIDI string representation (bankLSB:bankMSB:program or DRUM:program).
+    /// Returns the MIDI string representation (bankLSB:bankMSB:program or DRUM:bankMSB:bankLSB:program).
     /// Equivalent to: public toMIDIString()
     pub fn to_midi_string(&self) -> String {
         to_midi_string(&MidiPatch {
@@ -862,7 +862,7 @@ mod tests {
         let mut p = BasicPreset::new();
         p.is_gm_gs_drum = true;
         p.program = 0;
-        assert_eq!(p.to_midi_string(), "DRUM:0");
+        assert_eq!(p.to_midi_string(), "DRUM:0:0:0");
     }
 
     #[test]

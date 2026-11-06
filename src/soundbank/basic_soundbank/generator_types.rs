@@ -100,9 +100,9 @@ pub mod generator_types {
     pub const FADE_VIB_LFO: i16 = 70;
     // Timecents, mod LFO depth ramps in after its delay. -12000 and below = no fade
     pub const FADE_MOD_LFO: i16 = 71;
-    // 0 = triangle, 1 = sawtooth
+    // 0 = triangle, 1 = sawtooth, 2 = sine
     pub const VIB_LFO_WAVEFORM: i16 = 72;
-    // 0 = triangle, 1 = sawtooth
+    // 0 = triangle, 1 = sawtooth, 2 = sine
     pub const MOD_LFO_WAVEFORM: i16 = 73;
     // Degrees, added to the start phase of the vibrato LFO
     pub const VIB_LFO_START_PHASE: i16 = 74;
@@ -165,20 +165,13 @@ pub fn is_instrument_only_generator(generator_type: GeneratorType) -> bool {
 }
 
 /// Min/max/default/nrpn-scale for a single generator.
-/// Equivalent to: interface GeneratorLimit { min, max, def, nrpn, presetMin?, presetMax? }
+/// Equivalent to: interface GeneratorLimit { min, max, def, nrpn }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GeneratorLimit {
     pub min: i32,
     pub max: i32,
     pub def: i32,
     pub nrpn: u8,
-    /// Minimum value of this generator in a preset zone.
-    /// Preset generators are offsets added to the instrument, so they can go below the instrument range.
-    /// If not set, it is the same as `min`.
-    pub preset_min: Option<i32>,
-    /// Maximum value of this generator in a preset zone.
-    /// If not set, it is the same as `max`.
-    pub preset_max: Option<i32>,
 }
 
 impl GeneratorLimit {
@@ -188,8 +181,6 @@ impl GeneratorLimit {
             max,
             def,
             nrpn,
-            preset_min: None,
-            preset_max: None,
         }
     }
 }
@@ -197,28 +188,6 @@ impl GeneratorLimit {
 /// Shorthand for Some(GeneratorLimit::new(...)) used in the static table below.
 const fn lim(min: i32, max: i32, def: i32, nrpn: u8) -> Option<GeneratorLimit> {
     Some(GeneratorLimit::new(min, max, def, nrpn))
-}
-
-/// Like [`lim`], with `presetMin` and `presetMax`.
-const fn limp(
-    min: i32,
-    max: i32,
-    def: i32,
-    nrpn: u8,
-    preset_min: i32,
-    preset_max: i32,
-) -> Option<GeneratorLimit> {
-    let mut l = GeneratorLimit::new(min, max, def, nrpn);
-    l.preset_min = Some(preset_min);
-    l.preset_max = Some(preset_max);
-    Some(l)
-}
-
-/// Like [`lim`], with `presetMin` only.
-const fn limpmin(min: i32, max: i32, def: i32, nrpn: u8, preset_min: i32) -> Option<GeneratorLimit> {
-    let mut l = GeneratorLimit::new(min, max, def, nrpn);
-    l.preset_min = Some(preset_min);
-    Some(l)
 }
 
 /// Limit for the `invalid` generator type (index -1, cannot live in the array below).
@@ -242,31 +211,31 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; GENERATORS_AMOUNT] = [
     // 4  startAddrsCoarseOffset
     lim(0, 32_768, 0, 1),
     // 5  modLfoToPitch
-    limp(-12_000, 12_000, 0, 2, -24_000, 24_000),
+    lim(-12_000, 12_000, 0, 2),
     // 6  vibLfoToPitch
-    limp(-12_000, 12_000, 0, 2, -24_000, 24_000),
+    lim(-12_000, 12_000, 0, 2),
     // 7  modEnvToPitch
-    limp(-12_000, 12_000, 0, 2, -24_000, 24_000),
+    lim(-12_000, 12_000, 0, 2),
     // 8  initialFilterFc
-    limp(1_500, 13_500, 13_500, 2, -21_000, 21_000),
+    lim(1_500, 13_500, 13_500, 2),
     // 9  initialFilterQ
-    limpmin(0, 960, 0, 1, -960),
+    lim(0, 960, 0, 1),
     // 10 modLfoToFilterFc
-    limp(-12_000, 12_000, 0, 2, -24_000, 24_000),
+    lim(-12_000, 12_000, 0, 2),
     // 11 modEnvToFilterFc
-    limp(-12_000, 12_000, 0, 2, -24_000, 24_000),
+    lim(-12_000, 12_000, 0, 2),
     // 12 endAddrsCoarseOffset
     lim(-32_768, 32_768, 0, 1),
     // 13 modLfoToVolume
-    limp(-960, 960, 0, 1, -1_920, 1_920),
+    lim(-960, 960, 0, 1),
     // 14 (unused1, removed)
     None,
     // 15 chorusEffectsSend
-    limpmin(0, 1_000, 0, 1, -1_000),
+    lim(0, 1_000, 0, 1),
     // 16 reverbEffectsSend
-    limpmin(0, 1_000, 0, 1, -1_000),
+    lim(0, 1_000, 0, 1),
     // 17 pan
-    limp(-500, 500, 0, 1, -1_000, 1_000),
+    lim(-500, 500, 0, 1),
     // 18 (unused2, removed)
     None,
     // 19 (unused3, removed)
@@ -274,45 +243,45 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; GENERATORS_AMOUNT] = [
     // 20 (unused4, removed)
     None,
     // 21 delayModLFO
-    limp(-12_000, 5_000, -12_000, 2, -21_000, 21_000),
+    lim(-12_000, 5_000, -12_000, 2),
     // 22 freqModLFO
-    limp(-16_000, 4_500, 0, 4, -21_000, 21_000),
+    lim(-16_000, 4_500, 0, 4),
     // 23 delayVibLFO
-    limp(-12_000, 5_000, -12_000, 2, -21_000, 21_000),
+    lim(-12_000, 5_000, -12_000, 2),
     // 24 freqVibLFO
-    limp(-16_000, 4_500, 0, 4, -21_000, 21_000),
+    lim(-16_000, 4_500, 0, 4),
     // 25 delayModEnv (-32768 = instant, this is done to prevent click for lowpass)
-    limp(-32_768, 5_000, -32_768, 2, -21_000, 21_000),
+    lim(-32_768, 5_000, -32_768, 2),
     // 26 attackModEnv
-    limp(-32_768, 8_000, -32_768, 2, -21_000, 21_000),
+    lim(-32_768, 8_000, -32_768, 2),
     // 27 holdModEnv
-    limp(-12_000, 5_000, -12_000, 2, -21_000, 21_000),
+    lim(-12_000, 5_000, -12_000, 2),
     // 28 decayModEnv
-    limp(-12_000, 8_000, -12_000, 2, -21_000, 21_000),
+    lim(-12_000, 8_000, -12_000, 2),
     // 29 sustainModEnv
-    limpmin(0, 1_000, 0, 1, -1_000),
+    lim(0, 1_000, 0, 1),
     // 30 releaseModEnv
-    limp(-12_000, 8_000, -12_000, 2, -21_000, 21_000),
+    lim(-12_000, 8_000, -12_000, 2),
     // 31 keyNumToModEnvHold
-    limp(-1_200, 1_200, 0, 1, -2_400, 2_400),
+    lim(-1_200, 1_200, 0, 1),
     // 32 keyNumToModEnvDecay
-    limp(-1_200, 1_200, 0, 1, -2_400, 2_400),
+    lim(-1_200, 1_200, 0, 1),
     // 33 delayVolEnv
-    limp(-12_000, 5_000, -12_000, 2, -21_000, 21_000),
+    lim(-12_000, 5_000, -12_000, 2),
     // 34 attackVolEnv
-    limp(-12_000, 8_000, -12_000, 2, -21_000, 21_000),
+    lim(-12_000, 8_000, -12_000, 2),
     // 35 holdVolEnv
-    limp(-12_000, 5_000, -12_000, 2, -21_000, 21_000),
+    lim(-12_000, 5_000, -12_000, 2),
     // 36 decayVolEnv
-    limp(-12_000, 8_000, -12_000, 2, -21_000, 21_000),
+    lim(-12_000, 8_000, -12_000, 2),
     // 37 sustainVolEnv
-    limpmin(0, 1_440, 0, 1, -1_440),
+    lim(0, 1_440, 0, 1),
     // 38 releaseVolEnv
-    limp(-12_000, 8_000, -12_000, 2, -21_000, 21_000),
+    lim(-12_000, 8_000, -12_000, 2),
     // 39 keyNumToVolEnvHold
-    limp(-1_200, 1_200, 0, 1, -2_400, 2_400),
+    lim(-1_200, 1_200, 0, 1),
     // 40 keyNumToVolEnvDecay
-    limp(-1_200, 1_200, 0, 1, -2_400, 2_400),
+    lim(-1_200, 1_200, 0, 1),
     // 41 instrument (non-value generator)
     lim(0, 0, 0, 0),
     // 42 (reserved1, removed)
@@ -328,15 +297,15 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; GENERATORS_AMOUNT] = [
     // 47 velocity
     lim(-1, 127, -1, 1),
     // 48 initialAttenuation
-    limpmin(0, 1_440, 0, 1, -1_440),
+    lim(0, 1_440, 0, 1),
     // 49 (reserved2, removed)
     None,
     // 50 endloopAddrsCoarseOffset
     lim(-32_768, 32_768, 0, 1),
     // 51 coarseTune
-    limp(-120, 120, 0, 1, -240, 240),
+    lim(-120, 120, 0, 1),
     // 52 fineTune
-    limp(-12_700, 12_700, 0, 1, -198, 198),
+    lim(-12_700, 12_700, 0, 1),
     // 53 sampleID (non-value generator)
     lim(0, 0, 0, 0),
     // 54 sampleModes
@@ -344,9 +313,9 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; GENERATORS_AMOUNT] = [
     // 55 (reserved3, removed)
     None,
     // 56 scaleTuning
-    limpmin(0, 1_200, 100, 1, -1_200),
+    lim(0, 1_200, 100, 1),
     // 57 exclusiveClass
-    lim(0, 99_999, 0, 0),
+    lim(0, 32_767, 0, 0),
     // 58 overridingRootKey
     lim(-1, 127, -1, 0),
     // 59 (unused5, removed)
@@ -376,9 +345,9 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; GENERATORS_AMOUNT] = [
     // 71 fadeModLFO (SFE)
     lim(-12_000, 5_000, -12_000, 2),
     // 72 vibLfoWaveform (SFE)
-    lim(0, 1, 0, 0),
+    lim(0, 2, 0, 0),
     // 73 modLfoWaveform (SFE)
-    lim(0, 1, 0, 0),
+    lim(0, 2, 0, 0),
     // 74 vibLfoStartPhase (SFE)
     lim(0, 360, 0, 1),
     // 75 modLfoStartPhase (SFE)
@@ -551,7 +520,7 @@ mod tests {
     #[test]
     fn test_limits_exclusive_class() {
         let lim = GENERATOR_LIMITS[57].unwrap();
-        assert_eq!(lim.max, 99_999);
+        assert_eq!(lim.max, 32_767);
         assert_eq!(lim.nrpn, 0);
     }
 

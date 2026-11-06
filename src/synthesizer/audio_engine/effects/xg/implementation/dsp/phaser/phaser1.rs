@@ -6,6 +6,13 @@ use super::super::xg_dsp_tables::{PAN_LEFT, PAN_RIGHT};
 use super::super::xg_variation_program::variation_layout;
 use super::xg_phaser::{XGPhaserBase, XGPhaserKind};
 
+// Dry/wet and input mix push lists
+const LIST_DRY_LEFT: &[usize] = &[0xa2];
+const LIST_MIX_RIGHT: &[usize] = &[0xa6, 0xa7];
+const LIST_WET_SECOND: &[usize] = &[0xa4];
+const LIST_WET_FOURTH: &[usize] = &[0xa5];
+const LIST_INPUT_MIX: &[usize] = &[0x84, 0x85];
+
 const PARAMETER_RANGES: XGParameterRanges =
     &[(3, 1, 127), (5, 8, 40), (6, 52, 76), (7, 28, 58), (8, 52, 76), (10, 6, 10)];
 
@@ -68,14 +75,14 @@ pub(super) fn convert(d: &mut XGPhaserBase, param: usize) {
             w[0xa2] = to_u16(PAN_LEFT[mix] as i32);
             w[0xa6] = w[0xa2];
             w[0xa7] = to_u16(PAN_RIGHT[mix] as i32);
-            d.push_coefficients_all(&[0xa2]);
-            d.push_coefficients_all(&[0xa6, 0xa7]);
+            d.push_coefficients_all(LIST_DRY_LEFT);
+            d.push_coefficients_all(LIST_MIX_RIGHT);
             if p(d, 10) < 9 {
                 d.program.coefficient_words[0xa4] = to_u16(PAN_RIGHT[mix] as i32);
-                d.push_coefficients_all(&[0xa4]);
+                d.push_coefficients_all(LIST_WET_SECOND);
             } else {
                 d.program.coefficient_words[0xa5] = to_u16(PAN_RIGHT[mix] as i32);
-                d.push_coefficients_all(&[0xa5]);
+                d.push_coefficients_all(LIST_WET_FOURTH);
             }
         }
         10 => {
@@ -99,7 +106,7 @@ pub(super) fn convert(d: &mut XGPhaserBase, param: usize) {
             let word = if d.program.insertion { 0x1_00 } else { 0x2_00 };
             d.program.coefficient_words[0x84] = word;
             d.program.coefficient_words[0x85] = word;
-            d.push_coefficients_all(&[0x84, 0x85]);
+            d.push_coefficients_all(LIST_INPUT_MIX);
         }
         _ => {}
     }

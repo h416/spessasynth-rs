@@ -41,12 +41,12 @@ const EFFECT_MODULATOR_TRANSFORM_MULTIPLIER: f32 = 1000.0 / 200.0;
 ///
 /// Equivalent to: class Voice
 pub struct Voice {
-    /// All three wavetable oscillators: [Linear, Nearest, Hermite].
+    /// All wavetable oscillators: [Linear, Nearest, Hermite, Sinc32, Sinc128].
     /// Indexed by `oscillator_type`.
     /// Equivalent to: oscillators: Record<InterpolationType, WavetableOscillator>
-    pub oscillators: [WavetableOscillator; 3],
+    pub oscillators: [WavetableOscillator; 5],
 
-    /// Index of the currently active oscillator (0 = Linear, 1 = Nearest, 2 = Hermite).
+    /// Index of the currently active oscillator (0 = Linear, 1 = Nearest, 2 = Hermite, 3 = Sinc32, 4 = Sinc128).
     /// Mirrors the `wavetable` reference in TypeScript: `this.wavetable = this.oscillators[type]`.
     pub oscillator_type: u8,
 
@@ -245,6 +245,8 @@ impl Voice {
                 WavetableOscillator::new(interpolation_types::LINEAR),
                 WavetableOscillator::new(interpolation_types::NEAREST_NEIGHBOR),
                 WavetableOscillator::new(interpolation_types::HERMITE),
+                WavetableOscillator::new(interpolation_types::SINC32),
+                WavetableOscillator::new(interpolation_types::SINC128),
             ],
             oscillator_type: DEFAULT_GLOBAL_SYSTEM_PARAMETERS.interpolation_type,
             filter: LowpassFilter::new(sample_rate),
@@ -534,7 +536,7 @@ mod tests {
     #[test]
     fn test_new_oscillator_count() {
         let v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
-        assert_eq!(v.oscillators.len(), 3);
+        assert_eq!(v.oscillators.len(), 5);
     }
 
     #[test]

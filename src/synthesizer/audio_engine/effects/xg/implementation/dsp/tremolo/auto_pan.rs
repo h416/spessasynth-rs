@@ -6,6 +6,9 @@ use super::super::xg_stereo_variation_program::XGStereoVariationProgram;
 use super::super::xg_variation_program::variation_layout;
 use super::xg_tremolo::{XGTremoloBase, XGTremoloKind, LIST_SHAPE_LEFT, LIST_SHAPE_RIGHT};
 
+// Output level push list
+const LIST_OUTPUT: &[usize] = &[0xb4, 0xb9];
+
 const PARAMETER_RANGES: XGParameterRanges =
     &[(3, 0, 5), (5, 8, 40), (6, 52, 76), (7, 28, 58), (8, 52, 76)];
 
@@ -105,7 +108,7 @@ pub(super) fn convert(d: &mut XGTremoloBase, param: usize) {
             let out = d.output_word(if d.program.insertion { 0x1_6a } else { 0x2_d4 });
             d.program.coefficient_words[0xb4] = out;
             d.program.coefficient_words[0xb9] = out;
-            d.push_coefficients_all(&[0xb4, 0xb9]);
+            d.push_coefficients_all(LIST_OUTPUT);
         }
         _ => {}
     }

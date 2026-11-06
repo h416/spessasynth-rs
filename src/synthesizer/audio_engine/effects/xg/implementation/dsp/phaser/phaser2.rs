@@ -6,6 +6,10 @@ use super::super::xg_dsp_tables::{PAN_LEFT, PAN_RIGHT};
 use super::super::xg_variation_program::variation_layout;
 use super::xg_phaser::{XGPhaserBase, XGPhaserKind};
 
+// Dry/wet push lists
+const LIST_MIX_LEFT: &[usize] = &[0xa2, 0xa3];
+const LIST_MIX_RIGHT: &[usize] = &[0xa6, 0xa7];
+
 const PARAMETER_RANGES: XGParameterRanges =
     &[(3, 1, 127), (5, 8, 40), (6, 52, 76), (7, 28, 58), (8, 52, 76), (10, 3, 5), (12, 4, 124)];
 
@@ -59,8 +63,8 @@ pub(super) fn convert(d: &mut XGPhaserBase, param: usize) {
             w[0xa6] = w[0xa2];
             w[0xa3] = to_u16(PAN_RIGHT[mix] as i32);
             w[0xa7] = w[0xa3];
-            d.push_coefficients_all(&[0xa2, 0xa3]);
-            d.push_coefficients_all(&[0xa6, 0xa7]);
+            d.push_coefficients_all(LIST_MIX_LEFT);
+            d.push_coefficients_all(LIST_MIX_RIGHT);
         }
         10 => {
             // Both chains take the third, fourth or fifth stage

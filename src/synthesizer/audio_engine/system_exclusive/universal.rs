@@ -235,9 +235,10 @@ impl SynthesizerCore {
                         // Read the name
                         let tuning_name = read_binary_string(syx, 16, current_message_index);
                         current_message_index += 16;
-                        if syx.len() < 384 {
+                        // 21 header bytes and 3 bytes for each of the 128 notes
+                        if syx.len() < 405 {
                             spessa_synth_warn(&format!(
-                                "The Bulk Tuning Dump is too short! ({} bytes, at least 384 are expected)",
+                                "The Bulk Tuning Dump is too short! ({} bytes, at least 405 are expected)",
                                 syx.len()
                             ));
                             return;

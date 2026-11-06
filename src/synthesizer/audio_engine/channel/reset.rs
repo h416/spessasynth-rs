@@ -72,10 +72,12 @@ impl MidiChannel {
     /// Portamento has a quirk: for XG the last note is set to 60, for others it
     /// is set to none (-1), so no portamento happens on the first note-on.
     ///
-    /// Equivalent to: the inline `lastPortamentoNote` reset in `resetChannelInternal()`
+    /// Equivalent to: the inline `lastPortamentoNote`/`portamentoForce` reset in `resetChannelInternal()`
     fn reset_portamento(&mut self, current_system: MIDISystem) {
         let ch_system = self.channel_system(current_system);
         self.last_portamento_note = if ch_system == MIDISystem::Xg { 60 } else { -1 };
+        // A pending CC 84 glide should not survive the reset
+        self.portamento_force = false;
     }
 
     /// Resets all controllers to their default values (full reset).
@@ -160,6 +162,9 @@ impl MidiChannel {
         // Clear the insertion effect assignment (TS: setMIDIParameter("efxAssign", false)).
         // `update_active_gs_effects` derives `gs_insertion_active` from this flag.
         self.set_midi_parameter(ChannelMidiParameterValue::EfxAssign(false));
+        self.set_midi_parameter(ChannelMidiParameterValue::EqEnabled(
+            DEFAULT_CHANNEL_MIDI_PARAMETERS.eq_enabled,
+        ));
 
         // Restore poly mode (the lock is `lockedMIDIParameters.polyMode`, checked in
         // `set_midi_parameter`).

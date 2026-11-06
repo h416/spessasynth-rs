@@ -1,7 +1,7 @@
 //! Plays back raw audio data at an arbitrary playback rate.
 //! Ported from: src/synthesizer/audio_engine/voice/wavetable_oscillator/wavetable_oscillator.ts
 //!
-//! TS has one subclass per interpolation type (`linear.ts`, `nearest.ts`, `hermite.ts`);
+//! TS has one subclass per interpolation type (`linear.ts`, `nearest.ts`, `hermite.ts`, `sinc.ts`);
 //! Rust keeps a single struct and dispatches on `interpolation_type`. The per-type
 //! `process` bodies live in the sibling files of the same names.
 use crate::synthesizer::enums::{InterpolationType, interpolation_types};
@@ -36,9 +36,13 @@ pub struct WavetableOscillator {
     /// Equivalent to: cursor
     pub cursor: f64,
     /// Whether the cursor has wrapped around the loop at least once.
-    /// Only the hermite interpolator reads it (for the point before the cursor).
+    /// Only the hermite and sinc interpolators read it (for the points before the cursor).
     /// Equivalent to: hasLooped
     pub has_looped: bool,
+    /// The sinc interpolators' points around the cursor, gathered here when they need wrapping
+    /// around the loop or are outside the sample. Sized on the first sinc render.
+    /// Equivalent to: SincOscillator.scratch
+    pub(super) scratch: Vec<f32>,
 }
 
 impl WavetableOscillator {
@@ -55,6 +59,7 @@ impl WavetableOscillator {
             end: 0.0,
             cursor: 0.0,
             has_looped: false,
+            scratch: Vec::new(),
         }
     }
 
@@ -77,6 +82,9 @@ impl WavetableOscillator {
             }
             interpolation_types::HERMITE => {
                 self.process_hermite(sample_count, tuning_ratio, output_buffer)
+            }
+            interpolation_types::SINC32 | interpolation_types::SINC128 => {
+                self.process_sinc(sample_count, tuning_ratio, output_buffer)
             }
             // Default: LINEAR (interpolation_types::LINEAR == 0)
             _ => self.process_linear(sample_count, tuning_ratio, output_buffer),

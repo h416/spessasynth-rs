@@ -33,6 +33,8 @@ pub enum AnalyzedMidiMessage {
     ReverbParam,
     ChorusParam,
     DelayParam,
+    /// Equivalent to: { type: "GS Equalizer Param", ... }
+    EqualizerParam,
     VariationParam,
     InsertionParam,
     DrumsOn { channel: u8, is_drum: bool },
@@ -49,6 +51,9 @@ pub enum AnalyzedMidiMessage {
     /// panning rather than a pan position, so it is a channel MIDI parameter, not a CC.
     /// Equivalent to: { type: "Channel MIDI Param", parameter: "randomPan", value: true }
     RandomPan { channel: u8 },
+    /// The GS part EQ switch.
+    /// Equivalent to: { type: "Channel MIDI Param", parameter: "eqEnabled", value }
+    EqEnabled { channel: u8, value: bool },
 }
 
 /// Safe byte access: TypeScript's `arr[outOfRangeIndex]` yields `undefined`, which behaves as 0
@@ -426,6 +431,11 @@ impl MidiUtils {
                     controller: midi_controllers::REVERB_DEPTH,
                     value: data,
                 },
+                0x14 => AnalyzedMidiMessage::ControllerChange {
+                    channel,
+                    controller: midi_controllers::VARIATION_DEPTH,
+                    value: data,
+                },
                 0x15 => AnalyzedMidiMessage::ControllerChange {
                     channel,
                     controller: midi_controllers::VIBRATO_RATE,
@@ -564,6 +574,15 @@ impl MidiUtils {
             if (0x50..=0x5a).contains(&a3) {
                 return vec![AnalyzedMidiMessage::DelayParam];
             }
+        }
+
+        // Equalizer
+        if a2 == 0x02 {
+            return vec![if a3 <= 0x03 {
+                AnalyzedMidiMessage::EqualizerParam
+            } else {
+                AnalyzedMidiMessage::Other
+            }];
         }
 
         // EFX Parameter
@@ -709,6 +728,10 @@ impl MidiUtils {
                         value: data,
                     }
                 }
+                0x20 => AnalyzedMidiMessage::EqEnabled {
+                    channel,
+                    value: data == 1,
+                },
                 0x22 => AnalyzedMidiMessage::InsertionParam,
                 _ => AnalyzedMidiMessage::Other,
             }];

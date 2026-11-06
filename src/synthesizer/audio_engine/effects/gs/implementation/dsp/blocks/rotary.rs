@@ -132,7 +132,7 @@ impl Rotary {
 
     /// `horn` is the horn rotor's ramp time constant in seconds, `drum` the drum rotor's.
     pub fn set_acceleration(&mut self, horn: f64, drum: f64) {
-        // The ramps' step per 32 kHz sample is 1/32000 of the time constant
+        // The ramps' step per 32 kHz sample is 1 / (32000 x the time constant)
         let per_sample = 32_000.0 / self.sample_rate;
         self.horn_ramp = 1.0 - (1.0 - 1.0 / (32_000.0 * horn)).powf(per_sample);
         self.drum_ramp = 1.0 - (1.0 - 1.0 / (32_000.0 * drum)).powf(per_sample);

@@ -10,6 +10,9 @@ use super::super::xg_variation_program::{XGVariationPreset, XGVariationState};
 use super::distortion_tables::OUTPUT_LEVEL;
 use super::{amp_simulator, distortion};
 
+// Dry/wet push list
+const LIST_DRY_WET: &[usize] = &[0xad, 0xb0, 0xb1, 0xb3];
+
 // Output filter push lists: low pass (b0, b1, a1), low shelf (b0, b1, a1), mid (b0, b1, b2, a1, a2)
 pub const LIST_LOW_PASS: &[usize] = &[0xa3, 0xa2, 0xa4];
 pub const LIST_SHELF: &[usize] = &[0xab, 0xaa, 0xac];
@@ -180,7 +183,7 @@ impl XGDistortionBase {
         w[0xb1] = w[0xad];
         w[0xb0] = to_u16((VARIATION_GAIN * wet) >> 6);
         w[0xb3] = w[0xb0];
-        self.push_coefficients_all(&[0xad, 0xb0, 0xb1, 0xb3]);
+        self.push_coefficients_all(LIST_DRY_WET);
     }
 }
 

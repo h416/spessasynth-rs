@@ -86,7 +86,8 @@ pub struct TempoChange {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Loop type.
-/// - `Soft`: Immediately jumps the playback position to the loop start point (Touhou / GameMaker style).
+/// - `Soft`: Immediately jumps the playback position to the loop start point.
+///   Used for Touhou loop points (CC 2 and CC 4) and RPG Maker loop points (CC 111).
 /// - `Hard`: Reprocesses messages up to the loop start to restore the synth state (default).
 ///
 /// Equivalent to: MIDILoop.type ("soft" | "hard")

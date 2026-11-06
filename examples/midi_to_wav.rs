@@ -72,10 +72,12 @@ fn print_usage() {
     println!("  --no-effects         Disable reverb/chorus/delay/insertion effects");
     println!("  --system <name>=<value>  Set a system parameter (repeatable):");
     println!("                       customVibrato, drumLock, userDrumLock, nrpnParamLock,");
-    println!("                       gsReverbLock, gsChorusLock, gsDelayLock, gsInsertionLock,");
+    println!("                       gsReverbLock, gsChorusLock, gsDelayLock, gsEqualizerLock,");
+    println!("                       gsInsertionLock,");
     println!("                       xgReverbLock, xgChorusLock, xgVariationLock, xgInsertionLock,");
     println!("                       pitchBasedKeyShift (true|false)");
-    println!("                       fineTune, keyShift, pan, gain (number)");
+    println!("                       fineTune, keyShift, pan, gain, reverbGain, chorusGain (number)");
+    println!("                       interpolationType (0 linear, 1 nearest, 2 hermite, 3 sinc32, 4 sinc128)");
 }
 
 fn main() {
@@ -161,6 +163,7 @@ fn main() {
                         "gsReverbLock" => GlobalSystemParameterChange::GsReverbLock(b()?),
                         "gsChorusLock" => GlobalSystemParameterChange::GsChorusLock(b()?),
                         "gsDelayLock" => GlobalSystemParameterChange::GsDelayLock(b()?),
+                        "gsEqualizerLock" => GlobalSystemParameterChange::GsEqualizerLock(b()?),
                         "gsInsertionLock" => GlobalSystemParameterChange::GsInsertionLock(b()?),
                         "xgReverbLock" => GlobalSystemParameterChange::XgReverbLock(b()?),
                         "xgChorusLock" => GlobalSystemParameterChange::XgChorusLock(b()?),
@@ -173,6 +176,11 @@ fn main() {
                         "keyShift" => GlobalSystemParameterChange::KeyShift(f()?),
                         "pan" => GlobalSystemParameterChange::Pan(f()?),
                         "gain" => GlobalSystemParameterChange::Gain(f()?),
+                        "reverbGain" => GlobalSystemParameterChange::ReverbGain(f()?),
+                        "chorusGain" => GlobalSystemParameterChange::ChorusGain(f()?),
+                        "interpolationType" => {
+                            GlobalSystemParameterChange::InterpolationType(value.parse::<u8>().ok()?)
+                        }
                         _ => return None,
                     })
                 });

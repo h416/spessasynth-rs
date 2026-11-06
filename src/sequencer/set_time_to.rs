@@ -212,10 +212,8 @@ impl SpessaSynthSequencer {
                                     continue;
                                 }
                                 ensure_channel_status(&mut channels, channel);
-                                // Empty tracks cannot controller change
-                                if empty_track {
-                                    continue;
-                                }
+                                // No empty track check here. The playback always sends SysEx
+                                // Testcase: (XG2000EX)MA09_Necrofantasia(KR.Palto47)
 
                                 if controller == midi_controllers::RESET_ALL_CONTROLLERS {
                                     self.seek_reset_all_controllers(&mut channels, channel);

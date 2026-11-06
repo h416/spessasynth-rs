@@ -176,7 +176,7 @@ pub fn cutoff(value: u8) -> f64 {
 /// One 32 kHz sample in ms, the shared stage's step between the left and the right side.
 pub const STEP_MS: f64 = 1.0 / 32.0;
 
-/// The longest swing of `modulation_depth` (depth 127), in ms.
+/// A bound on the swing of `modulation_depth` (12.4 ms at depth 127), in ms, for sizing the lines.
 pub const SWING_MS: f64 = 12.5;
 
 /// The modulation depth of the choruses and flangers: the swing of the delay in ms, 0 to 12.4 ms.

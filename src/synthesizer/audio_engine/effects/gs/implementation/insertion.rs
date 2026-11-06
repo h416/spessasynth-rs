@@ -1,5 +1,6 @@
 //! The default GS insertion (EFX) block: owns one processor per EFX type,
-//! mixes the selected one into the output and the effect sends.
+//! mixes the selected one into the output (through the equalizer unless the send EQ switch is off)
+//! and the effect sends.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/insertion.ts
 //!              src/synthesizer/audio_engine/effects/gs/interface/gs_insertion_block.ts
 
@@ -24,6 +25,9 @@ const DEFAULT_CONTROL_DEPTH: u8 = 64;
 
 /// The offset an EFX control source adds to its parameter, like Sound Canvas VA computes it:
 /// `(depth - 64) * value / 63`, truncated and stored in a signed byte. Depth 0 counts as 1 (both are -100%).
+/// The byte wraps without a clamp, like in SCCore.dll: pitch bend fully down (-128) at depth 0 or 1 gives +128,
+/// which is stored as -128, so the offset flips sign there.
+/// Returns the signed offset (-128 to 127).
 /// Equivalent to: controlOffset(depth, value)
 fn control_offset(depth: u8, value: i8) -> i8 {
     let amount = (if depth == 0 { 1 } else { depth as i32 }) - 64;
@@ -48,6 +52,8 @@ pub struct GSInsertionBlockSnapshot {
     pub send_level_to_chorus: u8,
     /// Equivalent to: sendLevelToDelay
     pub send_level_to_delay: u8,
+    /// Equivalent to: sendEQSwitch
+    pub send_eq_switch: bool,
     /// Equivalent to: controlSource1
     pub control_source1: u8,
     /// Equivalent to: controlDepth1
@@ -70,6 +76,11 @@ pub struct DefaultGSInsertion {
     pub send_level_to_chorus: u8,
     /// `0-127`. Equivalent to: sendLevelToDelay
     pub send_level_to_delay: u8,
+    /// EFX send EQ switch: routes the insertion output through the equalizer when on,
+    /// or straight to the output when off. Default is `true` (on).
+    /// In the SysEx message, `0` is off and any other value is on.
+    /// Equivalent to: sendEQSwitch
+    pub send_eq_switch: bool,
     /// Equivalent to: controlSource1
     pub control_source1: u8,
     /// Equivalent to: controlDepth1
@@ -129,6 +140,7 @@ impl DefaultGSInsertion {
             send_level_to_reverb: DEFAULT_SEND_LEVEL_TO_REVERB,
             send_level_to_chorus: 0,
             send_level_to_delay: 0,
+            send_eq_switch: true,
             control_source1: gs_insertion_control_sources::OFF,
             control_depth1: DEFAULT_CONTROL_DEPTH,
             control_source2: gs_insertion_control_sources::OFF,
@@ -162,6 +174,7 @@ impl DefaultGSInsertion {
         self.send_level_to_reverb = DEFAULT_SEND_LEVEL_TO_REVERB;
         self.send_level_to_chorus = 0;
         self.send_level_to_delay = 0;
+        self.send_eq_switch = true;
     }
 
     /// Equivalent to: getType()
@@ -269,6 +282,7 @@ impl DefaultGSInsertion {
             send_level_to_reverb: self.send_level_to_reverb,
             send_level_to_chorus: self.send_level_to_chorus,
             send_level_to_delay: self.send_level_to_delay,
+            send_eq_switch: self.send_eq_switch,
             control_source1: self.control_source1,
             control_depth1: self.control_depth1,
             control_source2: self.control_source2,
@@ -293,6 +307,7 @@ impl DefaultGSInsertion {
         self.send_level_to_reverb = snapshot.send_level_to_reverb;
         self.send_level_to_chorus = snapshot.send_level_to_chorus;
         self.send_level_to_delay = snapshot.send_level_to_delay;
+        self.send_eq_switch = snapshot.send_eq_switch;
     }
 
     /// Sends the offsets of both control sources to the processor.

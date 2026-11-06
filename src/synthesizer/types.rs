@@ -147,7 +147,7 @@ pub struct ChannelPropertyChangeCallback {
 /// sends). Rust reports the macro and the EFX type only.
 #[derive(Clone, Copy, Debug)]
 pub struct EffectChangeCallback {
-    /// Which effect changed: "reverb" | "chorus" | "delay" | "insertion".
+    /// Which effect changed: "reverb" | "chorus" | "delay" | "equalizer" | "insertion".
     pub effect: EffectKind,
     /// The changed parameter index (0 = macro / type).
     pub parameter: u8,
@@ -161,6 +161,8 @@ pub enum EffectKind {
     Reverb,
     Chorus,
     Delay,
+    /// The GS equalizer (`parameter` is the `40 02 xx` address).
+    Equalizer,
     Insertion,
 }
 

@@ -17,8 +17,8 @@ pub const TIME_OFFSETS: [i8; 32] = [
     127, 123, 120, 118, 116, 114, 112, 110, 109, 107,
 ];
 
-/// Damping line feedback coefficient words.
-pub const DAMP_FEEDBACK: [u16; 256] = [
+/// Damping line input gain coefficient words.
+pub const DAMP_INPUT: [u16; 256] = [
     105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 105, 104, 104,
     104, 104, 104, 104, 104, 104, 104, 104, 104, 104, 104, 104, 104, 104, 104, 103, 103, 103,
     103, 102, 102, 102, 102, 101, 101, 100, 100, 99, 99, 98, 98, 97, 97, 96, 95, 95, 94, 93, 92,
@@ -32,8 +32,8 @@ pub const DAMP_FEEDBACK: [u16; 256] = [
     4, 4, 4, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2,
 ];
 
-/// Damping line filter coefficient words.
-pub const DAMP_FILTER: [u16; 256] = [
+/// Damping line feedback coefficient words, used for both taps of the two-tap feedback filter.
+pub const DAMP_FEEDBACK: [u16; 256] = [
     1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 3, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 16, 18, 20, 22,
     25, 27, 29, 32, 35, 38, 41, 44, 47, 50, 54, 57, 61, 64, 68, 71, 75, 79, 83, 86, 90, 94, 98,
     102, 105, 109, 113, 117, 120, 124, 128, 131, 135, 138, 142, 145, 148, 152, 155, 158, 161,

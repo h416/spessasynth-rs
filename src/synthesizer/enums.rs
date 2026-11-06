@@ -5,9 +5,18 @@
 /// Sample interpolation type constants.
 /// Equivalent to: InterpolationTypes
 pub mod interpolation_types {
+    /// Linear interpolation.
     pub const LINEAR: u8 = 0;
+    /// Nearest neighbor (no interpolation).
     pub const NEAREST_NEIGHBOR: u8 = 1;
+    /// Cubic Hermite interpolation. Good quality with little artifacting. (Default)
     pub const HERMITE: u8 = 2;
+    /// 32-point windowed sinc interpolation.
+    /// Very high quality with almost no aliasing or harmonic distortion, at a significantly higher CPU cost.
+    pub const SINC32: u8 = 3;
+    /// 128-point windowed sinc interpolation with antialiasing.
+    /// The best quality, but extremely high CPU cost (meant for offline rendering).
+    pub const SINC128: u8 = 4;
 }
 
 /// Equivalent to: InterpolationType

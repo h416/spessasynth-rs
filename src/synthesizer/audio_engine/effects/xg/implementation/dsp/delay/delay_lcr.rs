@@ -8,6 +8,9 @@ use super::super::xg_variation_program::variation_layout;
 use super::delay_tables::DELAY_LEVEL;
 use super::xg_delay::{XGDelayBase, XGDelayKind, CONNECTION_PARAMETERS, LEFT_BASE, LIST_DAMP_A};
 
+// Dry/wet push list
+const LIST_MIX: &[usize] = &[0xb2, 0xb5, 0xb8, 0xb9, 0xbb, 0xb6];
+
 const PARAMETER_RANGES: XGParameterRanges = &[
     (0, 1, 7150),
     (1, 1, 7150),
@@ -76,7 +79,7 @@ pub(super) fn convert(d: &mut XGDelayBase, param: usize) {
             let w = &mut d.program.coefficient_words;
             w[0xb6] = (((wet as f64 * level).trunc() as i32) & 0x3_ff) as u16;
             w[0xbb] = w[0xb6];
-            d.push_coefficients_all(&[0xb2, 0xb5, 0xb8, 0xb9, 0xbb, 0xb6]);
+            d.push_coefficients_all(LIST_MIX);
         }
         6 => d.design_damping(p(d, 6), LIST_DAMP_A),
         12 | 13 => d.design_low_equalizer(p(d, 12), p(d, 13), false),

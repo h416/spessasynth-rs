@@ -28,6 +28,8 @@ const LIST_DENSITY_COEFFICIENT: &[usize] =
     &[0x7f, 0x7e, 0x7c, 0x7b, 0x85, 0x84, 0x82, 0x81, 0x8c, 0x8b, 0x89, 0x88, 0x98, 0x97, 0x8f, 0x8e];
 const LIST_DENSITY_ADDRESS: &[usize] = &[0x2a, 0x24, 0x2c, 0x28, 0x2e, 0x29, 0x34, 0x2b];
 const LIST_HIGH_DAMP: &[usize] = &[0x78, 0x77, 0x79];
+// Dry/wet push list
+const LIST_DRY_WET: &[usize] = &[0xad, 0xaf, 0xb1, 0xb2];
 
 /// The converter index of the mono input level, which depends on the connection.
 const MONO_INPUT: usize = 16;
@@ -238,7 +240,7 @@ impl XGEarlyReflectionsBase {
                 w[0xb1] = w[0xad];
                 w[0xaf] = (MIX_WET[mix] as i32 & 0x3_ff) as u16;
                 w[0xb2] = w[0xaf];
-                self.push_coefficients_all(&[0xad, 0xaf, 0xb1, 0xb2]);
+                self.push_coefficients_all(LIST_DRY_WET);
             }
             10 => {
                 self.reflections();

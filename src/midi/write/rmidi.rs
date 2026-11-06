@@ -246,6 +246,7 @@ fn correct_bank_offset_internal(
                 | AnalyzedMidiMessage::ReverbParam
                 | AnalyzedMidiMessage::ChorusParam
                 | AnalyzedMidiMessage::DelayParam
+                | AnalyzedMidiMessage::EqualizerParam
                 | AnalyzedMidiMessage::VariationParam
                 | AnalyzedMidiMessage::InsertionParam
                 | AnalyzedMidiMessage::DrumSetup
@@ -253,7 +254,8 @@ fn correct_bank_offset_internal(
                 | AnalyzedMidiMessage::KeyShift { .. }
                 | AnalyzedMidiMessage::MasterFineTune { .. }
                 | AnalyzedMidiMessage::FineTune { .. }
-                | AnalyzedMidiMessage::RandomPan { .. } => {
+                | AnalyzedMidiMessage::RandomPan { .. }
+                | AnalyzedMidiMessage::EqEnabled { .. } => {
                     continue;
                 }
             }

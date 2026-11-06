@@ -98,7 +98,7 @@ impl GSEffect for GSTimeControlDelay {
     fn update(&mut self) {
         let p = self.base.parameters;
         self.target = ((delay2(self.base.controlled(0, 0)) * 127.0) / 128.0) * 32.0;
-        // The slew per 32 kHz sample is 1/32000 of the time constant
+        // The slew per 32 kHz sample is 1 / (32000 x the time constant)
         let step = 1.0 / (32_000.0 * slew_time(p[1]));
         self.slew = 1.0 - (1.0 - step).powf(32_000.0 / self.base.sample_rate);
         self.feedback = feedback_gain(self.base.controlled(1, 2));
