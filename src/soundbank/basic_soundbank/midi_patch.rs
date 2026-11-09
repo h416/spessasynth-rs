@@ -323,6 +323,17 @@ pub fn select_patch<'a>(
         return_replacement(0);
         return &patches[0];
     }
+    if system == MIDISystem::Gs {
+        // In GS the LSB selects the map and a missing variation stays in its map.
+        // So we prefer capital rather than lsb with same msb + program
+        if let Some(&i) = matching_programs
+            .iter()
+            .find(|&&i| patches[i].bank_msb == 0 && patches[i].bank_lsb == bank_lsb)
+        {
+            return_replacement(i);
+            return &patches[i];
+        }
+    }
     let p = if is_xg {
         // XG uses LSB so search for that.
         matching_programs
@@ -700,6 +711,19 @@ mod select_patch_tests {
         let p = select(&presets, drum_patch(0), MIDISystem::Gs, false);
         assert!(p.is_gm_gs_drum);
         assert_eq!(p.program, 0);
+    }
+
+    // --- GS: missing variation falls back to the capital of the same map ---
+
+    #[test]
+    fn test_gs_missing_variation_prefers_capital_in_same_map() {
+        // Requested 8:2 (map LSB 2); 8:0 exists but the capital of map 2 is 0:2
+        let presets = vec![melodic(0, 0, 0), melodic(0, 8, 0), melodic(0, 0, 2)];
+        let p = select(&presets, patch(0, 8, 2), MIDISystem::Gs, false);
+        assert_eq!((p.bank_msb, p.bank_lsb), (0, 2));
+        // Other systems keep the MSB search
+        let p = select(&presets, patch(0, 8, 2), MIDISystem::Gm, false);
+        assert_eq!((p.bank_msb, p.bank_lsb), (8, 0));
     }
 
     // --- GM/GS drum with XG system forces XG drums ---
