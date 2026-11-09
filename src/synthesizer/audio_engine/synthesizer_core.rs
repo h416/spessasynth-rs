@@ -488,6 +488,10 @@ impl SynthesizerCore {
             channel.update_internal_params();
         }
         self.midi_channels.push(channel);
+        // Channel is added first, then reset
+        if send_event {
+            self.call_event(SynthProcessorEvent::ChannelAdded);
+        }
 
         // New channels need the default controllers, otherwise they are silent (CC7 = 0)
         // TS: channel.reset(false)
@@ -511,10 +515,6 @@ impl SynthesizerCore {
         ));
         for event in events {
             self.call_event(event);
-        }
-
-        if send_event {
-            self.call_event(SynthProcessorEvent::ChannelAdded);
         }
     }
 
