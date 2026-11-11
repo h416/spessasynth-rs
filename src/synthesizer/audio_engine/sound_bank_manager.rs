@@ -289,6 +289,13 @@ impl SoundBankManager {
             let bank = &entry.sound_bank;
             let bank_offset = entry.bank_offset;
             for p in &bank.presets {
+                // A preset offset past bank 127 can't be selected.
+                // For RMIDI spec compliance.
+                if p.bank_msb as u16 + bank_offset as u16 > 127
+                    && !BankSelectHacks::is_xg_drum(p.bank_msb)
+                {
+                    continue;
+                }
                 // Mirror SoundBankManagerPreset: clone and adjust bankMSB by the bank offset.
                 // XG drums (120/126/127) are left unchanged by add_bank_offset.
                 // Equivalent to: BankSelectHacks.addBankOffset(p.bankMSB, offset, true)
@@ -485,13 +492,17 @@ mod tests {
     }
 
     #[test]
-    fn test_bank_offset_clamped_to_127() {
+    fn test_bank_offset_past_127_is_left_out() {
         let (mut mgr, _) = make_manager();
-        let bank = make_bank(vec![melodic_preset(0, 115)]);
+        let bank = make_bank(vec![melodic_preset(0, 115), melodic_preset(1, 107)]);
         mgr.add_sound_bank(bank, "sf1".to_string(), 20);
         let pl = mgr.preset_list();
-        // 115 + 20 = 135, clamped to 127
-        assert_eq!(pl[0].patch.bank_msb, 127);
+        // 115 + 20 = 135 can't be selected; 107 + 20 = 127 can
+        // (the other entries are the GS user drum set placeholders)
+        let melodic: Vec<_> = pl.iter().filter(|e| !e.is_drum).collect();
+        assert_eq!(melodic.len(), 1);
+        assert_eq!(melodic[0].patch.bank_msb, 127);
+        assert_eq!(melodic[0].patch.program, 1);
     }
 
     #[test]

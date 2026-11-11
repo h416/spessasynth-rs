@@ -3,6 +3,8 @@
 
 pub mod blocks;
 pub mod conversion;
+pub mod dattorro;
+pub mod delay_line;
 pub mod effect_list;
 pub mod effects;
 pub mod enums;

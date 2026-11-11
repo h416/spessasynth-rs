@@ -2,7 +2,7 @@
 //! by khoin on GitHub, public domain.
 //! <https://github.com/khoin/DattorroReverbNode/>
 //! Adapted for spessasynth by spessasus.
-//! Ported from: src/synthesizer/audio_engine/effects/implementation/dattorro.ts
+//! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/dattorro.ts
 //!
 //! The delay lines are flat (every delay is read before it is written in the same sample),
 //! and the reverb computes the excursion LFOs by rotating phasors. The order of reads and
