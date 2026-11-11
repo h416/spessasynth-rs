@@ -21,10 +21,10 @@ use crate::synthesizer::audio_engine::voice::unit_converter::{
     abs_cents_to_hz, cb_attenuation_to_gain, cb_attenuation_to_gain_f64,
 };
 
-/// Lowpass filter frequency smoothing factor.
-/// Lowered from 0.1 to 0.03
-/// Equivalent to: FILTER_SMOOTHING_FACTOR
-pub const FILTER_SMOOTHING_FACTOR: f64 = 0.03;
+/// The largest change of the cutoff frequency (in cents) per rendering quantum at 44.1 kHz.
+/// A step limit: large jumps still take about as long, but small changes apply right away.
+/// Equivalent to: FILTER_SMOOTHING_STEP
+pub const FILTER_SMOOTHING_STEP: f64 = 300.0;
 
 /// The cache covers cutoffs [0, 16384) cents, anything outside is computed directly.
 /// Equivalent to: CACHE_MAX_CENTS
@@ -44,10 +44,10 @@ static CACHES: LazyLock<Mutex<HashMap<CacheKey, Coefficients>>> =
 /// Biquad lowpass filter applied per voice.
 /// Equivalent to: LowpassFilter class
 pub struct LowpassFilter {
-    /// For smoothing the filter cutoff frequency.
+    /// The largest change of the cutoff frequency (in cents) per rendering quantum.
     /// This is per filter, as it depends on the sample rate.
-    /// Equivalent to: smoothingConstant
-    pub smoothing_constant: f64,
+    /// Equivalent to: smoothingStep
+    pub smoothing_step: f64,
     /// Resonance in centibels.
     /// Equivalent to: resonanceCb
     pub resonance_cb: i16,
@@ -91,7 +91,7 @@ impl LowpassFilter {
     /// Equivalent to: constructor(sampleRate)
     pub fn new(sample_rate: f64) -> Self {
         Self {
-            smoothing_constant: FILTER_SMOOTHING_FACTOR * (44_100.0 / sample_rate),
+            smoothing_step: FILTER_SMOOTHING_STEP * (44_100.0 / sample_rate),
             resonance_cb: 0,
             current_initial_fc: 13_500.0,
             a0: 0.0,
@@ -220,11 +220,11 @@ mod tests {
     }
 
     #[test]
-    fn test_smoothing_constant_is_per_sample_rate() {
-        assert_eq!(LowpassFilter::new(44_100.0).smoothing_constant, FILTER_SMOOTHING_FACTOR);
+    fn test_smoothing_step_is_per_sample_rate() {
+        assert_eq!(LowpassFilter::new(44_100.0).smoothing_step, FILTER_SMOOTHING_STEP);
         assert_eq!(
-            LowpassFilter::new(48_000.0).smoothing_constant,
-            FILTER_SMOOTHING_FACTOR * (44_100.0 / 48_000.0)
+            LowpassFilter::new(48_000.0).smoothing_step,
+            FILTER_SMOOTHING_STEP * (44_100.0 / 48_000.0)
         );
     }
 

@@ -1,7 +1,7 @@
 //! delay_line.rs
 //! purpose: Simple circular buffer delay line with feedback.
 //! Used as a building block for reverb, chorus, and delay effects.
-//! Ported from: src/synthesizer/audio_engine/effects/implementation/delay_line.ts
+//! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/delay_line.ts
 
 /// Equivalent to: DelayLine
 pub struct DelayLine {

@@ -523,7 +523,7 @@ impl MidiChannel {
         // Calculate increase
         let gain_inc = (voice.vol_env.output_gain * output_gain - gain) / sample_count as f64;
 
-        // Low pass filter and gain (inlined for performance, confirmed with node.js)
+        // Low pass filter and gain (inlined for performance, confirmed with Node.js)
         {
             let f = &mut voice.filter;
             let initial_fc = modulated[gt::INITIAL_FILTER_FC as usize] as f64;
@@ -532,7 +532,9 @@ impl MidiChannel {
                 // Note:
                 // We only smooth out the initialFc part,
                 // the modulation envelope and LFO excursions are not smoothed.
-                f.current_initial_fc += (initial_fc - f.current_initial_fc) * f.smoothing_constant;
+                let step = f.smoothing_step;
+                // TS: Math.max(-step, Math.min(step, initialFc - f.currentInitialFc))
+                f.current_initial_fc += (initial_fc - f.current_initial_fc).clamp(-step, step);
             } else {
                 // Filter initialization, set the current fc to target
                 f.initialized = true;

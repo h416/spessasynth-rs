@@ -140,13 +140,13 @@ fn try_year(date_string: &str) -> Option<NaiveDateTime> {
 /// 3. Try `DD.MM.YYYY` dotted format.
 /// 4. Try `DD MM YY` / `DD  MM YY` AWE/SFEDT format.
 /// 5. Extract the first 4-digit year and return January 1st of that year.
-/// 6. Emit a warning and return the current local datetime.
+/// 6. Emit a warning and return `None`.
 ///
 /// Equivalent to: `parseDateString` in load_date.ts
-pub fn parse_date_string(date_string: &str) -> NaiveDateTime {
+pub fn parse_date_string(date_string: &str) -> Option<NaiveDateTime> {
     let date_string = date_string.trim();
     if date_string.is_empty() {
-        return Local::now().naive_local();
+        return None;
     }
 
     // Remove ordinal suffixes: "1st" → "1", "2nd" → "2", "26th" → "26", etc.
@@ -157,32 +157,34 @@ pub fn parse_date_string(date_string: &str) -> NaiveDateTime {
     let filtered = at_re.replace_all(&step1, " ");
 
     if let Some(dt) = parse_with_formats(&filtered) {
-        return dt;
+        return Some(dt);
     }
 
     // Fallbacks use the original trimmed string (matching TypeScript behavior)
     if let Some(dt) = try_translate(date_string) {
-        return dt;
+        return Some(dt);
     }
     if let Some(dt) = try_dotted(date_string) {
-        return dt;
+        return Some(dt);
     }
     if let Some(dt) = try_awe(date_string) {
-        return dt;
+        return Some(dt);
     }
     if let Some(dt) = try_year(date_string) {
-        return dt;
+        return Some(dt);
     }
 
-    SpessaLog::warn(&format!(
-        "Invalid date: \"{date_string}\". Replacing with the current date!"
-    ));
-    Local::now().naive_local()
+    SpessaLog::warn(&format!("Invalid date: \"{date_string}\"."));
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parsed(s: &str) -> NaiveDateTime {
+        parse_date_string(s).unwrap()
+    }
 
     fn ymd(y: i32, m: u32, d: u32) -> NaiveDateTime {
         NaiveDate::from_ymd_opt(y, m, d)
@@ -224,33 +226,33 @@ mod tests {
 
     #[test]
     fn test_to_iso_date_string_roundtrip_with_parse() {
-        let parsed = parse_date_string("2020-09-26T16:40:14");
+        let parsed = parsed("2020-09-26T16:40:14");
         assert_eq!(to_iso_date_string(parsed), "2020-09-26T16:40:14Z");
     }
 
     // --- Empty string / whitespace only ---
 
     #[test]
-    fn test_empty_string_does_not_panic() {
-        let _ = parse_date_string("");
+    fn test_empty_string_is_none() {
+        assert_eq!(parse_date_string(""), None);
     }
 
     #[test]
-    fn test_whitespace_only_does_not_panic() {
-        let _ = parse_date_string("   ");
+    fn test_whitespace_only_is_none() {
+        assert_eq!(parse_date_string("   "), None);
     }
 
     // --- ISO 8601 ---
 
     #[test]
     fn test_iso_date() {
-        assert_eq!(parse_date_string("2020-09-26"), ymd(2020, 9, 26));
+        assert_eq!(parsed("2020-09-26"), ymd(2020, 9, 26));
     }
 
     #[test]
     fn test_iso_datetime() {
         assert_eq!(
-            parse_date_string("2020-09-26T16:40:14"),
+            parsed("2020-09-26T16:40:14"),
             ymdhms(2020, 9, 26, 16, 40, 14)
         );
     }
@@ -258,7 +260,7 @@ mod tests {
     #[test]
     fn test_iso_datetime_with_space() {
         assert_eq!(
-            parse_date_string("2020-09-26 16:40:14"),
+            parsed("2020-09-26 16:40:14"),
             ymdhms(2020, 9, 26, 16, 40, 14)
         );
     }
@@ -267,22 +269,22 @@ mod tests {
 
     #[test]
     fn test_ordinal_st() {
-        assert_eq!(parse_date_string("1st June 2020"), ymd(2020, 6, 1));
+        assert_eq!(parsed("1st June 2020"), ymd(2020, 6, 1));
     }
 
     #[test]
     fn test_ordinal_nd() {
-        assert_eq!(parse_date_string("2nd June 2020"), ymd(2020, 6, 2));
+        assert_eq!(parsed("2nd June 2020"), ymd(2020, 6, 2));
     }
 
     #[test]
     fn test_ordinal_rd() {
-        assert_eq!(parse_date_string("3rd June 2020"), ymd(2020, 6, 3));
+        assert_eq!(parsed("3rd June 2020"), ymd(2020, 6, 3));
     }
 
     #[test]
     fn test_ordinal_th() {
-        assert_eq!(parse_date_string("September 26th, 2020"), ymd(2020, 9, 26));
+        assert_eq!(parsed("September 26th, 2020"), ymd(2020, 9, 26));
     }
 
     // --- " at " separator removal ---
@@ -290,7 +292,7 @@ mod tests {
     #[test]
     fn test_at_separator() {
         assert_eq!(
-            parse_date_string("26 June 2020 at 16:40:14"),
+            parsed("26 June 2020 at 16:40:14"),
             ymdhms(2020, 6, 26, 16, 40, 14)
         );
     }
@@ -298,7 +300,7 @@ mod tests {
     #[test]
     fn test_ordinal_and_at_combined() {
         assert_eq!(
-            parse_date_string("September 26th, 2020 at 16:40:14"),
+            parsed("September 26th, 2020 at 16:40:14"),
             ymdhms(2020, 9, 26, 16, 40, 14)
         );
     }
@@ -310,7 +312,7 @@ mod tests {
         // "sábado 26 setembro 2020, 16:40:14" → "Saturday 26 September 2020, 16:40:14"
         // 2020-09-26 is actually a Saturday
         assert_eq!(
-            parse_date_string("sábado 26 setembro 2020, 16:40:14"),
+            parsed("sábado 26 setembro 2020, 16:40:14"),
             ymdhms(2020, 9, 26, 16, 40, 14)
         );
     }
@@ -318,26 +320,26 @@ mod tests {
     #[test]
     fn test_portuguese_date_only() {
         // "26 setembro 2020" → "26 September 2020"
-        assert_eq!(parse_date_string("26 setembro 2020"), ymd(2020, 9, 26));
+        assert_eq!(parsed("26 setembro 2020"), ymd(2020, 9, 26));
     }
 
     #[test]
     fn test_portuguese_month_name() {
         // Various month names: "janeiro" / "dezembro" etc.
-        assert_eq!(parse_date_string("15 janeiro 2019"), ymd(2019, 1, 15));
-        assert_eq!(parse_date_string("31 dezembro 2021"), ymd(2021, 12, 31));
+        assert_eq!(parsed("15 janeiro 2019"), ymd(2019, 1, 15));
+        assert_eq!(parsed("31 dezembro 2021"), ymd(2021, 12, 31));
     }
 
     // --- Dotted format DD.MM.YYYY ---
 
     #[test]
     fn test_dotted_format() {
-        assert_eq!(parse_date_string("26.09.2020"), ymd(2020, 9, 26));
+        assert_eq!(parsed("26.09.2020"), ymd(2020, 9, 26));
     }
 
     #[test]
     fn test_dotted_format_january() {
-        assert_eq!(parse_date_string("01.01.2000"), ymd(2000, 1, 1));
+        assert_eq!(parsed("01.01.2000"), ymd(2000, 1, 1));
     }
 
     // --- AWE32/SFEDT format "DD MM YY" ---
@@ -345,26 +347,26 @@ mod tests {
     #[test]
     fn test_awe_double_space() {
         // "26  9 20": day=26, month=9(0-indexed)+1=10(October), year=20 → 2020
-        assert_eq!(parse_date_string("26  9 20"), ymd(2020, 10, 26));
+        assert_eq!(parsed("26  9 20"), ymd(2020, 10, 26));
     }
 
     #[test]
     fn test_awe_single_space() {
         // "26 9 20" same as above
-        assert_eq!(parse_date_string("26 9 20"), ymd(2020, 10, 26));
+        assert_eq!(parsed("26 9 20"), ymd(2020, 10, 26));
     }
 
     #[test]
     fn test_awe_testcase_trim() {
         // Test case: " 4  0  97"
         // trim → "4  0  97": day=4, month=0+1=1(January), year=97 → 1997
-        assert_eq!(parse_date_string(" 4  0  97"), ymd(1997, 1, 4));
+        assert_eq!(parsed(" 4  0  97"), ymd(1997, 1, 4));
     }
 
     #[test]
     fn test_awe_year_1990s() {
         // year=96 → 1996 (chrono: 69-99 → 1969-1999)
-        assert_eq!(parse_date_string("15 0 96"), ymd(1996, 1, 15));
+        assert_eq!(parsed("15 0 96"), ymd(1996, 1, 15));
     }
 
     // --- 4-digit year only fallback ---
@@ -372,18 +374,18 @@ mod tests {
     #[test]
     fn test_year_only_bare() {
         // "2020" → January 1, 2020
-        assert_eq!(parse_date_string("2020"), ymd(2020, 1, 1));
+        assert_eq!(parsed("2020"), ymd(2020, 1, 1));
     }
 
     #[test]
     fn test_year_embedded_in_text() {
-        assert_eq!(parse_date_string("some text 2020 more"), ymd(2020, 1, 1));
+        assert_eq!(parsed("some text 2020 more"), ymd(2020, 1, 1));
     }
 
     // --- Completely invalid input ---
 
     #[test]
-    fn test_totally_invalid_does_not_panic() {
-        let _ = parse_date_string("totally invalid garbage");
+    fn test_totally_invalid_is_none() {
+        assert_eq!(parse_date_string("totally invalid garbage"), None);
     }
 }

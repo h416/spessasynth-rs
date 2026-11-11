@@ -78,16 +78,17 @@ pub fn parse_rmidi_internal(
                     .min(binary_data.len());
                 output_midi.embedded_sound_bank =
                     Some(binary_data.slice(start_index, end).to_vec());
+                if chunk_type == "dls " {
+                    // Assume bank offset of 0 by default. If we find any bank selects, then the
+                    // offset is 1.
+                    output_midi.is_dls_rmidi = true;
+                } else {
+                    is_sf2_rmidi = true;
+                }
             } else {
                 SpessaLog::warn(&format!("Unknown RIFF chunk: \"{}\"", chunk_type));
-            }
-
-            if chunk_type == "dls " {
-                // Assume bank offset of 0 by default. If we find any bank selects, then the
-                // offset is 1.
-                output_midi.is_dls_rmidi = true;
-            } else {
-                is_sf2_rmidi = true;
+                // Not ported (RMIDI writer only, no effect on the MIDI-to-WAV output):
+                // outputMIDI.rmidiExtraChunks.file.push(...)
             }
         } else if current_chunk.header == "LIST" {
             let list_type = read_binary_string_indexed(&mut current_chunk.data, 4);
@@ -100,17 +101,30 @@ pub fn parse_rmidi_internal(
                     let info_data: Vec<u8> = info_chunk.data.to_vec();
 
                     let header_typed = RMIDInfoFourCC::from_str(&info_chunk.header);
+                    if info_chunk.size == 0 {
+                        // Empty chunks are illegal, drop them
+                        SpessaLog::warn(&format!(
+                            "Discarding empty RMIDI Info: {}",
+                            info_chunk.header
+                        ));
+                        continue;
+                    }
                     match header_typed {
                         Some(RMIDInfoFourCC::Inam) => {
                             output_midi
                                 .rmidi_info
                                 .insert("name".to_string(), info_data);
                         }
-                        // Two possible FourCCs for album
-                        Some(RMIDInfoFourCC::Ialb | RMIDInfoFourCC::Iprd) => {
+                        Some(RMIDInfoFourCC::Ialb) => {
                             output_midi
                                 .rmidi_info
                                 .insert("album".to_string(), info_data);
+                        }
+                        Some(RMIDInfoFourCC::Iprd) => {
+                            output_midi
+                                .rmidi_info
+                                .entry("album".to_string())
+                                .or_insert(info_data);
                         }
                         // Older spessasynth wrote ICRT instead of ICRD
                         Some(RMIDInfoFourCC::Icrt | RMIDInfoFourCC::Icrd) => {
@@ -169,13 +183,33 @@ pub fn parse_rmidi_internal(
                                 .insert("midiEncoding".to_string(), info_data);
                         }
                         Some(RMIDInfoFourCC::Dbnk) => {
-                            dbnk = Some(read_little_endian(&info_data, 2, 0));
+                            // Invalid offsets are treated as missing.
+                            let offset = if info_data.len() == 2 {
+                                Some(read_little_endian(&info_data, 2, 0))
+                            } else {
+                                None
+                            };
+                            match offset {
+                                Some(o) if o <= 127 => dbnk = Some(o),
+                                _ => {
+                                    let shown = match offset {
+                                        Some(o) => o.to_string(),
+                                        None => format!("{} bytes", info_data.len()),
+                                    };
+                                    SpessaLog::warn(&format!(
+                                        "Invalid DBNK chunk ({}), ignoring it.",
+                                        shown
+                                    ));
+                                }
+                            }
                         }
                         None => {
                             SpessaLog::warn(&format!(
                                 "Unknown RMIDI Info: {}",
                                 info_chunk.header
                             ));
+                            // Not ported (RMIDI writer only, no effect on the MIDI-to-WAV
+                            // output): outputMIDI.rmidiExtraChunks.info.push(...)
                         }
                     }
                 }

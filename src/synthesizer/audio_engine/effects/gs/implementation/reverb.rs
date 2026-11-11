@@ -2,8 +2,8 @@
 //! purpose: The default GS reverb implementation.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/reverb.ts
 
-use crate::synthesizer::audio_engine::effects::implementation::dattorro::DattorroReverb;
-use crate::synthesizer::audio_engine::effects::implementation::delay_line::DelayLine;
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::dattorro::DattorroReverb;
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::delay_line::DelayLine;
 
 const DELAY_GAIN: f64 = 1.5;
 

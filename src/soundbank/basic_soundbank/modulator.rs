@@ -541,10 +541,29 @@ fn decoded_mod(
     )
 }
 
+/// One term of an envelope time response: a bipolar CC source gated to one half of the CC.
+/// `below` is true for the half under 64, false for the half over it.
+/// Equivalent to: envelopeCC(cc, curve, destination, amount, below)
+fn envelope_cc(
+    cc: u8,
+    curve: u8,
+    destination: GeneratorType,
+    amount: i32,
+    below: bool,
+) -> Modulator {
+    decoded_mod(
+        get_mod_source_enum(curve, true, false, true, cc),
+        get_mod_source_enum(modulator_curve_types::SWITCH, false, below, true, cc),
+        destination,
+        amount,
+        0,
+    )
+}
+
 /// The full set of default SF2 + SpessaSynth modulators applied to every voice.
 ///
-/// Layout: 9 SF2 standard modulators followed by 6 SpessaSynth custom modulators.
-/// Total: 15 entries.
+/// Layout: 9 SF2 standard modulators followed by 14 SpessaSynth custom modulators.
+/// Total: 23 entries.
 ///
 /// Equivalent to: SPESSASYNTH_DEFAULT_MODULATORS (= [...defaultSoundFont2Modulators, ...defaultSpessaSynthModulators])
 pub static SPESSASYNTH_DEFAULT_MODULATORS: LazyLock<Vec<Modulator>> = LazyLock::new(|| {
@@ -618,34 +637,21 @@ pub static SPESSASYNTH_DEFAULT_MODULATORS: LazyLock<Vec<Modulator>> = LazyLock::
         decoded_mod(0x00dd, 0x0, generator_types::CHORUS_EFFECTS_SEND, 200, 0),
         // --- SpessaSynth custom default modulators ---
 
-        // 10. CC 73 (attack time) → volEnv attack (convex, bipolar, positive, CC)
-        //     source_enum = (2<<10)|(1<<9)|(0<<8)|(1<<7)|73 = 2048+512+128+73 = 2761 = 0x0ac9
-        decoded_mod(
-            get_mod_source_enum(convex, true, false, true, ATTACK_TIME),
-            0x0,
-            generator_types::ATTACK_VOL_ENV,
-            6000,
-            0,
-        ),
-        // 12. CC 72 (release time) → volEnv release (linear, bipolar, positive, CC)
-        //     source_enum = 0|(1<<9)|(0<<8)|(1<<7)|72 = 512+128+72 = 712 = 0x02c8
-        decoded_mod(
-            get_mod_source_enum(linear, true, false, true, RELEASE_TIME),
-            0x0,
-            generator_types::RELEASE_VOL_ENV,
-            3600,
-            0,
-        ),
-        // 13. CC 75 (decay time) → volEnv decay (linear, bipolar, positive, CC)
-        //     source_enum = 0|(1<<9)|(0<<8)|(1<<7)|75 = 512+128+75 = 715 = 0x02cb
-        decoded_mod(
-            get_mod_source_enum(linear, true, false, true, DECAY_TIME),
-            0x0,
-            generator_types::DECAY_VOL_ENV,
-            3600,
-            0,
-        ),
-        // 14. CC 74 (brightness) → initialFilterFc (linear, bipolar, positive, CC)
+        // Attack
+        envelope_cc(ATTACK_TIME, linear, generator_types::ATTACK_VOL_ENV, 9600, true),
+        envelope_cc(ATTACK_TIME, linear, generator_types::ATTACK_VOL_ENV, 9657, false),
+        envelope_cc(ATTACK_TIME, convex, generator_types::ATTACK_VOL_ENV, -1445, false),
+        // Decay
+        envelope_cc(DECAY_TIME, linear, generator_types::DECAY_VOL_ENV, 9779, true),
+        envelope_cc(DECAY_TIME, linear, generator_types::DECAY_VOL_ENV, -2997, false),
+        envelope_cc(DECAY_TIME, concave, generator_types::RELEASE_VOL_ENV, 8035, false),
+        envelope_cc(DECAY_TIME, convex, generator_types::DECAY_VOL_ENV, 435, false),
+        // Release
+        envelope_cc(RELEASE_TIME, linear, generator_types::RELEASE_VOL_ENV, 9779, true),
+        envelope_cc(RELEASE_TIME, linear, generator_types::RELEASE_VOL_ENV, -2997, false),
+        envelope_cc(RELEASE_TIME, concave, generator_types::RELEASE_VOL_ENV, 8035, false),
+        envelope_cc(RELEASE_TIME, convex, generator_types::RELEASE_VOL_ENV, 435, false),
+        // CC 74 (brightness) → initialFilterFc (linear, bipolar, positive, CC)
         //     source_enum = 0|(1<<9)|(0<<8)|(1<<7)|74 = 512+128+74 = 714 = 0x02ca
         decoded_mod(
             get_mod_source_enum(linear, true, false, true, BRIGHTNESS),
@@ -654,7 +660,7 @@ pub static SPESSASYNTH_DEFAULT_MODULATORS: LazyLock<Vec<Modulator>> = LazyLock::
             9600,
             0,
         ),
-        // 15. CC 71 (filter Q) → initialFilterQ (linear, bipolar, positive, CC)
+        // CC 71 (filter Q) → initialFilterQ (linear, bipolar, positive, CC)
         //     source_enum = DEFAULT_RESONANT_MOD_SOURCE = 711 = 0x02c7
         //     This is the default resonant modulator.
         decoded_mod(
@@ -664,7 +670,7 @@ pub static SPESSASYNTH_DEFAULT_MODULATORS: LazyLock<Vec<Modulator>> = LazyLock::
             250,
             0,
         ),
-        // 16. CC 67 (soft pedal) → initialFilterFc (switch, unipolar, positive, CC)
+        // CC 67 (soft pedal) → initialFilterFc (switch, unipolar, positive, CC)
         //     source_enum = (3<<10)|(0<<9)|(0<<8)|(1<<7)|67 = 3072+128+67 = 3267 = 0x0cc3
         decoded_mod(
             get_mod_source_enum(switch, false, false, true, SOFT_PEDAL),
@@ -705,9 +711,17 @@ mod tests {
             "11,1,0,1,1|0,0,0,0,0|48|960|0",
             "91,1,0,0,0|0,0,0,0,0|16|200|0",
             "93,1,0,0,0|0,0,0,0,0|15|200|0",
-            "73,1,1,0,2|0,0,0,0,0|34|6000|0",
-            "72,1,1,0,0|0,0,0,0,0|38|3600|0",
-            "75,1,1,0,0|0,0,0,0,0|36|3600|0",
+            "73,1,1,0,0|73,1,0,1,3|34|9600|0",
+            "73,1,1,0,0|73,1,0,0,3|34|9657|0",
+            "73,1,1,0,2|73,1,0,0,3|34|-1445|0",
+            "75,1,1,0,0|75,1,0,1,3|36|9779|0",
+            "75,1,1,0,0|75,1,0,0,3|36|-2997|0",
+            "75,1,1,0,1|75,1,0,0,3|38|8035|0",
+            "75,1,1,0,2|75,1,0,0,3|36|435|0",
+            "72,1,1,0,0|72,1,0,1,3|38|9779|0",
+            "72,1,1,0,0|72,1,0,0,3|38|-2997|0",
+            "72,1,1,0,1|72,1,0,0,3|38|8035|0",
+            "72,1,1,0,2|72,1,0,0,3|38|435|0",
             "74,1,1,0,0|0,0,0,0,0|8|9600|0",
             "71,1,1,0,0|0,0,0,0,0|9|250|0",
             "67,1,0,0,3|0,0,0,0,0|8|-1200|0",
@@ -1096,8 +1110,8 @@ mod tests {
         let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
         assert_eq!(
             mods.len(),
-            15,
-            "Expected 9 SF2 + 6 SpessaSynth = 15 modulators"
+            23,
+            "Expected 9 SF2 + 14 SpessaSynth = 23 modulators"
         );
     }
 
@@ -1156,10 +1170,10 @@ mod tests {
     }
 
     #[test]
-    fn test_default_mod_13_resonant_is_default_resonant() {
-        // Entry 13 (index 13, 0-based) = CC 71 filter Q → initialFilterQ (default resonant)
+    fn test_default_mod_21_resonant_is_default_resonant() {
+        // Index 21 (0-based) = CC 71 filter Q → initialFilterQ (default resonant)
         let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
-        let m = &mods[13];
+        let m = &mods[21];
         assert_eq!(m.destination, generator_types::INITIAL_FILTER_Q);
         assert_eq!(m.transform_amount, 250.0);
         assert!(m.is_default_resonant_modulator);
@@ -1167,10 +1181,10 @@ mod tests {
     }
 
     #[test]
-    fn test_default_mod_14_soft_pedal_filter_fc_negative_amount() {
-        // Entry 14 (index 14, last entry) = CC 67 soft pedal → initialFilterFc, amount=-1200.
+    fn test_default_mod_22_soft_pedal_filter_fc_negative_amount() {
+        // Index 22 (last entry) = CC 67 soft pedal → initialFilterFc, amount=-1200.
         let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
-        let m = &mods[14];
+        let m = &mods[22];
         assert_eq!(m.destination, generator_types::INITIAL_FILTER_FC);
         assert_eq!(m.transform_amount, -1200.0);
         assert!(m.primary_source.is_cc);

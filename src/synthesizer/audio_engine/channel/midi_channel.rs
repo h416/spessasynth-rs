@@ -984,6 +984,14 @@ impl MidiChannel {
         let midi_key_shift = global_midi.key_shift + channel_midi.key_shift;
         let pitch_based = global_system.pitch_based_key_shift;
 
+        // Drum key shift in XG is treated as semitone shift
+        let drum_fine_tune =
+            if self.drum_channel && self.channel_system(global_midi.system) == MIDISystem::Xg {
+                channel_midi.key_shift * 100.0
+            } else {
+                0.0
+            };
+
         // Only Channel System is processed for drum channels.
         // Drum channels ignore key shift
         // Testcase: th07_19_user_gm.mid
@@ -1002,7 +1010,7 @@ impl MidiChannel {
 
         // Only Channel System is processed for drum channels
         self.current_tuning = if self.drum_channel {
-            channel_system.fine_tune
+            channel_system.fine_tune + drum_fine_tune
         } else {
             // Global System
             global_system.fine_tune
