@@ -1,5 +1,6 @@
 //! The Reverb and Delay types' reverb: a diffuser and two independent tanks, read by four taps per side.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/blocks/reverb.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use super::crossfade::Crossfade;
 use super::delay_line::DelayLine;
@@ -153,7 +154,7 @@ pub struct Reverb {
 
 impl Reverb {
     pub fn new(sample_rate: f64, memory: &mut DelayMemory) -> Self {
-        let step = sample_rate / 32_000.0;
+        let step = sample_rate / HARDWARE_RATE;
         let lines = LINE_LENGTHS
             .iter()
             .map(|&length| memory.line((length * step).ceil() + LOOKAHEAD))

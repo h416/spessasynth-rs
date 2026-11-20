@@ -1,5 +1,6 @@
 //! The wah: a resonant low pass or band pass whose cutoff follows the Manual, an LFO and an envelope follower.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/blocks/wah.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use std::f64::consts::PI;
 use std::sync::LazyLock;
@@ -10,7 +11,7 @@ use super::lfo::Lfo;
 
 /// The side chain high passes: the hardware's 32 kHz one-poles (pole 53/128, gain 91/128), a corner of 4 kHz.
 static SIDE_CHAIN_HZ: LazyLock<f64> =
-    LazyLock::new(|| (32_000.0 / PI) * ((1.0f64 - 53.0 / 128.0) / (1.0 + 53.0 / 128.0)).atan());
+    LazyLock::new(|| (HARDWARE_RATE / PI) * ((1.0f64 - 53.0 / 128.0) / (1.0 + 53.0 / 128.0)).atan());
 const SIDE_CHAIN_GAIN: f64 = (2.0 * 91.0) / 128.0 / (1.0 + 53.0 / 128.0);
 
 /// The follower's attack per 32 kHz sample (+0.31 dB) and the step that lets it start from silence.
@@ -59,7 +60,7 @@ impl Wah {
         side_chain1.set_high_pass(*SIDE_CHAIN_HZ, SIDE_CHAIN_GAIN);
         let mut side_chain2 = FirstOrderFilter::new(sample_rate);
         side_chain2.set_high_pass(*SIDE_CHAIN_HZ, SIDE_CHAIN_GAIN);
-        let scale = 32_000.0 / sample_rate;
+        let scale = HARDWARE_RATE / sample_rate;
         // The per sample factors of the 32 kHz hardware, moved to the host rate
         let attack = ATTACK.powf(scale);
         Self {
@@ -217,8 +218,8 @@ impl Wah {
             let mut low = (w32 * w32 + 0.25 * width * width).sqrt() - 0.5 * width;
             let mut high = low + width;
             if self.scale != 1.0 {
-                low = self.filter.prewarp((32_000.0 / PI) * low.atan());
-                high = self.filter.prewarp((32_000.0 / PI) * high.atan());
+                low = self.filter.prewarp((HARDWARE_RATE / PI) * low.atan());
+                high = self.filter.prewarp((HARDWARE_RATE / PI) * high.atan());
             }
             let band = high - low;
             self.filter.set_analog(0.0, (127.0 / 64.0) * band, 0.0, 1.0, band, low * high);
@@ -228,7 +229,7 @@ impl Wah {
             let l = if self.scale == 1.0 {
                 1.0
             } else {
-                w32 / self.filter.prewarp((32_000.0 / PI) * w32.atan())
+                w32 / self.filter.prewarp((HARDWARE_RATE / PI) * w32.atan())
             };
             let n = (127.0 / 128.0) * 0.5 * f * f;
             self.filter.set_analog(0.0, n * l, n, s2 * l * l, 2.0 * fd * l, f * f);

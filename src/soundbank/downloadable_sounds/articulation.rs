@@ -668,8 +668,6 @@ mod tests {
             gt::MOD_LFO_TO_PITCH,
             50.0,
             0,
-            false,
-            false,
         )]);
         art.to_sf_zone(&mut zone);
         assert!(

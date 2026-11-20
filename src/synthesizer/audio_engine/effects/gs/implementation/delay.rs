@@ -1,17 +1,19 @@
-//! The default GS Delay implementation.
+//! The default GS Delay implementation, modeled on the delay of the Sound Canvas.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/delay.ts
-//!
-//! A single shared buffer: center, left and right are read positions in it, and only the
-//! center delay feeds back.
-use std::f64::consts::PI;
 
-const DELAY_GAIN: f64 = 1.66;
+use std::sync::LazyLock;
+
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::blocks::delay_line::DelayLine;
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::blocks::send_input::{
+    GAIN_SCALE, LEVEL_UNITY, SendInput,
+};
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::js_round;
 
 /// SC-8850 delay time segments (manual p.236).
 /// How nice of Roland to provide the conversion values to ms!
 struct DelayTimeSegment {
-    start: u8,
-    end: u8,
+    start: usize,
+    end: usize,
     time_start: f64,
     resolution: f64,
 }
@@ -28,6 +30,29 @@ const DELAY_TIME_SEGMENTS: &[DelayTimeSegment] = &[
     DelayTimeSegment { start: 0x69, end: 0x74, time_start: 500.0, resolution: 50.0 },
 ];
 
+/// The longest DELAY TIME CENTER, 1000 ms. Higher values are held there.
+const MAX_TIME_CENTER: usize = 0x73;
+
+/// DELAY TIME CENTER to ms, from the segments above. Index 0 is the same 0.1 ms as 1.
+static TIME_CENTER_MS: LazyLock<[f64; MAX_TIME_CENTER + 1]> = LazyLock::new(|| {
+    let mut table = [0.1; MAX_TIME_CENTER + 1];
+    for segment in DELAY_TIME_SEGMENTS {
+        for value in segment.start..segment.end {
+            table[value] = segment.time_start + (value - segment.start) as f64 * segment.resolution;
+        }
+    }
+    table
+});
+
+/// The longest delay of any tap, in ms. The left and right taps stop here.
+const MAX_DELAY_MS: f64 = 1000.0;
+
+/// DELAY FEEDBACK to the loop gain per step from the center (64), -0.97 to +0.95.
+const FEEDBACK_STEP: f64 = 124.0 / 8192.0;
+
+/// DELAY TIME RATIO LEFT and RIGHT set their tap in steps of 100/24 % of DELAY TIME CENTER.
+const RATIO_STEP: f64 = 1.0 / 24.0;
+
 /// Equivalent to: GSDelayParameter
 #[derive(Clone, Debug)]
 pub struct DelaySnapshot {
@@ -43,152 +68,177 @@ pub struct DelaySnapshot {
     pub send_level_to_reverb: u8,
 }
 
-/// Equivalent to: class DefaultGSDelay
+/// The default GS Delay implementation.
+///
+/// It is modeled on the delay of the Sound Canvas (as Sound Canvas VA runs it): a mono input through a DC blocker
+/// and the PRE-LPF into one delay line with three taps.
+/// ```text
+/// input --> (+) --> delay line --+-- center --> L and R
+///            ^                   +-- left ----> L
+///            |                   +-- right ---> R
+///            +---- x feedback <-- center (previous sample)
+/// ```
+/// The center always feeds back, at the center time, even with LEVEL CENTER at 0 (hardware and SC-VA agree).
+/// The left and right taps follow the center time through their ratios.
+/// The send to reverb takes the three taps (the center once) before LEVEL, so it works even at LEVEL 0.
 pub struct DefaultGSDelay {
-    /// Alpha
-    pre_lpf_a: f64,
-    /// Previous value
-    pre_lpf_z: f64,
-    buffer: Vec<f32>,
     sample_rate: f64,
-    delay_pre_lpf: Vec<f32>,
-    delay_left_multiplier: f64,
-    delay_right_multiplier: f64,
+    input: SendInput,
+    delay_line: DelayLine,
     gain: f64,
     reverb_gain: f64,
     feedback_gain: f64,
-    /// Samples
-    delay_center: i64,
-    /// Samples
-    delay_left: i64,
-    /// Samples
-    delay_right: i64,
+    delay_center_ms: f64,
+    // The tap delays, in samples
+    delay_center: isize,
+    delay_left: isize,
+    delay_right: isize,
     gain_center: f64,
     gain_left: f64,
     gain_right: f64,
-    write_index: i64,
+    /// The center tap of the previous sample, which is what feeds back.
+    feedback_sample: f64,
 
-    // Stored parameter values
-    send_level_to_reverb: u8,
-    pre_lowpass: u8,
-    level_right: u8,
     level: u8,
+    send_level_to_reverb: u8,
     level_center: u8,
-    level_left: u8,
+    pre_lowpass: u8,
     feedback: u8,
+    level_right: u8,
+    time_center: u8,
+    level_left: u8,
     time_ratio_right: u8,
     time_ratio_left: u8,
-    time_center: u8,
 }
 
 impl DefaultGSDelay {
     /// Constructs a new default GS delay processor.
-    pub fn new(sample_rate: f64, max_buffer_size: usize) -> Self {
-        let delay_center = (0.34 * sample_rate).floor() as i64;
-        let level = 64u8;
-        Self {
-            pre_lpf_a: 0.0,
-            pre_lpf_z: 0.0,
-            buffer: vec![0.0; sample_rate as usize],
+    /// `max_buffer_size` is unused (TS: for consistency across effects).
+    pub fn new(sample_rate: f64, _max_buffer_size: usize) -> Self {
+        let mut delay = Self {
             sample_rate,
-            delay_pre_lpf: vec![0.0; max_buffer_size],
-            delay_left_multiplier: 0.04,
-            delay_right_multiplier: 0.04,
-            gain: (level as f64 / 127.0) * DELAY_GAIN,
+            input: SendInput::new(sample_rate),
+            delay_line: DelayLine::new(((MAX_DELAY_MS * sample_rate) / 1000.0).ceil()),
+            gain: 1.0,
             reverb_gain: 0.0,
             feedback_gain: 0.0,
-            delay_center,
-            delay_left: (delay_center as f64 * 0.04).floor() as i64,
-            delay_right: (delay_center as f64 * 0.04).floor() as i64,
-            gain_center: 1.0,
+            delay_center_ms: 0.0,
+            delay_center: 1,
+            delay_left: 1,
+            delay_right: 1,
+            gain_center: 0.0,
             gain_left: 0.0,
             gain_right: 0.0,
-            write_index: 0,
+            feedback_sample: 0.0,
+            level: LEVEL_UNITY as u8,
             send_level_to_reverb: 0,
+            level_center: 0,
             pre_lowpass: 0,
+            feedback: 64,
             level_right: 0,
-            level,
-            level_center: 127,
+            time_center: 0,
             level_left: 0,
-            feedback: 16,
             time_ratio_right: 0,
             time_ratio_left: 0,
-            time_center: 12,
-        }
+        };
+        delay.reset();
+        delay
     }
 
-    pub fn set_send_level_to_reverb(&mut self, value: u8) {
-        self.send_level_to_reverb = value;
-        self.reverb_gain = value as f64 / 127.0;
-    }
-
-    pub fn set_pre_lowpass(&mut self, value: u8) {
-        self.pre_lowpass = value;
-        // GS sure loves weird mappings, huh?
-        // Maps to around 8000-300 Hz
-        let pre_lpf_fc = 8000.0 * 0.63_f64.powf(value as f64);
-        let decay = ((-2.0 * PI * pre_lpf_fc) / self.sample_rate).exp();
-        self.pre_lpf_a = 1.0 - decay;
-    }
-
-    pub fn set_level_right(&mut self, value: u8) {
-        self.level_right = value;
-        self.update_gain();
+    pub fn level(&self) -> u8 {
+        self.level
     }
 
     pub fn set_level(&mut self, value: u8) {
         self.level = value;
-        self.gain = (value as f64 / 127.0) * DELAY_GAIN;
+        self.gain = value as f64 / LEVEL_UNITY;
+    }
+
+    pub fn send_level_to_reverb(&self) -> u8 {
+        self.send_level_to_reverb
+    }
+
+    pub fn set_send_level_to_reverb(&mut self, value: u8) {
+        self.send_level_to_reverb = value;
+        self.reverb_gain = value as f64 / GAIN_SCALE;
+    }
+
+    pub fn level_center(&self) -> u8 {
+        self.level_center
     }
 
     pub fn set_level_center(&mut self, value: u8) {
         self.level_center = value;
-        self.update_gain();
+        self.gain_center = value as f64 / GAIN_SCALE;
+    }
+
+    pub fn pre_lowpass(&self) -> u8 {
+        self.pre_lowpass
+    }
+
+    pub fn set_pre_lowpass(&mut self, value: u8) {
+        self.pre_lowpass = value;
+        self.input.set_pre_low_pass(value as f64);
+    }
+
+    pub fn feedback(&self) -> u8 {
+        self.feedback
+    }
+
+    pub fn set_feedback(&mut self, value: u8) {
+        // 64 is no feedback, below it the phase is inverted
+        self.feedback_gain = (value as f64 - 64.0) * FEEDBACK_STEP;
+        self.feedback = value;
+    }
+
+    pub fn level_right(&self) -> u8 {
+        self.level_right
+    }
+
+    pub fn set_level_right(&mut self, value: u8) {
+        self.level_right = value;
+        self.gain_right = value as f64 / GAIN_SCALE;
+    }
+
+    pub fn time_center(&self) -> u8 {
+        self.time_center
+    }
+
+    pub fn set_time_center(&mut self, value: u8) {
+        // The line holds repeats at the old time
+        if value != self.time_center {
+            self.clear();
+        }
+        self.time_center = value;
+        self.delay_center_ms = TIME_CENTER_MS[(value as usize).min(MAX_TIME_CENTER)];
+        self.update_delay_times();
+    }
+
+    pub fn level_left(&self) -> u8 {
+        self.level_left
     }
 
     pub fn set_level_left(&mut self, value: u8) {
         self.level_left = value;
-        self.update_gain();
+        self.gain_left = value as f64 / GAIN_SCALE;
     }
 
-    pub fn set_feedback(&mut self, value: u8) {
-        // -64 means max at inverted phase
-        // Use 66 for it to not be infinite (-1)
-        self.feedback_gain = (value as f64 - 64.0) / 66.0;
-        self.feedback = value;
+    pub fn time_ratio_right(&self) -> u8 {
+        self.time_ratio_right
     }
 
     pub fn set_time_ratio_right(&mut self, value: u8) {
         self.time_ratio_right = value;
-        // The resolution is 100/24(%).
-        // Turn that into multiplier
-        self.delay_right_multiplier = value as f64 * (100.0 / 2400.0);
         self.update_delay_times();
+    }
+
+    pub fn time_ratio_left(&self) -> u8 {
+        self.time_ratio_left
     }
 
     pub fn set_time_ratio_left(&mut self, value: u8) {
         self.time_ratio_left = value;
-        // The resolution is 100/24(%).
-        // Turn that into multiplier
-        self.delay_left_multiplier = value as f64 * (100.0 / 2400.0);
         self.update_delay_times();
-    }
-
-    pub fn set_time_center(&mut self, value: u8) {
-        self.time_center = value;
-
-        let mut delay_ms: f64 = 0.1;
-        for seg in DELAY_TIME_SEGMENTS {
-            if value >= seg.start && value < seg.end {
-                delay_ms = seg.time_start + (value - seg.start) as f64 * seg.resolution;
-                break;
-            }
-        }
-        self.delay_center = ((self.buffer.len() - 1) as f64)
-            .min((self.sample_rate * (delay_ms / 1000.0)).max(2.0))
-            .floor() as i64;
-        self.update_delay_times();
-        self.buffer.fill(0.0);
     }
 
     /// Process the effect and ADDS it to the output.
@@ -204,98 +254,49 @@ impl DefaultGSDelay {
         start_index: usize,
         sample_count: usize,
     ) {
-        // Process pre-lowpass
-        let delay_in: &[f32] = if self.pre_lowpass > 0 {
-            let mut z = self.pre_lpf_z;
-            let a = self.pre_lpf_a;
-            for i in 0..sample_count {
-                let x = input[i] as f64;
-                z += a * (x - z);
-                self.delay_pre_lpf[i] = z as f32;
-            }
-            self.pre_lpf_z = z;
-            &self.delay_pre_lpf
-        } else {
-            input
-        };
-
-        // Connections are:
-        // center delay -> stereo output (and reverb)
-        // center delay -> center feedback
-        // stereo delays only connect to the output.
-        // Also level is separate from reverb send level,
-        // i.e. level = 0 and reverb send level = 127 will still send sound to reverb.
-        //
-        // Center always sends to stereo, regardless of level center in hardware and latest
-        // SCVA, older revisions incorrectly don't send it,
-        // So level center = 0, level left = 127 will still have feedback.
-        // Also feedback time is always time center, even if only left delay is playing.
         let gain = self.gain;
         let reverb_gain = self.reverb_gain;
         let delay_center = self.delay_center;
         let delay_left = self.delay_left;
         let delay_right = self.delay_right;
         let feedback_gain = self.feedback_gain;
-        let buffer = &mut self.buffer;
-        let mut write_index = self.write_index;
-        let buffer_length = buffer.len() as i64;
-        let center_gain = self.gain_center * gain;
-        let left_gain = self.gain_left * gain;
-        let right_gain = self.gain_right * gain;
-
-        // Float32Array `+=`: the sum is done in f64, then stored as f32.
-        fn add(dst: &mut f32, v: f64) {
-            *dst = (*dst as f64 + v) as f32;
-        }
+        let gain_center = self.gain_center;
+        let gain_left = self.gain_left;
+        let gain_right = self.gain_right;
+        let mut feedback_sample = self.feedback_sample;
 
         for i in 0..sample_count {
-            // Read center
-            let mut center_read_index = write_index - delay_center;
-            if center_read_index < 0 {
-                center_read_index += buffer_length;
-            }
+            let x = self.input.process(input[i] as f64);
+            self.delay_line.write(x + feedback_sample * feedback_gain);
+            feedback_sample = self.delay_line.read(delay_center);
+            let center = feedback_sample * gain_center;
+            let left = self.delay_line.read(delay_left) * gain_left;
+            let right = self.delay_line.read(delay_right) * gain_right;
 
-            // Read left
-            let mut left_read_index = (write_index - delay_left) % buffer_length;
-            if left_read_index < 0 {
-                left_read_index += buffer_length;
-            }
-
-            // Read right
-            let mut right_read_index = (write_index - delay_right) % buffer_length;
-            if right_read_index < 0 {
-                right_read_index += buffer_length;
-            }
-
-            // Write center
             let o = start_index + i;
-            let delayed = buffer[center_read_index as usize] as f64;
-            let c = delayed * center_gain;
-            add(&mut output_left[o], c);
-            add(&mut output_right[o], c);
-            add(&mut output_reverb[i], c * reverb_gain);
-
-            // Center feedback, do it first so left and right delay of 0 work fine
-            // Testcase: gs_effect_send_level_test
-            buffer[write_index as usize] = (delay_in[i] as f64 + delayed * feedback_gain) as f32;
-
-            // Write left
-            let l = buffer[left_read_index as usize] as f64 * left_gain;
-            add(&mut output_left[o], l);
-            add(&mut output_reverb[i], l * reverb_gain);
-
-            // Write right
-            let r = buffer[right_read_index as usize] as f64 * right_gain;
-            add(&mut output_right[o], r);
-            add(&mut output_reverb[i], r * reverb_gain);
-
-            // Advance and wrap
-            write_index += 1;
-            if write_index >= buffer_length {
-                write_index = 0;
-            }
+            output_left[o] = (output_left[o] as f64 + (left + center) * gain) as f32;
+            output_right[o] = (output_right[o] as f64 + (right + center) * gain) as f32;
+            output_reverb[i] = (output_reverb[i] as f64 + (left + right + center) * reverb_gain) as f32;
         }
-        self.write_index = write_index;
+        self.feedback_sample = feedback_sample;
+    }
+
+    pub fn reset(&mut self) {
+        self.input.clear();
+        self.clear();
+        // Delay 1
+        self.set_level(LEVEL_UNITY as u8);
+        self.set_pre_lowpass(0);
+        self.set_time_center(97);
+        // TS: this.timeRatioLeft = this.timeRatioRight = 1 (right is set first)
+        self.set_time_ratio_right(1);
+        self.set_time_ratio_left(1);
+        self.set_level_center(127);
+        // TS: this.levelLeft = this.levelRight = 0
+        self.set_level_right(0);
+        self.set_level_left(0);
+        self.set_feedback(80);
+        self.set_send_level_to_reverb(0);
     }
 
     pub fn get_snapshot(&self) -> DelaySnapshot {
@@ -328,94 +329,19 @@ impl DefaultGSDelay {
         self.set_send_level_to_reverb(snapshot.send_level_to_reverb);
     }
 
+    fn clear(&mut self) {
+        self.delay_line.clear();
+        self.feedback_sample = 0.0;
+    }
+
     fn update_delay_times(&mut self) {
-        // Recompute times
-        let max_delay = self.buffer.len() as i64 - 1;
-        self.delay_left =
-            max_delay.min((self.delay_center as f64 * self.delay_left_multiplier).floor() as i64);
-        self.delay_right =
-            max_delay.min((self.delay_center as f64 * self.delay_right_multiplier).floor() as i64);
-    }
-
-    fn update_gain(&mut self) {
-        // Center gain is applied in post
-        self.gain_center = self.level_center as f64 / 127.0;
-        self.gain_left = self.level_left as f64 / 127.0;
-        self.gain_right = self.level_right as f64 / 127.0;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const EPS: f64 = 1e-9;
-
-    #[test]
-    fn time_center_segments() {
-        let mut d = DefaultGSDelay::new(48_000.0, 128);
-        // 0x01 -> 0.1 ms -> clamped to 2 samples
-        d.set_time_center(0x01);
-        assert_eq!(d.delay_center, 4);
-        // 0x14 -> 2 ms
-        d.set_time_center(0x14);
-        assert_eq!(d.delay_center, 96);
-        // 0x73 -> 500 + 10 * 50 = 1000 ms -> capped to buffer length - 1
-        d.set_time_center(0x73);
-        assert_eq!(d.delay_center, 47_999);
-    }
-
-    #[test]
-    fn initial_gain_follows_default_level() {
-        let d = DefaultGSDelay::new(44_100.0, 128);
-        assert!((d.gain - (64.0 / 127.0) * DELAY_GAIN).abs() < EPS);
-        assert_eq!(d.delay_center, (0.34f64 * 44_100.0).floor() as i64);
-    }
-
-    #[test]
-    fn feedback_gain() {
-        let mut d = DefaultGSDelay::new(44_100.0, 128);
-        d.set_feedback(64);
-        assert!(d.feedback_gain.abs() < EPS);
-        d.set_feedback(127);
-        assert!((d.feedback_gain - 63.0 / 66.0).abs() < EPS);
-        d.set_feedback(0);
-        assert!((d.feedback_gain + 64.0 / 66.0).abs() < EPS);
-    }
-
-    #[test]
-    fn time_ratios_scale_from_center() {
-        let mut d = DefaultGSDelay::new(44_100.0, 128);
-        d.set_time_ratio_left(24);
-        d.set_time_ratio_right(12);
-        assert_eq!(d.delay_left, d.delay_center);
-        assert_eq!(d.delay_right, (d.delay_center as f64 * 0.5).floor() as i64);
-    }
-
-    #[test]
-    fn impulse_comes_back_after_center_time() {
-        let mut d = DefaultGSDelay::new(1000.0, 1000);
-        d.set_time_center(0x2d); // 10 ms -> 10 samples at 1 kHz
-        let mut input = vec![0.0f32; 64];
-        input[0] = 1.0;
-        let mut l = vec![0.0f32; 64];
-        let mut r = vec![0.0f32; 64];
-        let mut rev = vec![0.0f32; 64];
-        d.process(&input, &mut l, &mut r, &mut rev, 0, 64);
-        let first = l.iter().position(|&x| x != 0.0).unwrap();
-        assert_eq!(first, 10);
-        assert_eq!(l, r);
-    }
-
-    #[test]
-    fn snapshot_captures_parameters() {
-        let mut d = DefaultGSDelay::new(44_100.0, 128);
-        d.set_level(100);
-        d.set_feedback(80);
-        d.set_time_center(0x20);
-        let snap = d.get_snapshot();
-        assert_eq!(snap.level, 100);
-        assert_eq!(snap.feedback, 80);
-        assert_eq!(snap.time_center, 0x20);
+        // The left and right taps follow the center time and stop at the end of the line
+        let to_samples = self.sample_rate / 1000.0;
+        let center = self.delay_center_ms;
+        let left = MAX_DELAY_MS.min(center * (self.time_ratio_left as f64 * RATIO_STEP));
+        let right = MAX_DELAY_MS.min(center * (self.time_ratio_right as f64 * RATIO_STEP));
+        self.delay_center = js_round(center * to_samples).max(1.0) as isize;
+        self.delay_left = js_round(left * to_samples).max(1.0) as isize;
+        self.delay_right = js_round(right * to_samples).max(1.0) as isize;
     }
 }

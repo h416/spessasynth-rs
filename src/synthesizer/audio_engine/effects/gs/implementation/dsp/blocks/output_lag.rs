@@ -1,5 +1,6 @@
 //! A fixed delay of whole 32 kHz samples: a delay line or a Thiran allpass.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/blocks/output_lag.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use super::delay_line::DelayLine;
 use super::first_order_filter::FLUSH;
@@ -22,7 +23,7 @@ pub struct OutputLag {
 impl OutputLag {
     /// `samples` is the delay in 32 kHz samples (1 by default in TS).
     pub fn new(sample_rate: f64, samples: f64) -> Self {
-        let delay = (samples * sample_rate) / 32_000.0;
+        let delay = (samples * sample_rate) / HARDWARE_RATE;
         let whole = js_round(delay);
         let line;
         let mut a;

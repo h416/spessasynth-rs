@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::soundbank::basic_soundbank::midi_patch::{
-    MidiPatch, compare, select_patch,
+    MidiPatch, compare, matches, select_patch,
 };
 use crate::synthesizer::types::PresetListEntry;
 use crate::soundbank::types::MIDISystem;
@@ -83,6 +83,30 @@ pub struct SoundBankManager {
     /// The GS User Drum Sets (programs 64 and 65).
     /// Equivalent to: userDrumSets
     pub user_drum_sets: [UserDrumSet; 2],
+
+    /// The presets returned for the user drum sets, at their place (program 64 and 65 of the GS drums).
+    /// Their bank index is `user_drum_bank_idx(i)`.
+    user_drum_placeholders: [BasicPreset; 2],
+}
+
+/// The patch of a preset.
+fn patch_of(p: &BasicPreset) -> MidiPatch {
+    MidiPatch {
+        program: p.program,
+        bank_msb: p.bank_msb,
+        bank_lsb: p.bank_lsb,
+        is_gm_gs_drum: p.is_gm_gs_drum,
+    }
+}
+
+/// The preset standing for a user drum set.
+fn user_drum_placeholder(drum_set: &UserDrumSet) -> BasicPreset {
+    let mut placeholder = BasicPreset::with_name(drum_set.name.clone());
+    placeholder.program = drum_set.program;
+    placeholder.bank_msb = 0;
+    placeholder.bank_lsb = 0;
+    placeholder.is_gm_gs_drum = true;
+    placeholder
 }
 
 /// `selectable_bank_idxs` value of the placeholder preset of user drum set `i` is
@@ -103,6 +127,10 @@ impl SoundBankManager {
             user_drum_sets: [
                 UserDrumSet::new(GS_USER_DRUM_1, "User Drum Set 1"),
                 UserDrumSet::new(GS_USER_DRUM_2, "User Drum Set 2"),
+            ],
+            user_drum_placeholders: [
+                user_drum_placeholder(&UserDrumSet::new(GS_USER_DRUM_1, "User Drum Set 1")),
+                user_drum_placeholder(&UserDrumSet::new(GS_USER_DRUM_2, "User Drum Set 2")),
             ],
         }
     }
@@ -184,48 +212,39 @@ impl SoundBankManager {
     }
 
     /// Selects a preset and returns a reference to both the preset and its source bank.
-    /// Returns `None` if no banks are loaded or the selectable list is empty.
+    /// Returns `None` if no banks are loaded or the selectable list is empty, and for a user drum set
+    /// (it has no source bank of its own).
     ///
     /// The returned `&BasicSoundBank` is needed by callers that must resolve instrument
     /// indices (which are only valid relative to their source bank).
     ///
-    /// Equivalent to: getPreset(patch, system) — extended for Rust's ownership model.
+    /// Equivalent to: getPreset(patch, system, channel10) — extended for Rust's ownership model.
     pub fn get_preset_and_bank(
         &self,
         patch: MidiPatch,
         system: MIDISystem,
+        channel10: bool,
     ) -> Option<(&BasicPreset, &BasicSoundBank)> {
-        if self.sound_bank_list.is_empty() || self.selectable_preset_list.is_empty() {
-            return None;
-        }
-        let preset = select_patch(
-            &self.selectable_preset_list,
-            &self.selectable_is_drum,
-            patch,
-            system,
-        );
-        // Identify the position of the returned reference via pointer equality.
-        let idx = self
-            .selectable_preset_list
-            .iter()
-            .position(|p| std::ptr::eq(p, preset))?;
-        let bank_idx = self.selectable_bank_idxs[idx];
-        // A user drum set has no source bank of its own.
+        let (preset, bank_idx) = self.get_preset_and_bank_idx(patch, system, channel10)?;
         if Self::user_drum_set_of(bank_idx).is_some() {
             return None;
         }
         Some((preset, &self.sound_bank_list[bank_idx].sound_bank))
     }
 
-    /// Selects a preset and returns a reference to it along with the source bank index.
+    /// Selects a preset and returns a reference to it along with the source bank index
+    /// (`user_drum_bank_idx(i)` for a user drum set).
     /// This Rust-specific variant is used by SynthesizerCore to retrieve the bank index
     /// for caching and resolving instrument indices after selection.
     ///
     /// Returns None if no banks are loaded or the selectable list is empty.
+    /// `channel10`: if the request comes from channel 10, see `select_patch`.
+    /// Equivalent to: getPreset(patch, system, channel10 = false)
     pub fn get_preset_and_bank_idx(
         &self,
         patch: MidiPatch,
         system: MIDISystem,
+        channel10: bool,
     ) -> Option<(&BasicPreset, usize)> {
         if self.sound_bank_list.is_empty() || self.selectable_preset_list.is_empty() {
             return None;
@@ -235,12 +254,23 @@ impl SoundBankManager {
             &self.selectable_is_drum,
             patch,
             system,
+            channel10,
         );
         let idx = self
             .selectable_preset_list
             .iter()
             .position(|p| std::ptr::eq(p, preset))?;
         let bank_idx = self.selectable_bank_idxs[idx];
+        // The GS user drum sets are only found by an exact request the sound banks can't answer,
+        // Never by a fallback
+        if BankSelectHacks::is_system_xg(system) || matches(&patch_of(preset), &patch) {
+            return Some((preset, bank_idx));
+        }
+        for (i, placeholder) in self.user_drum_placeholders.iter().enumerate() {
+            if matches(&patch_of(placeholder), &patch) {
+                return Some((placeholder, Self::user_drum_bank_idx(i)));
+            }
+        }
         Some((preset, bank_idx))
     }
 
@@ -264,26 +294,6 @@ impl SoundBankManager {
         // Pair: (adjusted BasicPreset, source bank index).
         let mut pairs: Vec<(BasicPreset, usize)> = Vec::new();
         let mut added: HashSet<String> = HashSet::new();
-
-        let total_presets: usize =
-            self.sound_bank_list.iter().map(|s| s.sound_bank.presets.len()).sum();
-
-        // If there are no presets, don't report as having GS user drums
-        if total_presets > 0 {
-            // Add custom drum sets first so they take priority
-            for (i, drum_set) in self.user_drum_sets.iter().enumerate() {
-                let mut placeholder = BasicPreset::with_name(drum_set.name.clone());
-                placeholder.program = drum_set.program;
-                placeholder.bank_msb = 0;
-                placeholder.bank_lsb = 0;
-                placeholder.is_gm_gs_drum = true;
-                let key = placeholder.to_midi_string();
-                if !added.contains(&key) {
-                    added.insert(key);
-                    pairs.push((placeholder, Self::user_drum_bank_idx(i)));
-                }
-            }
-        }
 
         for (bank_idx, entry) in self.sound_bank_list.iter().enumerate() {
             let bank = &entry.sound_bank;
@@ -313,22 +323,19 @@ impl SoundBankManager {
 
         // Sort by MIDI patch order; drums are forced to the end.
         // Equivalent to: presetList.sort(MIDIPatchTools.compare.bind(MIDIPatchTools))
-        pairs.sort_by(|(a, _), (b, _)| {
-            compare(
-                &MidiPatch {
-                    program: a.program,
-                    bank_msb: a.bank_msb,
-                    bank_lsb: a.bank_lsb,
-                    is_gm_gs_drum: a.is_gm_gs_drum,
-                },
-                &MidiPatch {
-                    program: b.program,
-                    bank_msb: b.bank_msb,
-                    bank_lsb: b.bank_lsb,
-                    is_gm_gs_drum: b.is_gm_gs_drum,
-                },
-            )
-        });
+        pairs.sort_by(|(a, _), (b, _)| compare(&patch_of(a), &patch_of(b)));
+
+        // If there are no presets, don't report as having GS user drums.
+        // A preset of a sound bank at the same place hides the user drum set
+        let mut reported: Vec<(BasicPreset, usize)> = pairs.clone();
+        if !pairs.is_empty() {
+            for (i, placeholder) in self.user_drum_placeholders.iter().enumerate() {
+                if !added.contains(&placeholder.to_midi_string()) {
+                    reported.push((placeholder.clone(), Self::user_drum_bank_idx(i)));
+                }
+            }
+            reported.sort_by(|(a, _), (b, _)| compare(&patch_of(a), &patch_of(b)));
+        }
 
         let (selectable_list, bank_idxs): (Vec<BasicPreset>, Vec<usize>) =
             pairs.into_iter().unzip();
@@ -341,18 +348,12 @@ impl SoundBankManager {
             .zip(bank_idxs.iter())
             .map(|(p, &bi)| self.is_drum(p, bi))
             .collect();
-        self._preset_list = selectable_list
+        self._preset_list = reported
             .iter()
-            .zip(is_drum_flags.iter())
-            .map(|(p, &is_drum)| PresetListEntry {
-                patch: MidiPatch {
-                    program: p.program,
-                    bank_msb: p.bank_msb,
-                    bank_lsb: p.bank_lsb,
-                    is_gm_gs_drum: p.is_gm_gs_drum,
-                },
+            .map(|(p, bi)| PresetListEntry {
+                patch: patch_of(p),
                 name: p.name.clone(),
-                is_drum,
+                is_drum: self.is_drum(p, *bi),
             })
             .collect();
 
@@ -683,7 +684,7 @@ mod tests {
             bank_lsb: 0,
             is_gm_gs_drum: false,
         };
-        assert!(mgr.get_preset_and_bank(patch, MIDISystem::Gs).is_none());
+        assert!(mgr.get_preset_and_bank(patch, MIDISystem::Gs, false).is_none());
     }
 
     #[test]
@@ -697,7 +698,7 @@ mod tests {
             bank_lsb: 0,
             is_gm_gs_drum: false,
         };
-        let result = mgr.get_preset_and_bank(patch, MIDISystem::Gs);
+        let result = mgr.get_preset_and_bank(patch, MIDISystem::Gs, false);
         assert!(result.is_some());
         let (preset, _bank) = result.unwrap();
         assert_eq!(preset.program, 10);
@@ -719,7 +720,7 @@ mod tests {
             bank_lsb: 0,
             is_gm_gs_drum: false,
         };
-        let (_, source_bank) = mgr.get_preset_and_bank(patch, MIDISystem::Gs).unwrap();
+        let (_, source_bank) = mgr.get_preset_and_bank(patch, MIDISystem::Gs, false).unwrap();
         // The source bank should have program 10, not program 0.
         assert!(source_bank.presets.iter().any(|p| p.program == 10));
     }
@@ -737,7 +738,7 @@ mod tests {
             bank_lsb: 0,
             is_gm_gs_drum: false,
         };
-        let result = mgr.get_preset_and_bank(patch, MIDISystem::Gs);
+        let result = mgr.get_preset_and_bank(patch, MIDISystem::Gs, false);
         assert!(result.is_some());
         let (preset, _) = result.unwrap();
         // The selectable preset has the adjusted bank_msb.

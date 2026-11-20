@@ -1,5 +1,6 @@
 //! A first order section designed with the bilinear transform: the tone filters, shelves and DC blockers.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/blocks/first_order_filter.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::js_round;
 
@@ -21,7 +22,7 @@ pub fn prewarp(frequency: f64, sample_rate: f64) -> f64 {
 /// Equivalent to: dampCorner(pole)
 pub fn damp_corner(pole: f64) -> f64 {
     let k = (1.0 + pole * pole) / (2.0 * pole);
-    ((2.0 - k).acos() * 32_000.0) / (2.0 * std::f64::consts::PI)
+    ((2.0 - k).acos() * HARDWARE_RATE) / (2.0 * std::f64::consts::PI)
 }
 
 /// A first order section, `y = b0 x + b1 x[n-1] + a1 y[n-1]`, designed with the bilinear transform.
@@ -71,10 +72,10 @@ impl FirstOrderFilter {
     /// pole is C = round(128 c) and the gain A = round(64 (1 -+ c)). That rounding moves the corner slightly and the
     /// pass band by up to 0.6 dB, both kept. `gain` is a gain on top (1 by default in TS).
     pub fn set_tone(&mut self, high_pass: bool, frequency: f64, gain: f64) {
-        let k = ((std::f64::consts::PI * frequency) / 32_000.0).tan();
+        let k = ((std::f64::consts::PI * frequency) / HARDWARE_RATE).tan();
         let c = (1.0 - k) / (1.0 + k);
         let pole = js_round(128.0 * c);
-        let corner = (((128.0 - pole) / (128.0 + pole)).atan() * 32_000.0) / std::f64::consts::PI;
+        let corner = (((128.0 - pole) / (128.0 + pole)).atan() * HARDWARE_RATE) / std::f64::consts::PI;
         if high_pass {
             self.set_high_pass(corner, (gain * 2.0 * js_round(64.0 * (1.0 + c))) / (128.0 + pole));
         } else {
@@ -86,11 +87,17 @@ impl FirstOrderFilter {
     /// unity at DC and -3 dB at the frequency. This is its inverse bilinear prototype at the host rate,
     /// exact at 32 kHz.
     pub fn set_damp(&mut self, frequency: f64) {
-        let k = 2.0 - ((2.0 * std::f64::consts::PI * frequency) / 32_000.0).cos();
-        let b = k - (k * k - 1.0).sqrt();
+        let k = 2.0 - ((2.0 * std::f64::consts::PI * frequency) / HARDWARE_RATE).cos();
+        self.set_damp_pole(k - (k * k - 1.0).sqrt());
+    }
+
+    /// The same low pass as `set_damp`, set by its pole. The system effects store the pole itself (the PRE-LPF is
+    /// value / 8, the reverb damping one of three fixed poles), so there is no corner in Hz to convert from.
+    /// `pole` is B of `y = (1 - B) x + B y[n-1]` at 32 kHz.
+    pub fn set_damp_pole(&mut self, pole: f64) {
         // Normalized to 2 x 32 kHz the prototype is (1 - B)(1 + s) / ((1 - B) + (1 + B) s)
-        let scale = 32_000.0 / self.sample_rate;
-        let gain = (1.0 - b) / (1.0 + b);
+        let scale = HARDWARE_RATE / self.sample_rate;
+        let gain = (1.0 - pole) / (1.0 + pole);
         self.set_analog(gain, scale, gain * scale);
     }
 

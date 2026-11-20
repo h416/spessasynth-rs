@@ -72,75 +72,74 @@ pub mod generator_types {
     // Unused5 (59)
     pub const END_OPER: i16 = 60;
 
-    // Additional generators that are used in system exclusives (controller matrix),
-    // only saved in SFE banks
+    // SFe generators, only read from and written to SFe banks.
+    // The order follows SF2: filter, LFOs (mod before vib), envelopes, then the voice.
 
-    // [-1000;1000] -> 1/10%
-    pub const AMPLITUDE: i16 = 61;
-    // [-1000;1000] -> Hz/100
-    pub const VIB_LFO_RATE: i16 = 62;
-    // [0;1000] -> 1/10%
-    pub const VIB_LFO_AMPLITUDE_DEPTH: i16 = 63;
+    // 0 = lowpass, 1 = highpass, 2 = bandpass, 3 = peak, 4 = notch
+    pub const FILTER_TYPE: i16 = 61;
+    // Absolute cents, the cutoff can not go above this. 13500 = no ceiling
+    pub const MAX_FILTER_FC: i16 = 62;
+    // Centibels, added to the resonance after initialFilterQ is clamped. Negative values go below SF2's minimum Q
+    pub const FILTER_Q_OFFSET: i16 = 63;
     // Like modLfoToFilterFc
     pub const VIB_LFO_TO_FILTER_FC: i16 = 64;
-    // Like modLfoToVolume (shifts the two below by one)
+    // Like modLfoToVolume
     pub const VIB_LFO_TO_VOLUME: i16 = 65;
-    // [-1000;1000] -> Hz/100
-    pub const MOD_LFO_RATE: i16 = 66;
-    // [0;1000] -> 1/10%
-    pub const MOD_LFO_AMPLITUDE_DEPTH: i16 = 67;
-
-    // SFE generators, only read from and written to SFE banks
-
-    // 0 = release on note off, 1 = ignore note off (the voice plays until its envelope or sample ends)
-    pub const IGNORE_NOTE_OFF: i16 = 68;
-    // Timecents, the voice starts this late (sample, envelopes and LFOs). -12000 and below = no delay
-    pub const DELAY_VOICE: i16 = 69;
-    // Timecents, vibrato LFO depth ramps in after its delay. -12000 and below = no fade
-    pub const FADE_VIB_LFO: i16 = 70;
-    // Timecents, mod LFO depth ramps in after its delay. -12000 and below = no fade
-    pub const FADE_MOD_LFO: i16 = 71;
-    // 0 = triangle, 1 = sawtooth, 2 = sine
-    pub const VIB_LFO_WAVEFORM: i16 = 72;
-    // 0 = triangle, 1 = sawtooth, 2 = sine
-    pub const MOD_LFO_WAVEFORM: i16 = 73;
-    // Degrees, added to the start phase of the vibrato LFO
-    pub const VIB_LFO_START_PHASE: i16 = 74;
+    // [-1000;1000] -> 1/10%, linear amplitude modulation
+    pub const MOD_LFO_TO_AMPLITUDE: i16 = 66;
+    // [-1000;1000] -> 1/10%, linear amplitude modulation
+    pub const VIB_LFO_TO_AMPLITUDE: i16 = 67;
+    // Timecents, mod LFO depth ramps in after its delay. -32768 = no fade
+    pub const FADE_MOD_LFO: i16 = 68;
+    // Timecents, vibrato LFO depth ramps in after its delay. -32768 = no fade
+    pub const FADE_VIB_LFO: i16 = 69;
+    // 0 = triangle, 1 = sawtooth, 2 = sine, 3 = square
+    pub const MOD_LFO_WAVEFORM: i16 = 70;
+    // 0 = triangle, 1 = sawtooth, 2 = sine, 3 = square
+    pub const VIB_LFO_WAVEFORM: i16 = 71;
     // Degrees, added to the start phase of the mod LFO
-    pub const MOD_LFO_START_PHASE: i16 = 75;
-    // Absolute cents, the cutoff can not go above this. 13500 = no ceiling
-    pub const MAX_FILTER_FC: i16 = 76;
-    // Timecents for 100dB, the second decay segment from sustain to sustain + sustain2VolEnv
-    pub const DECAY2_VOL_ENV: i16 = 77;
-    // Centibels, relative to sustainVolEnv. 0 = no second decay segment
-    pub const SUSTAIN2_VOL_ENV: i16 = 78;
+    pub const MOD_LFO_START_PHASE: i16 = 72;
+    // Degrees, added to the start phase of the vibrato LFO
+    pub const VIB_LFO_START_PHASE: i16 = 73;
     // Second modulation envelope, like the first one
-    pub const DELAY_MOD_ENV2: i16 = 79;
-    pub const ATTACK_MOD_ENV2: i16 = 80;
-    pub const HOLD_MOD_ENV2: i16 = 81;
-    pub const DECAY_MOD_ENV2: i16 = 82;
-    pub const SUSTAIN_MOD_ENV2: i16 = 83;
-    pub const RELEASE_MOD_ENV2: i16 = 84;
-    pub const KEY_NUM_TO_MOD_ENV2_HOLD: i16 = 85;
-    pub const KEY_NUM_TO_MOD_ENV2_DECAY: i16 = 86;
-    pub const MOD_ENV2_TO_PITCH: i16 = 87;
-    pub const MOD_ENV2_TO_FILTER_FC: i16 = 88;
+    pub const MOD_ENV2_TO_PITCH: i16 = 74;
+    pub const MOD_ENV2_TO_FILTER_FC: i16 = 75;
+    pub const DELAY_MOD_ENV2: i16 = 76;
+    pub const ATTACK_MOD_ENV2: i16 = 77;
+    pub const HOLD_MOD_ENV2: i16 = 78;
+    pub const DECAY_MOD_ENV2: i16 = 79;
+    pub const SUSTAIN_MOD_ENV2: i16 = 80;
+    pub const RELEASE_MOD_ENV2: i16 = 81;
+    pub const KEY_NUM_TO_MOD_ENV2_HOLD: i16 = 82;
+    pub const KEY_NUM_TO_MOD_ENV2_DECAY: i16 = 83;
+    // Timecents for 100dB, the second decay segment from sustain to sustain + sustain2VolEnv
+    pub const DECAY2_VOL_ENV: i16 = 84;
+    // Centibels, relative to sustainVolEnv. 0 = no second decay segment
+    pub const SUSTAIN2_VOL_ENV: i16 = 85;
+    // Centibels, positive = louder
+    pub const GAIN: i16 = 86;
+    // Timecents, the voice starts this late (sample, envelopes and LFOs). -32768 = no delay
+    pub const DELAY_VOICE: i16 = 87;
+    // 0 = release on note off, 1 = ignore note off (the voice plays until its envelope or sample ends)
+    pub const IGNORE_NOTE_OFF: i16 = 88;
+    // Effect send - how much is sent to the variation effect (GS delay, XG variation) 0 - 1000
+    pub const VARIATION_EFFECTS_SEND: i16 = 89;
 }
 
 /// Equivalent to: GeneratorType
 pub type GeneratorType = i16;
 
 /// Maximum valid generator index.
-/// Equivalent to: MAX_GENERATOR = Math.max(...Object.values(GeneratorTypes)) = 88
-pub const MAX_GENERATOR: i16 = 88;
+/// Equivalent to: MAX_GENERATOR = Math.max(...Object.values(GeneratorTypes)) = 89
+pub const MAX_GENERATOR: i16 = 89;
 
 /// Total number of generator slots.
-/// Equivalent to: GENERATORS_AMOUNT = MAX_GENERATOR + 1 = 89
+/// Equivalent to: GENERATORS_AMOUNT = MAX_GENERATOR + 1 = 90
 pub const GENERATORS_AMOUNT: usize = MAX_GENERATOR as usize + 1;
 
 /// Generators that are only valid at the instrument level.
 /// Equivalent to: INSTRUMENT_ONLY_GENERATORS
-pub const INSTRUMENT_ONLY_GENERATORS: [GeneratorType; 16] = [
+pub const INSTRUMENT_ONLY_GENERATORS: [GeneratorType; 17] = [
     generator_types::START_ADDRS_OFFSET,
     generator_types::END_ADDR_OFFSET,
     generator_types::STARTLOOP_ADDRS_OFFSET,
@@ -157,6 +156,17 @@ pub const INSTRUMENT_ONLY_GENERATORS: [GeneratorType; 16] = [
     generator_types::IGNORE_NOTE_OFF,
     generator_types::VIB_LFO_WAVEFORM,
     generator_types::MOD_LFO_WAVEFORM,
+    generator_types::FILTER_TYPE,
+];
+
+/// The SFe generators whose values are a set of choices.
+/// A stored value outside the defined ones (from a later version) counts as the default.
+/// Equivalent to: ENUMERATED_GENERATORS
+pub const ENUMERATED_GENERATORS: [GeneratorType; 4] = [
+    generator_types::FILTER_TYPE,
+    generator_types::MOD_LFO_WAVEFORM,
+    generator_types::VIB_LFO_WAVEFORM,
+    generator_types::IGNORE_NOTE_OFF,
 ];
 
 /// Equivalent to: INSTRUMENT_ONLY_GENERATORS.has(type)
@@ -194,7 +204,7 @@ const fn lim(min: i32, max: i32, def: i32, nrpn: u8) -> Option<GeneratorLimit> {
 /// Equivalent to: `[GeneratorTypes.invalid]: { min: 0, max: 0, def: 0, nrpn: 0 }`
 pub const INVALID_GENERATOR_LIMIT: GeneratorLimit = GeneratorLimit::new(0, 0, 0, 0);
 
-/// Generator limits indexed by generator index 0-88 (89 entries).
+/// Generator limits indexed by generator index 0-89 (90 entries).
 /// None means no limit is defined for that generator
 /// (indices absent from the TS `GeneratorLimits` record: 14, 18-20, 42, 49, 55, 59).
 /// The `invalid` (-1) entry of the TS record is [`INVALID_GENERATOR_LIMIT`].
@@ -243,11 +253,11 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; GENERATORS_AMOUNT] = [
     // 20 (unused4, removed)
     None,
     // 21 delayModLFO
-    lim(-12_000, 5_000, -12_000, 2),
+    lim(-32_768, 5_000, -12_000, 2),
     // 22 freqModLFO
     lim(-16_000, 4_500, 0, 4),
     // 23 delayVibLFO
-    lim(-12_000, 5_000, -12_000, 2),
+    lim(-32_768, 5_000, -12_000, 2),
     // 24 freqVibLFO
     lim(-16_000, 4_500, 0, 4),
     // 25 delayModEnv (-32768 = instant, this is done to prevent click for lowpass)
@@ -255,7 +265,7 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; GENERATORS_AMOUNT] = [
     // 26 attackModEnv
     lim(-32_768, 8_000, -32_768, 2),
     // 27 holdModEnv
-    lim(-12_000, 5_000, -12_000, 2),
+    lim(-32_768, 5_000, -12_000, 2),
     // 28 decayModEnv
     lim(-12_000, 8_000, -12_000, 2),
     // 29 sustainModEnv
@@ -267,11 +277,11 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; GENERATORS_AMOUNT] = [
     // 32 keyNumToModEnvDecay
     lim(-1_200, 1_200, 0, 1),
     // 33 delayVolEnv
-    lim(-12_000, 5_000, -12_000, 2),
+    lim(-32_768, 5_000, -12_000, 2),
     // 34 attackVolEnv
-    lim(-12_000, 8_000, -12_000, 2),
+    lim(-32_768, 8_000, -12_000, 2),
     // 35 holdVolEnv
-    lim(-12_000, 5_000, -12_000, 2),
+    lim(-32_768, 5_000, -12_000, 2),
     // 36 decayVolEnv
     lim(-12_000, 8_000, -12_000, 2),
     // 37 sustainVolEnv
@@ -309,7 +319,7 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; GENERATORS_AMOUNT] = [
     // 53 sampleID (non-value generator)
     lim(0, 0, 0, 0),
     // 54 sampleModes
-    lim(0, 3, 0, 0),
+    lim(0, 4, 0, 0),
     // 55 (reserved3, removed)
     None,
     // 56 scaleTuning
@@ -322,62 +332,64 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; GENERATORS_AMOUNT] = [
     None,
     // 60 endOper (non-value generator)
     lim(0, 0, 0, 0),
-    // 61 amplitude (NON-STANDARD)
-    lim(-1_000, 1_000, 0, 1),
-    // 62 vibLfoRate (NON-STANDARD)
-    lim(-1_000, 1_000, 0, 1),
-    // 63 vibLfoAmplitudeDepth (NON-STANDARD)
-    lim(0, 1_000, 0, 1),
-    // 64 vibLfoToFilterFc (NON-STANDARD)
-    lim(-12_000, 12_000, 0, 2),
-    // 65 vibLfoToVolume (NON-STANDARD)
-    lim(-960, 960, 0, 1),
-    // 66 modLfoRate (NON-STANDARD)
-    lim(-1_000, 1_000, 0, 1),
-    // 67 modLfoAmplitudeDepth (NON-STANDARD)
-    lim(0, 1_000, 0, 1),
-    // 68 ignoreNoteOff (SFE)
-    lim(0, 1, 0, 0),
-    // 69 delayVoice (SFE)
-    lim(-12_000, 5_000, -12_000, 2),
-    // 70 fadeVibLFO (SFE)
-    lim(-12_000, 5_000, -12_000, 2),
-    // 71 fadeModLFO (SFE)
-    lim(-12_000, 5_000, -12_000, 2),
-    // 72 vibLfoWaveform (SFE)
-    lim(0, 2, 0, 0),
-    // 73 modLfoWaveform (SFE)
-    lim(0, 2, 0, 0),
-    // 74 vibLfoStartPhase (SFE)
-    lim(0, 360, 0, 1),
-    // 75 modLfoStartPhase (SFE)
-    lim(0, 360, 0, 1),
-    // 76 maxFilterFc (SFE)
+    // 61 filterType (SFe)
+    lim(0, 4, 0, 0),
+    // 62 maxFilterFc (SFe)
     lim(1_500, 13_500, 13_500, 2),
-    // 77 decay2VolEnv (SFE)
+    // 63 filterQOffset (SFe)
+    lim(-960, 960, 0, 1),
+    // 64 vibLfoToFilterFc (SFe)
+    lim(-12_000, 12_000, 0, 2),
+    // 65 vibLfoToVolume (SFe)
+    lim(-960, 960, 0, 1),
+    // 66 modLfoToAmplitude (SFe)
+    lim(-1_000, 1_000, 0, 1),
+    // 67 vibLfoToAmplitude (SFe)
+    lim(-1_000, 1_000, 0, 1),
+    // 68 fadeModLFO (SFe)
+    lim(-32_768, 5_000, -32_768, 2),
+    // 69 fadeVibLFO (SFe)
+    lim(-32_768, 5_000, -32_768, 2),
+    // 70 modLfoWaveform (SFe)
+    lim(0, 3, 0, 0),
+    // 71 vibLfoWaveform (SFe)
+    lim(0, 3, 0, 0),
+    // 72 modLfoStartPhase (SFe)
+    lim(0, 360, 0, 1),
+    // 73 vibLfoStartPhase (SFe)
+    lim(0, 360, 0, 1),
+    // 74 modEnv2ToPitch (SFe)
+    lim(-12_000, 12_000, 0, 2),
+    // 75 modEnv2ToFilterFc (SFe)
+    lim(-12_000, 12_000, 0, 2),
+    // 76 delayModEnv2 (SFe)
+    lim(-32_768, 5_000, -32_768, 2),
+    // 77 attackModEnv2 (SFe)
+    lim(-32_768, 8_000, -32_768, 2),
+    // 78 holdModEnv2 (SFe)
+    lim(-32_768, 5_000, -32_768, 2),
+    // 79 decayModEnv2 (SFe)
     lim(-12_000, 8_000, -12_000, 2),
-    // 78 sustain2VolEnv (SFE)
-    lim(-1_440, 1_440, 0, 1),
-    // 79 delayModEnv2 (SFE)
-    lim(-12_000, 5_000, -12_000, 2),
-    // 80 attackModEnv2 (SFE)
-    lim(-12_000, 8_000, -12_000, 2),
-    // 81 holdModEnv2 (SFE)
-    lim(-12_000, 5_000, -12_000, 2),
-    // 82 decayModEnv2 (SFE)
-    lim(-12_000, 8_000, -12_000, 2),
-    // 83 sustainModEnv2 (SFE)
+    // 80 sustainModEnv2 (SFe)
     lim(0, 1_000, 0, 1),
-    // 84 releaseModEnv2 (SFE)
+    // 81 releaseModEnv2 (SFe)
     lim(-12_000, 8_000, -12_000, 2),
-    // 85 keyNumToModEnv2Hold (SFE)
+    // 82 keyNumToModEnv2Hold (SFe)
     lim(-1_200, 1_200, 0, 1),
-    // 86 keyNumToModEnv2Decay (SFE)
+    // 83 keyNumToModEnv2Decay (SFe)
     lim(-1_200, 1_200, 0, 1),
-    // 87 modEnv2ToPitch (SFE)
-    lim(-12_000, 12_000, 0, 2),
-    // 88 modEnv2ToFilterFc (SFE)
-    lim(-12_000, 12_000, 0, 2),
+    // 84 decay2VolEnv (SFe)
+    lim(-12_000, 8_000, -12_000, 2),
+    // 85 sustain2VolEnv (SFe)
+    lim(-1_440, 1_440, 0, 1),
+    // 86 gain (SFe)
+    lim(-1_440, 1_440, 0, 1),
+    // 87 delayVoice (SFe)
+    lim(-32_768, 5_000, -32_768, 2),
+    // 88 ignoreNoteOff (SFe)
+    lim(0, 1, 0, 0),
+    // 89 variationEffectsSend (SFe)
+    lim(0, 1_000, 0, 1),
 ];
 
 const fn compute_default_values() -> [i16; GENERATORS_AMOUNT] {
@@ -392,7 +404,7 @@ const fn compute_default_values() -> [i16; GENERATORS_AMOUNT] {
     arr
 }
 
-/// Default generator values as an 89-element i16 array.
+/// Default generator values as a 90-element i16 array.
 /// Equivalent to: defaultGeneratorValues (Int16Array of size GENERATORS_AMOUNT;
 /// a module-private constant of basic_preset.ts in TS)
 pub const DEFAULT_GENERATOR_VALUES: [i16; GENERATORS_AMOUNT] = compute_default_values();
@@ -430,45 +442,25 @@ mod tests {
     }
 
     #[test]
-    fn test_amplitude() {
-        assert_eq!(gt::AMPLITUDE, 61);
-    }
-
-    #[test]
-    fn test_vib_lfo_rate() {
-        assert_eq!(gt::VIB_LFO_RATE, 62);
-    }
-
-    #[test]
-    fn test_vib_lfo_amplitude_depth() {
-        assert_eq!(gt::VIB_LFO_AMPLITUDE_DEPTH, 63);
-    }
-
-    #[test]
-    fn test_vib_lfo_to_filter_fc() {
+    fn test_sfe_generators() {
+        assert_eq!(gt::FILTER_TYPE, 61);
         assert_eq!(gt::VIB_LFO_TO_FILTER_FC, 64);
-    }
-
-    #[test]
-    fn test_mod_lfo_rate() {
-        assert_eq!(gt::MOD_LFO_RATE, 66);
-    }
-
-    #[test]
-    fn test_mod_lfo_amplitude_depth() {
-        assert_eq!(gt::MOD_LFO_AMPLITUDE_DEPTH, 67);
+        assert_eq!(gt::MOD_LFO_TO_AMPLITUDE, 66);
+        assert_eq!(gt::VIB_LFO_TO_AMPLITUDE, 67);
+        assert_eq!(gt::GAIN, 86);
+        assert_eq!(gt::VARIATION_EFFECTS_SEND, 89);
     }
 
     // --- module-level constants ---
 
     #[test]
     fn test_generators_amount() {
-        assert_eq!(GENERATORS_AMOUNT, 89);
+        assert_eq!(GENERATORS_AMOUNT, 90);
     }
 
     #[test]
     fn test_max_generator() {
-        assert_eq!(MAX_GENERATOR, 88);
+        assert_eq!(MAX_GENERATOR, 89);
     }
 
     // --- GENERATOR_LIMITS ---
@@ -555,10 +547,10 @@ mod tests {
     }
 
     #[test]
-    fn test_limits_amplitude() {
-        let lim = GENERATOR_LIMITS[gt::AMPLITUDE as usize].unwrap();
-        assert_eq!(lim.min, -1_000);
-        assert_eq!(lim.max, 1_000);
+    fn test_limits_gain() {
+        let lim = GENERATOR_LIMITS[gt::GAIN as usize].unwrap();
+        assert_eq!(lim.min, -1_440);
+        assert_eq!(lim.max, 1_440);
         assert_eq!(lim.def, 0);
         assert_eq!(lim.nrpn, 1);
     }
@@ -572,15 +564,15 @@ mod tests {
     }
 
     #[test]
-    fn test_limits_mod_lfo_amplitude_depth() {
-        let lim = GENERATOR_LIMITS[gt::MOD_LFO_AMPLITUDE_DEPTH as usize].unwrap();
-        assert_eq!(lim.min, 0);
+    fn test_limits_mod_lfo_to_amplitude() {
+        let lim = GENERATOR_LIMITS[gt::MOD_LFO_TO_AMPLITUDE as usize].unwrap();
+        assert_eq!(lim.min, -1_000);
         assert_eq!(lim.max, 1_000);
     }
 
     #[test]
     fn test_limits_length() {
-        assert_eq!(GENERATOR_LIMITS.len(), 89);
+        assert_eq!(GENERATOR_LIMITS.len(), 90);
     }
 
     #[test]
@@ -631,12 +623,12 @@ mod tests {
     }
 
     #[test]
-    fn test_default_amplitude_is_zero() {
-        assert_eq!(DEFAULT_GENERATOR_VALUES[gt::AMPLITUDE as usize], 0);
+    fn test_default_gain_is_zero() {
+        assert_eq!(DEFAULT_GENERATOR_VALUES[gt::GAIN as usize], 0);
     }
 
     #[test]
     fn test_default_values_length() {
-        assert_eq!(DEFAULT_GENERATOR_VALUES.len(), 89);
+        assert_eq!(DEFAULT_GENERATOR_VALUES.len(), 90);
     }
 }

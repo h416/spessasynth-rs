@@ -103,7 +103,7 @@ impl MidiChannel {
                     // MSB is semitones, LSB is cents (MIDI 1.0 and GM2)
                     // Pitch wheel range may be a floating point number!
                     let range = (data_value >> 7) as f64 + (data_value & 0x7f) as f64 / 100.0;
-                    self.set_midi_parameter(ChannelMidiParameterValue::PitchWheelRange(range));
+                    self.set_midi_parameter_with_voices(ChannelMidiParameterValue::PitchWheelRange(range), voices);
                     spessa_synth_info(&format!(
                         "Pitch Wheel Range for {}: {} semitones",
                         self.channel, range
@@ -138,9 +138,14 @@ impl MidiChannel {
                     ));
                 }
 
-                // Modulation depth: cents, so data / 128 * 100 == data / 1.28.
+                // Modulation depth
                 rpt::MODULATION_DEPTH => {
-                    self.set_modulation_depth(data_value as f64 / 1.28);
+                    let cents = self.set_modulation_depth_range(data_value as f64, voices);
+                    spessa_synth_info(&format!(
+                        "Modulation depth for {}: {} cents",
+                        self.channel,
+                        cents.round()
+                    ));
                 }
 
                 rpt::RESET_PARAMETERS => {
@@ -166,6 +171,10 @@ impl MidiChannel {
             >> 7) as u8;
         if param_coarse == 0x7f && param_fine == 0x7f {
             // Hardcoded NRPN NULL to avoid AWE32 errors
+            return events;
+        }
+        // GM ignores NRPN
+        if self.channel_system(current_system) == MIDISystem::Gm {
             return events;
         }
         let data_coarse = (data_value >> 7) as u8;
@@ -311,7 +320,7 @@ impl MidiChannel {
         // The custom vibrato: its own oscillator and parameters (render_voice).
         // Disabled by default via a system parameter; when enabled, it only activates when
         // one of these NRPNs is received and stays on until the next system reset.
-        let custom_vibrato = self.synth_system.custom_vibrato && !self.sys_ex_modulators.active;
+        let custom_vibrato = self.synth_system.custom_vibrato && !self.matrix.active;
 
         match nrpn_fine {
             nrl::VIBRATO_RATE => {

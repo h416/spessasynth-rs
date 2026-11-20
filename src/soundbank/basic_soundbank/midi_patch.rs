@@ -199,12 +199,17 @@ fn get_any_drums(presets: &[BasicPreset], is_drum: &[bool], prefer_xg: bool) -> 
 /// # Panics
 /// Panics if `patches` is empty.
 ///
-/// Equivalent to: MIDIPatchTools.selectPatch(patches, patch, system)
+/// `channel10`: if the request comes from channel 10 (of any group of 16 channels).
+/// In XG, such a request with the bank MSB 126 that has no exact match falls back to drums instead of melodic presets,
+/// as channel 10 cannot become melodic there.
+///
+/// Equivalent to: MIDIPatchTools.selectPatch(patches, patch, system, channel10 = false)
 pub fn select_patch<'a>(
     patches: &'a [BasicPreset],
     is_drum: &[bool],
     mut patch: MidiPatch,
     system: MIDISystem,
+    channel10: bool,
 ) -> &'a BasicPreset {
     assert!(!patches.is_empty(), "No presets!");
     assert_eq!(patches.len(), is_drum.len(), "is_drum slice mismatch");
@@ -225,6 +230,8 @@ pub fn select_patch<'a>(
     let program = patch.program;
     let is_xg = BankSelectHacks::is_system_xg(system);
     let xg_drums = BankSelectHacks::is_xg_drum(bank_msb) && is_xg;
+    // The XG SFX kits stay melodic on an exact match, but on channel 10 the fallback must keep the drums
+    let xg_drum_fallback = xg_drums || (channel10 && system == MIDISystem::Xg && bank_msb == 126);
 
     // Check for exact match
     let exact = (0..patches.len()).find(|&i| patches[i].matches(&patch));
@@ -286,7 +293,7 @@ pub fn select_patch<'a>(
         return_replacement(i);
         return &patches[i];
     }
-    if xg_drums {
+    if xg_drum_fallback {
         // XG drums: Look for an XG drum kit with the same program
         if let Some(i) = (0..patches.len())
             .find(|&i| patches[i].program == program && is_drum[i] && !patches[i].is_gm_gs_drum)
@@ -323,8 +330,8 @@ pub fn select_patch<'a>(
         return_replacement(0);
         return &patches[0];
     }
-    if system == MIDISystem::Gs {
-        // In GS the LSB selects the map and a missing variation stays in its map.
+    if !is_xg {
+        // In GS (and GM, which follows it) the LSB selects the map and a missing variation stays in its map.
         // So we prefer capital rather than lsb with same msb + program
         if let Some(&i) = matching_programs
             .iter()
@@ -681,7 +688,7 @@ mod select_patch_tests {
         is_xg_bank: bool,
     ) -> &'a BasicPreset {
         let flags = drum_flags(presets, is_xg_bank);
-        select_patch(presets, &flags, p, system)
+        select_patch(presets, &flags, p, system, false)
     }
 
     // --- exact match ---
@@ -721,9 +728,9 @@ mod select_patch_tests {
         let presets = vec![melodic(0, 0, 0), melodic(0, 8, 0), melodic(0, 0, 2)];
         let p = select(&presets, patch(0, 8, 2), MIDISystem::Gs, false);
         assert_eq!((p.bank_msb, p.bank_lsb), (0, 2));
-        // Other systems keep the MSB search
+        // GM follows GS
         let p = select(&presets, patch(0, 8, 2), MIDISystem::Gm, false);
-        assert_eq!((p.bank_msb, p.bank_lsb), (8, 0));
+        assert_eq!((p.bank_msb, p.bank_lsb), (0, 2));
     }
 
     // --- GM/GS drum with XG system forces XG drums ---
@@ -747,7 +754,7 @@ mod select_patch_tests {
     #[test]
     #[should_panic(expected = "No presets!")]
     fn test_empty_presets_panics() {
-        select_patch(&[], &[], patch(0, 0, 0), MIDISystem::Gs);
+        select_patch(&[], &[], patch(0, 0, 0), MIDISystem::Gs, false);
     }
 
     // --- melodic fallback to first ---

@@ -1,5 +1,6 @@
 //! The pitch shifters: one line, one or more voices of two crossfaded ramp reads.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/blocks/pitch_shifter.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use super::crossfade::Crossfade;
 use super::delay_line::DelayLine;
@@ -40,7 +41,7 @@ pub struct PitchShifter {
 impl PitchShifter {
     /// `voices` is the number of voices.
     pub fn new(sample_rate: f64, memory: &mut DelayMemory, voices: usize) -> Self {
-        let step = sample_rate / 32_000.0;
+        let step = sample_rate / HARDWARE_RATE;
         // 100 ms of pre delay plus the window, read past 256 ms too (SC-VA wraps there)
         let line = memory.line((((100.0 + MAX_WINDOW_MS) * sample_rate) / 1000.0 + 3.0 * step).ceil());
         let mut dc_blocker = FirstOrderFilter::new(sample_rate);

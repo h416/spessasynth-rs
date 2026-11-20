@@ -1,5 +1,6 @@
 //! Bass Multi (`04 05`).
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/effects/bass_multi.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use super::guitar_multi::MultiDriveOptions;
 use super::guitar_multis::GSDriveEqMulti;
@@ -40,7 +41,7 @@ impl GSBassMulti {
                 shelves: false,
             },
             1.0,
-            50.0 / 32_000.0,
+            50.0 / HARDWARE_RATE,
         );
         // The chorus/flanger takes nothing below 200 Hz (the hardware's one-pole, pole 123/128)
         effect.modulation.set_high_pass(202.88, 252.0 / 251.0);

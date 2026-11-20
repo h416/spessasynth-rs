@@ -69,6 +69,12 @@ pub const SPESSA_BUFSIZE: usize = 128;
 /// Equivalent to: EFX_SENDS_GAIN_CORRECTION = 2
 pub const EFX_SENDS_GAIN_CORRECTION: f64 = 2.0;
 
+/// The gain of a part's sends into the GS system effects (reverb, chorus, delay), on top of the send level.
+/// Measured on Sound Canvas VA: a part at full send reaches the effects 1.2 times louder than spessasynth's mono
+/// voice signal.
+/// Equivalent to: GS_SENDS_GAIN
+pub const GS_SENDS_GAIN: f64 = 1.2;
+
 /// The amount of MIDI controllers (the 128 real MIDI CCs).
 /// Equivalent to: CONTROLLER_TABLE_SIZE
 pub const CONTROLLER_TABLE_SIZE: usize = 128;

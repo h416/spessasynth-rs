@@ -1,5 +1,6 @@
 //! The phaser: per channel a resonance feedback, a DC blocker and eight first order all-pass sections.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/blocks/phaser.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use super::first_order_filter::{DC_BLOCKER_HZ, FirstOrderFilter};
 use super::lfo::Lfo;
@@ -63,7 +64,7 @@ pub struct Phaser {
 impl Phaser {
     /// `channels` is the number of chains.
     pub fn new(sample_rate: f64, channels: usize) -> Self {
-        let delay = 1.0f64.max(sample_rate / 32_000.0);
+        let delay = 1.0f64.max(sample_rate / HARDWARE_RATE);
         let feedback_delay = delay.floor();
         let history_length = feedback_delay as usize + 1;
         let dc_blockers = (0..channels)
@@ -75,7 +76,7 @@ impl Phaser {
             .collect();
         Self {
             lfo: Lfo::new(sample_rate),
-            scale: 32_000.0 / sample_rate,
+            scale: HARDWARE_RATE / sample_rate,
             feedback_delay: feedback_delay as usize,
             feedback_fraction: delay - feedback_delay,
             history_length,

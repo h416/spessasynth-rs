@@ -11,7 +11,7 @@ use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
 use crate::synthesizer::audio_engine::channel::parameters::midi::ChannelMidiParameterValue;
 use crate::synthesizer::types::{ControllerChangeCallback, SynthProcessorEvent};
 use crate::soundbank::types::MIDISystem;
-use crate::utils::midi_hacks::BankSelectHacks;
+use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 
 use super::data_entry::non_registered_msb;
 
@@ -30,7 +30,7 @@ impl MidiChannel {
     pub fn controller_change(
         &mut self,
         controller: u8,
-        value: u8,
+        mut value: u8,
         voices: &mut [Voice],
         current_time: f64,
         current_system: MIDISystem,
@@ -42,6 +42,11 @@ impl MidiChannel {
         }
 
         let mut events = Vec::new();
+
+        // A CC 10 message of 0 is 1, the GS and XG pan SysEx (random pan) never come here with 0
+        if controller == midi_controllers::PAN && value == 0 {
+            value = 1;
+        }
 
         // LSB controllers (33–63): append them as the lower 7 bits of the 14-bit
         // main controller value. Bank select is handled separately above the range.
@@ -73,8 +78,34 @@ impl MidiChannel {
             midi_controllers::OMNI_MODE_OFF
             | midi_controllers::OMNI_MODE_ON
             | midi_controllers::ALL_NOTES_OFF => {
-                let mut sub = self.stop_all_notes(voices, current_time, false);
-                events.append(&mut sub);
+                if self.midi_controllers[midi_controllers::SUSTAIN_PEDAL as usize] >= 8192
+                    && self.midi_parameters.poly_mode
+                {
+                    // A note off for every voice: the pedal holds them, like GS and XG devices do.
+                    // Voices that ignore note off are not held, so they get released
+                    self.note_on_id.fill(0);
+                    self.note_off_id.fill(0);
+                    self.playing_notes.fill(false);
+                    let mut vc = 0u32;
+                    if self.voice_count > 0 {
+                        for v in voices.iter_mut() {
+                            if v.channel == self.channel && v.is_active {
+                                if v.modulated_generators[gt::IGNORE_NOTE_OFF as usize] != 0 {
+                                    v.release_voice(current_time, MIN_NOTE_LENGTH);
+                                } else if !v.is_in_release {
+                                    v.is_held = true;
+                                }
+                                vc += 1;
+                                if vc >= self.voice_count {
+                                    break; // We already checked all the voices
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    let mut sub = self.stop_all_notes(voices, current_time, false);
+                    events.append(&mut sub);
+                }
             }
 
             midi_controllers::ALL_SOUND_OFF => {
@@ -96,19 +127,30 @@ impl MidiChannel {
 
             // Bank select MSB
             midi_controllers::BANK_SELECT => {
-                self.set_bank_msb(value);
-                // For XG, drum channel (ch 9 mod 16) always uses bank 127
                 let ch_system = self.channel_system(current_system);
-                if self.channel % 16 == MIDI_DRUM_CHANNEL
-                    && BankSelectHacks::is_system_xg(ch_system)
-                {
-                    self.set_bank_msb(127);
+                // GM ignores bank selects
+                if ch_system != MIDISystem::Gm {
+                    // This emulates the XG "DRUM PART PROTECT MODE", which is not implemented yet,
+                    // So it is always on: part 10 only receives the drum banks 126 and 127 and can never be melodic!
+                    // GM2 has no such rule, its channel 10 turns melodic with bank 121.
+                    // Testcase
+                    // Dave-Rodgers-D-j-Vu-Anonymous-20200419154845-nonstop2k.com.mid
+                    let refused = self.channel % 16 == MIDI_DRUM_CHANNEL
+                        && ch_system == MIDISystem::Xg
+                        && value != 126
+                        && value != 127;
+                    if !refused {
+                        self.set_bank_msb(value);
+                    }
                 }
             }
 
             // Bank select LSB
             midi_controllers::BANK_SELECT_LSB => {
-                self.set_bank_lsb(value);
+                // GM ignores bank selects
+                if self.channel_system(current_system) != MIDISystem::Gm {
+                    self.set_bank_lsb(value);
+                }
             }
 
             // RPN / NRPN state machine

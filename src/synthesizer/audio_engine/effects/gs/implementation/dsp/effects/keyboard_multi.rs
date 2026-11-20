@@ -1,6 +1,7 @@
 //! Keyboard Multi (`05 00`): per channel `ring modulator -> 3-band EQ`, then the pitch shifter, the phaser and the
 //! delay on the mono sum.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/effects/keyboard_multi.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use super::guitar_multi::{GSMulti, MultiDelay, MultiEq, MultiPhaser};
 use super::prelude::*;
@@ -64,7 +65,7 @@ impl GSKeyboardMulti {
         let base = GSEffectBase::new(sample_rate, Some(memory), DEFAULTS, LIMITS, MINIMUMS);
         let mut ring = RingModulator::new(sample_rate);
         // The hardware steps the carrier's phase once before its first sample (one 32 kHz step)
-        ring.set_start_delay(1.0 - sample_rate / 32_000.0);
+        ring.set_start_delay(1.0 - sample_rate / HARDWARE_RATE);
         let eq_l = MultiEq::new(sample_rate);
         let eq_r = MultiEq::new(sample_rate);
         let shifter = PitchShifter::new(sample_rate, memory, 1);

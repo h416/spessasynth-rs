@@ -10,6 +10,7 @@ use crate::soundbank::basic_soundbank::midi_patch::MidiPatchFull;
 use crate::soundbank::enums::modulator_sources;
 use crate::soundbank::types::MIDISystem;
 use crate::synthesizer::audio_engine::channel::awe32_nrpn::ChannelGenerators;
+use crate::synthesizer::audio_engine::channel::controller_matrix::ControllerMatrixSnapshot;
 use crate::synthesizer::audio_engine::channel::midi_channel::{
     ChannelVibrato, DrumLocks, MidiChannel,
 };
@@ -83,6 +84,10 @@ pub struct ChannelSnapshot {
     /// Equivalent to: drumParams
     pub drum_params: Vec<DrumParameter>,
 
+    /// The GS / XG controller matrix.
+    /// Equivalent to: controllerMatrix?
+    pub controller_matrix: Option<ControllerMatrixSnapshot>,
+
     /// Indicates whether this channel is a drum channel.
     /// Equivalent to: drumChannel
     pub drum_channel: bool,
@@ -124,6 +129,7 @@ impl MidiChannel {
             custom_vibrato: self.channel_vibrato.clone(),
 
             drum_params: self.drum_params.clone(),
+            controller_matrix: Some(self.matrix.get_snapshot()),
             drum_channel: self.drum_channel,
             channel: self.channel,
         }
@@ -179,8 +185,11 @@ impl MidiChannel {
                 locks,
                 enable_event_system,
             );
-            // Fallback if no preset matched and the flag didn't sync
-            self.set_drum_flag(snapshot.drum_channel);
+            // The selected preset decides if this is a drum channel.
+            // Only without a preset the flag from the snapshot is used
+            if self.preset.is_none() {
+                self.set_drum_flag(snapshot.drum_channel);
+            }
         } else {
             self.set_drum_flag(snapshot.drum_channel);
         }
@@ -194,8 +203,19 @@ impl MidiChannel {
         for value in snapshot.midi_parameters.entries() {
             let key = value.key();
             self.set_midi_parameter(value);
-            // setMIDIParameter recomputes these two (see `set_midi_parameter`)
+            // setMIDIParameter recomputes the voices that read these
+            // (see `set_midi_parameter` and `set_midi_parameter_with_voices`)
             match key {
+                ChannelMidiParameterKey::PitchWheelRange => {
+                    self.compute_modulators_all_impl(voices, 0, modulator_sources::PITCH_WHEEL_RANGE as usize);
+                }
+                ChannelMidiParameterKey::ModulationDepth => {
+                    self.compute_modulators_all_impl(
+                        voices,
+                        0,
+                        modulator_sources::MODULATION_DEPTH_RANGE as usize,
+                    );
+                }
                 ChannelMidiParameterKey::PitchWheel => {
                     self.compute_modulators_all_impl(voices, 0, modulator_sources::PITCH_WHEEL as usize);
                 }
@@ -218,7 +238,13 @@ impl MidiChannel {
             self.set_system_parameter(value, voices, current_time);
         }
 
-        // The controllers were written directly, update the playing voices
+        if let Some(matrix) = &snapshot.controller_matrix {
+            self.matrix.apply_snapshot(matrix);
+        } else {
+            self.matrix.reset();
+        }
+
+        // The controllers were written directly, update the playing voices (and the matrix)
         self.compute_modulators_all_impl(voices, -1, 0);
         events
     }

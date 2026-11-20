@@ -189,15 +189,15 @@ impl WaveSample {
         */
         ws.fine_tune = (zone.zone.fine_tuning() + sample.pitch_correction as i32) as i16;
 
-        // E-mu attenuation correction
-        let attenuation_cb = zone.zone.get_generator(gt::INITIAL_ATTENUATION, 0) as f64 * 0.4;
+        let attenuation_cb = zone.zone.get_generator(gt::INITIAL_ATTENUATION, 0) as f64;
         // Gain is stored as a 32-bit value; JS `<<` converts to int32 first, then shifts
         ws.gain = ((-attenuation_cb) as i32) << 16;
 
         let looping_mode = zone.zone.get_generator(gt::SAMPLE_MODES, 0) as SampleLoopingMode;
 
         // Don't add loops unless needed
-        if looping_mode != 0 {
+        // DLS has no alternating loop (SFe sampleModes 4), it is dropped like in SF2
+        if looping_mode != 0 && looping_mode != 4 {
             // Make sure to apply startloop / endloop address offsets
             let loop_start = (sample.loop_start as i32)
                 + zone.zone.get_generator(gt::STARTLOOP_ADDRS_OFFSET, 0)
@@ -241,17 +241,11 @@ impl WaveSample {
             zone.set_generator(gt::SAMPLE_MODES, Some(looping_mode as f64), true);
         }
 
-        // Convert gain to attenuation and apply E-MU correction
+        // Convert to signed and turn into attenuation (invert)
         let wsmp_gain16 = self.gain >> 16;
         let wsmp_attenuation = -wsmp_gain16;
-        let wsmp_attenuation_corrected = wsmp_attenuation as f64 / 0.4;
-
-        if wsmp_attenuation_corrected != 0.0 {
-            zone.set_generator(
-                gt::INITIAL_ATTENUATION,
-                Some(wsmp_attenuation_corrected),
-                true,
-            );
+        if wsmp_attenuation != 0 {
+            zone.set_generator(gt::INITIAL_ATTENUATION, Some(wsmp_attenuation as f64), true);
         }
 
         // Correct tuning: remove the sample's built-in pitch correction offset
@@ -735,12 +729,12 @@ mod tests {
     #[test]
     fn test_from_sf_zone_gain_from_initial_attenuation() {
         let mut zone = make_zone(0);
-        // initialAttenuation = 100 → attenuationCb = 40.0 → gain = (-40 as i32) << 16 = -2621440
+        // initialAttenuation = 100 → gain = (-100 as i32) << 16
         zone.zone
             .set_generator(gt::INITIAL_ATTENUATION, Some(100.0), true);
         let sample = make_sample(60, 0, 0, 0);
         let ws = WaveSample::from_sf_zone(&zone, &sample);
-        assert_eq!(ws.gain, (-40_i32) << 16);
+        assert_eq!(ws.gain, (-100_i32) << 16);
     }
 
     #[test]
@@ -835,9 +829,8 @@ mod tests {
         let mut zone = BasicZone::new();
         let sample = make_sample(60, 0, 0, 0);
         ws.to_sf_zone(&mut zone, &sample);
-        // wsmpGain16 = -40, wsmpAttenuation = 40, corrected = 40 / 0.4 = 100
-        // After clamping by set_generator(validate=true), max for INITIAL_ATTENUATION is 1440
-        assert_eq!(zone.get_generator(gt::INITIAL_ATTENUATION, -1), 100);
+        // wsmpGain16 = -40, wsmpAttenuation = 40
+        assert_eq!(zone.get_generator(gt::INITIAL_ATTENUATION, -1), 40);
     }
 
     #[test]

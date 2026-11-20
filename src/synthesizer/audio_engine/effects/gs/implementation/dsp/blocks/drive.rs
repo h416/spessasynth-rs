@@ -1,5 +1,6 @@
 //! The drive of the Sound Canvas: filters, a gain, a clipper and waveshaper, filters again and a level compensation.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/blocks/drive.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use super::biquad::Biquad;
 use super::first_order_filter::{DC_BLOCKER_HZ, FirstOrderFilter};
@@ -198,7 +199,7 @@ impl Drive {
             peak: Biquad::new(sample_rate),
             bass_pre: Biquad::new(sample_rate),
             bass_post: Biquad::new(sample_rate),
-            oversampler: if sample_rate < 32_000.0 {
+            oversampler: if sample_rate < HARDWARE_RATE {
                 Some(Oversampler::new())
             } else {
                 None

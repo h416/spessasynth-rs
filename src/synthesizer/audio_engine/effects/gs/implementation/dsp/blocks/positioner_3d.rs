@@ -1,5 +1,6 @@
 //! The 3D positioner of 3D Auto and 3D Manual: a mono source at an azimuth through the near and far ear.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/blocks/positioner_3d.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use super::hrtf_pair::{HrtfPair, HrtfSet};
 use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::js_round;
@@ -33,7 +34,7 @@ const BREAKPOINTS: [HrtfSet; 16] = [
 ];
 
 /// A Manual azimuth change crossfades over 46 32 kHz samples (1.44 ms).
-const MANUAL_FADE: f64 = 46.0 / 32_000.0;
+const MANUAL_FADE: f64 = 46.0 / HARDWARE_RATE;
 
 /// The 3D positioner of 3D Auto and 3D Manual: a mono source at an azimuth, heard through the near and far ear of the
 /// direction (the near ear is the left one on the left side).

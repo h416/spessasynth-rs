@@ -534,8 +534,11 @@ impl BasicMidi {
             self.tracks[track_idx].channels = std::mem::take(used_channels);
         }
 
-        // Reverse tempo_changes: last change first, tick-0 always last.
+        // Reverse the tempo changes, then sort them descending by ticks
+        // Tracks are parsed one after another, so the changes may not be in order
+        // See https://github.com/spessasus/spessasynth_core/issues/142
         tempo_changes.reverse();
+        tempo_changes.sort_by(|a, b| b.ticks.cmp(&a.ticks));
 
         SpessaLog::info("Correcting loops, ports and detecting notes...");
 

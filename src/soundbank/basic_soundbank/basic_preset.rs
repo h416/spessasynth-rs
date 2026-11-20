@@ -24,7 +24,7 @@ use crate::soundbank::basic_soundbank::basic_zone::BasicZone;
 use crate::soundbank::basic_soundbank::generator::Generator;
 use crate::soundbank::basic_soundbank::generator_types::{
     DEFAULT_GENERATOR_VALUES, GENERATOR_LIMITS, GENERATORS_AMOUNT,
-    generator_types as gt, is_instrument_only_generator};
+    ENUMERATED_GENERATORS, generator_types as gt, is_instrument_only_generator};
 use crate::soundbank::basic_soundbank::midi_patch::{
     MidiPatch, MidiPatchFull, to_full_midi_string, to_midi_string,
 };
@@ -67,6 +67,12 @@ fn add_unique_modulators(main: &mut Vec<Modulator>, adder: &[Modulator]) {
             main.push(added_mod.clone());
         }
     }
+}
+
+/// Modulators that target an instrument-only generator are ignored in preset zones.
+/// Equivalent to: appliesToPreset(m)
+fn applies_to_preset(m: &Modulator) -> bool {
+    !is_instrument_only_generator(m.destination)
 }
 
 /// Returns the intersection of two ranges: `[max(r1.min, r2.min), min(r1.max, r2.max)]`.
@@ -315,13 +321,22 @@ impl BasicPreset {
             }
 
             // ── Preset modulators (local + unique globals) ────────────────
+            // The ones that target an instrument-only generator are ignored, so they supersede nothing
             let mut preset_modulators: Vec<Modulator> = preset_zone
                 .zone
                 .modulators
                 .iter()
+                .filter(|m| applies_to_preset(m))
                 .map(Modulator::copy_from)
                 .collect();
-            add_unique_modulators(&mut preset_modulators, &self.global_zone.modulators);
+            let global_modulators: Vec<Modulator> = self
+                .global_zone
+                .modulators
+                .iter()
+                .filter(|m| applies_to_preset(m))
+                .cloned()
+                .collect();
+            add_unique_modulators(&mut preset_modulators, &global_modulators);
 
             // ── Instrument zone loop ──────────────────────────────────────
             for inst_zone in &instrument.zones {
@@ -390,10 +405,14 @@ impl BasicPreset {
                     generators[i] = sum.clamp(-32_768, 32_767) as i16;
                 }
 
-                // EMU initial attenuation correction: multiply by 0.4.
-                // All EMU sound cards have this quirk; all SF2 players emulate it.
-                let ia_idx = gt::INITIAL_ATTENUATION as usize;
-                generators[ia_idx] = (generators[ia_idx] as f64 * 0.4).floor() as i16;
+                // An unknown choice (from a later SFe version) counts as the default instead of the nearest one
+                for t in ENUMERATED_GENERATORS {
+                    let limit = GENERATOR_LIMITS[t as usize].expect("enumerated generators have limits");
+                    let v = generators[t as usize] as i32;
+                    if v < limit.min || v > limit.max {
+                        generators[t as usize] = limit.def as i16;
+                    }
+                }
 
                 voice_params.push(VoiceParameters {
                     generators,
@@ -426,8 +445,14 @@ impl BasicPreset {
         // Collect global preset generators / modulators / ranges.
         let global_preset_generators: Vec<Generator> =
             self.global_zone.generators.to_vec();
-        let global_preset_modulators: Vec<Modulator> =
-            self.global_zone.modulators.to_vec();
+        // Modulators to instrument-only generators are ignored in preset zones
+        let global_preset_modulators: Vec<Modulator> = self
+            .global_zone
+            .modulators
+            .iter()
+            .filter(|m| applies_to_preset(m))
+            .cloned()
+            .collect();
         let global_preset_key_range = self.global_zone.key_range.clone();
         let global_preset_vel_range = self.global_zone.vel_range.clone();
 
@@ -458,8 +483,13 @@ impl BasicPreset {
             add_unique_generators(&mut preset_generators, &global_preset_generators);
 
             // Build preset modulators (local + unique globals).
-            let mut preset_modulators: Vec<Modulator> =
-                preset_zone.zone.modulators.to_vec();
+            let mut preset_modulators: Vec<Modulator> = preset_zone
+                .zone
+                .modulators
+                .iter()
+                .filter(|m| applies_to_preset(m))
+                .cloned()
+                .collect();
             add_unique_modulators(&mut preset_modulators, &global_preset_modulators);
 
             // Collect global instrument generators / modulators / ranges.
@@ -1257,9 +1287,8 @@ mod tests {
     }
 
     #[test]
-    fn test_get_voice_parameters_emu_attenuation_correction() {
-        // Set instrument zone initialAttenuation to 100.
-        // After EMU correction: floor(100 * 0.4) = 40.
+    fn test_get_voice_parameters_attenuation_is_unchanged() {
+        // The bank holds true centibels: the SF2 reader converts the attenuation, not the voice parameters.
         let mut p = BasicPreset::new();
         let mut inst = BasicInstrument::with_name("TestInst");
         let mut zone = BasicInstrumentZone::new(0, 0, 0);
@@ -1273,7 +1302,7 @@ mod tests {
         let default_mods = make_default_modulators();
         let result = p.get_voice_parameters(60, 100, &instruments, &default_mods);
         let ia = result[0].generators[gt::INITIAL_ATTENUATION as usize];
-        assert_eq!(ia, 40, "EMU correction: floor(100*0.4) = 40");
+        assert_eq!(ia, 100);
     }
 
     #[test]

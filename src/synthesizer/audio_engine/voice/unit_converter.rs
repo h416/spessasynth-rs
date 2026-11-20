@@ -27,7 +27,19 @@ static TIMECENT_LOOKUP_TABLE: LazyLock<Vec<f32>> = LazyLock::new(|| {
 /// Converts timecents to seconds.
 /// Equivalent to: timecentsToSeconds
 pub fn timecents_to_seconds(timecents: i32) -> f64 {
-    if timecents <= -32_767 {
+    // -32768 (or below, from a sum) = instant. Anything above clamps to at min -12k.
+    // See sfe-format.md
+    if timecents <= -32_768 {
+        0.0
+    } else {
+        raw_timecents_to_seconds(timecents.max(-12_000))
+    }
+}
+
+/// Converts timecents to seconds without the -12000 floor.
+/// Equivalent to: rawTimecentsToSeconds
+pub fn raw_timecents_to_seconds(timecents: i32) -> f64 {
+    if timecents <= -32_768 {
         return 0.0;
     }
     if timecents < MIN_TIMECENT || timecents > MAX_TIMECENT {
@@ -121,8 +133,8 @@ mod tests {
 
     #[test]
     fn test_timecents_below_threshold_returns_zero() {
-        // timecents <= -32767 → 0
-        assert_eq!(timecents_to_seconds(-32_767), 0.0);
+        // timecents <= -32768 → 0, anything above clamps to -12000
+        assert_eq!(timecents_to_seconds(-32_767), 2f64.powf(-12_000.0 / 1200.0));
         assert_eq!(timecents_to_seconds(-32_768), 0.0);
         assert_eq!(timecents_to_seconds(i32::MIN), 0.0);
     }
@@ -167,7 +179,7 @@ mod tests {
     #[test]
     fn test_timecents_out_of_range_uses_pow() {
         // Key scaling can push the value outside the table: computed directly.
-        assert_eq!(timecents_to_seconds(-15_001), 2f64.powf(-15_001.0 / 1200.0));
+        assert_eq!(raw_timecents_to_seconds(-15_001), 2f64.powf(-15_001.0 / 1200.0));
         assert_eq!(timecents_to_seconds(15_001), 2f64.powf(15_001.0 / 1200.0));
     }
 

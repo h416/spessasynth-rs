@@ -5,14 +5,28 @@
 
 use crate::midi::enums::midi_controllers;
 use crate::midi::midi_tools::sysex_data::{DEFAULT_XG_DRUM_MAP, MELODIC_MAP};
-use crate::soundbank::enums::modulator_sources;
+use crate::synthesizer::audio_engine::channel::controller_matrix::MatrixSystem;
+use crate::synthesizer::audio_engine::channel::enums::{
+    MatrixDestination, matrix_destinations, matrix_sources,
+};
 use crate::synthesizer::audio_engine::channel::midi_channel::DrumLocks;
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::js_round;
 use crate::synthesizer::audio_engine::channel::parameters::midi::ChannelMidiParameterValue;
 use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::sys_ex_not_recognized;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::types::GlobalMIDIParameterChangeCallback;
 use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::spessa_synth_info;
+
+/// Equivalent to: XG_MATRIX_DESTINATIONS
+const XG_MATRIX_DESTINATIONS: [MatrixDestination; 6] = [
+    matrix_destinations::PITCH,
+    matrix_destinations::CUTOFF,
+    matrix_destinations::AMPLITUDE,
+    matrix_destinations::LFO1_PITCH,
+    matrix_destinations::LFO1_FILTER,
+    matrix_destinations::LFO1_AMPLITUDE,
+];
 
 impl SynthesizerCore {
     /// Handles a Yamaha XG system exclusive message.
@@ -28,6 +42,12 @@ impl SynthesizerCore {
         let a2 = syx[4]; // Address 2
         let a3 = syx[5]; // Address 3
         let data = syx[6];
+        // GM only receives the mode messages (XG system on and all parameter reset)
+        if self.midi_parameters.system == MIDISystem::Gm
+            && !(a1 == 0x00 && a2 == 0x00 && (a3 == 0x7e || a3 == 0x7f))
+        {
+            return;
+        }
 
         // XG system parameter
         if a1 == 0x00 && a2 == 0x00 {
@@ -375,17 +395,8 @@ impl SynthesizerCore {
 
                 // Part mode
                 0x07 => {
-                    let drums = data != MELODIC_MAP;
-                    // Testcase: xg part_mode_drum
-                    // Verified with s-yxg50
-                    // SetDrums switches the bank and keeps the program,
-                    // But switching *to* drums re-initializes the kit
-                    // To program 0 instead!
-                    // But not if it's already drum
-                    // Testcase: 15. U.N. Owen was her (yoimutu).mid
-                    let drums_before = self.midi_channels[channel].drum_channel;
-                    let evs = self.midi_channels[channel].set_drums(
-                        drums,
+                    let evs = self.midi_channels[channel].set_part_mode(
+                        data,
                         &self.sound_bank_manager,
                         current_system,
                         DrumLocks::of(&self.system_parameters),
@@ -394,24 +405,10 @@ impl SynthesizerCore {
                     for ev in evs {
                         self.call_event(ev);
                     }
-                    if drums && !drums_before {
-                        let evs = self.midi_channels[channel].program_change(
-                            0,
-                            &self.sound_bank_manager,
-                            current_system,
-                            DrumLocks::of(&self.system_parameters),
-                            enable_event_system,
-                        );
-                        for ev in evs {
-                            self.call_event(ev);
-                        }
-                    }
-                    self.midi_channels[channel]
-                        .set_midi_parameter(ChannelMidiParameterValue::DrumMap(data));
                     spessa_synth_info(&format!(
                         "XG Part Mode on {}: {}",
                         channel,
-                        if drums { "DRUM" } else { "MELODIC" }
+                        if data == MELODIC_MAP { "MELODIC" } else { "DRUM" }
                     ));
                 }
 
@@ -511,6 +508,21 @@ impl SynthesizerCore {
                 0x13 => {
                     let evs = self.midi_channels[channel].controller_change(
                         midi_controllers::REVERB_DEPTH,
+                        data,
+                        &mut self.voices,
+                        current_time,
+                        current_system,
+                        enable_event_system,
+                    );
+                    for ev in evs {
+                        self.call_event(ev);
+                    }
+                }
+
+                // Variation send
+                0x14 => {
+                    let evs = self.midi_channels[channel].controller_change(
+                        midi_controllers::VARIATION_DEPTH,
                         data,
                         &mut self.voices,
                         current_time,
@@ -649,24 +661,27 @@ impl SynthesizerCore {
 
                 // MW LFO PMOD Depth (alias to modulation wheel range)
                 0x20 => {
-                    let cents = (data as f64 / 127.0) * 600.0;
-                    self.midi_channels[channel]
-                        .set_midi_parameter(ChannelMidiParameterValue::ModulationDepth(cents));
+                    // Sets the modulation depth range (RPN 5) to data * 5 cents, so the default 10 is 50 cents.
+                    // XG engines stop at about 200 cents (measured on S-YXG50)
+                    let depth = self.midi_channels[channel]
+                        .set_modulation_depth_range(js_round(6.4 * data.min(40) as f64), &mut self.voices);
                     spessa_synth_info(&format!(
-                        "XG Modulation Wheel Range for {}: {} cents",
-                        channel, cents
+                        "XG Modulation wheel depth for {}: {} cents",
+                        channel, depth
                     ));
                 }
 
                 // Bend pitch control (alias to pitch wheel range)
                 0x23 => {
-                    let centered_value = data as f64 - 64.0;
-                    self.midi_channels[channel].set_midi_parameter(
-                        ChannelMidiParameterValue::PitchWheelRange(centered_value),
+                    // A control below the center gives no bend at all
+                    let range = (data as i32 - 64).clamp(0, 24) as f64;
+                    self.midi_channels[channel].set_midi_parameter_with_voices(
+                        ChannelMidiParameterValue::PitchWheelRange(range),
+                        &mut self.voices,
                     );
                     spessa_synth_info(&format!(
                         "XG Pitch Wheel Range for {}: {} semitones",
-                        channel, centered_value
+                        channel, range
                     ));
                 }
 
@@ -698,42 +713,27 @@ impl SynthesizerCore {
                 | 0x5a..=0x5f
                 // AC2 (0x60 is number, handled above)
                 | 0x61..=0x66 => {
-                    let ch = &self.midi_channels[channel];
-                    let (start_addr, source, is_cc, source_name, bipolar) = if a3 <= 0x22 {
-                        (0x1d, midi_controllers::MODULATION_WHEEL as usize, true, "mod wheel", false)
+                    let (start_addr, source) = if a3 <= 0x22 {
+                        (0x1d, matrix_sources::MODULATION_WHEEL)
                     } else if a3 <= 0x28 {
-                        (0x23, modulator_sources::PITCH_WHEEL as usize, false, "pitch wheel", true)
+                        (0x23, matrix_sources::PITCH_WHEEL)
                     } else if a3 <= 0x52 {
-                        (
-                            0x4d,
-                            modulator_sources::CHANNEL_PRESSURE as usize,
-                            false,
-                            "channel pressure",
-                            false,
-                        )
+                        (0x4d, matrix_sources::CHANNEL_PRESSURE)
                     } else if a3 <= 0x58 {
-                        (
-                            0x53,
-                            modulator_sources::POLY_PRESSURE as usize,
-                            false,
-                            "poly pressure",
-                            false,
-                        )
+                        (0x53, matrix_sources::POLY_PRESSURE)
                     } else if a3 <= 0x5f {
-                        (0x5a, ch.midi_parameters.cc1 as usize, true, "AC1", false)
+                        (0x5a, matrix_sources::CC1)
                     } else {
-                        (0x61, ch.midi_parameters.cc2 as usize, true, "AC2", false)
+                        (0x61, matrix_sources::CC2)
                     };
-
-                    // Map to GS
-                    self.midi_channels[channel].sys_ex_modulators.setup_receiver_xg(
-                        a3 - start_addr,
-                        data,
-                        source,
-                        is_cc,
-                        source_name,
-                        bipolar,
-                    );
+                    let destination = XG_MATRIX_DESTINATIONS[(a3 - start_addr) as usize];
+                    // Value is tested in tests/synth/matrix/matrix_test.ts
+                    // Ensure the test matches s-yxg50 before changing
+                    self.midi_channels[channel].set_matrix_cell(MatrixSystem::Xg, source, destination, data);
+                    spessa_synth_info(&format!(
+                        "XG Controller matrix for {}, source {} destination {}: {}",
+                        channel, source, destination, data
+                    ));
                 }
 
                 // ---

@@ -1,5 +1,6 @@
 //! The line of the delays: a DC blocked input read at several taps, one tap feeding back through the HF damp.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/blocks/delay.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use super::crossfade::Crossfade;
 use super::delay_line::DelayLine;
@@ -36,7 +37,7 @@ pub struct Delay {
 impl Delay {
     /// `taps` is the number of taps, `max_delay` the longest tap in ms.
     pub fn new(sample_rate: f64, memory: &mut DelayMemory, taps: usize, max_delay: f64) -> Self {
-        let step = sample_rate / 32_000.0;
+        let step = sample_rate / HARDWARE_RATE;
         let line = memory.line(((max_delay * sample_rate) / 1000.0 + 3.0 * step).ceil());
         let mut dc_blocker = FirstOrderFilter::new(sample_rate);
         dc_blocker.set_high_pass(DC_BLOCKER_HZ, 1.0);

@@ -56,8 +56,8 @@ pub struct ParameterTracker {
 
     /// Equivalent to: private readonly channel
     channel: u8,
-    /// Equivalent to: private isRegistered = true
-    is_registered: bool,
+    /// Equivalent to: public isRegistered = true
+    pub is_registered: bool,
 }
 
 impl ParameterTracker {

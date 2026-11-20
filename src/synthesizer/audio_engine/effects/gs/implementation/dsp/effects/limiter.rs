@@ -1,5 +1,6 @@
 //! Limiter (`01 31`).
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/effects/limiter.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use super::dynamics_effect::{DynamicsBlock, GSDynamicsEffect};
 use super::prelude::*;
@@ -36,6 +37,6 @@ pub(super) fn update_dynamics(dynamics: &mut Limiter, p: &[u8; 20]) -> usize {
     // The gain grows by e in 63 ms (0) to 4.1 s (127): 4.98e-4 x the release word per 32 kHz sample
     // That is 2% more than the word says (SC-VA's float seed, kept like the floor since it sets the fade-in)
     let release = 2f64.powf(14.975 - p[2] as f64 / 21.16) / 32_768.0;
-    dynamics.set_release(1.0 / (32_000.0 * 4.9828e-4 * release));
+    dynamics.set_release(1.0 / (HARDWARE_RATE * 4.9828e-4 * release));
     p[3] as usize
 }

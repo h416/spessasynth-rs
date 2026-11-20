@@ -1,5 +1,6 @@
 //! The Humanizer's vowel filter: two banks of two formants with a crossfade between them.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/blocks/formant_filter.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use super::biquad::Biquad;
 use super::first_order_filter::FirstOrderFilter;
@@ -64,7 +65,7 @@ impl FormantBank {
             formant1: Biquad::new(sample_rate),
             formant2: Biquad::new(sample_rate),
             average,
-            scale: 32_000.0 / sample_rate,
+            scale: HARDWARE_RATE / sample_rate,
         }
     }
 
@@ -122,7 +123,7 @@ impl FormantBank {
         } else {
             w32 / self
                 .formant1
-                .prewarp((32_000.0 / std::f64::consts::PI) * w32.atan())
+                .prewarp((HARDWARE_RATE / std::f64::consts::PI) * w32.atan())
         };
         (f, s2, l)
     }
@@ -177,7 +178,7 @@ impl FormantFilter {
 
     /// `seconds` is the crossfade's time constant.
     pub fn set_accel(&mut self, seconds: f64) {
-        self.rate = 1.0 - (1.0 - 1.0 / (32_000.0 * seconds)).powf(32_000.0 / self.sample_rate);
+        self.rate = 1.0 - (1.0 - 1.0 / (HARDWARE_RATE * seconds)).powf(HARDWARE_RATE / self.sample_rate);
     }
 
     #[inline]

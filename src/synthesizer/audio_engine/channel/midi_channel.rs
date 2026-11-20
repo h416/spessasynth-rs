@@ -15,7 +15,9 @@ use crate::soundbank::basic_soundbank::generator_types::{
 use crate::soundbank::basic_soundbank::midi_patch::MidiPatch;
 use crate::soundbank::enums::modulator_sources;
 use crate::midi::drum_parameters::{DEFAULT_DRUM_REVERB, DrumParameter, DrumParameterUtils};
-use crate::synthesizer::audio_engine::channel::dynamic_modulator_system::DynamicModulatorSystem;
+use crate::midi::midi_tools::sysex_data::MELODIC_MAP;
+use crate::synthesizer::audio_engine::channel::controller_matrix::{ControllerMatrix, MatrixSystem};
+use crate::synthesizer::audio_engine::channel::enums::{MatrixDestination, MatrixSource};
 use crate::synthesizer::audio_engine::channel::render_voice::VoiceSendBuffer;
 use crate::synthesizer::audio_engine::parameters::midi::GlobalMIDIParameter;
 use crate::synthesizer::audio_engine::parameters::system::{
@@ -151,9 +153,9 @@ pub struct MidiChannel {
     /// Equivalent to: octaveTuning: Int8Array(128)
     pub channel_octave_tuning: [i8; 128],
 
-    /// Dynamic modulator system for advanced SysEx handling.
-    /// Equivalent to: dynamicModulators: DynamicModulatorManager
-    pub sys_ex_modulators: DynamicModulatorSystem,
+    /// The GS / XG controller matrix.
+    /// Equivalent to: matrix: ControllerMatrix
+    pub matrix: ControllerMatrix,
 
     /// True if this is a percussion/drum channel.
     /// Equivalent to: drumChannel
@@ -347,7 +349,7 @@ impl MidiChannel {
             locked_midi_parameters: [false; CHANNEL_MIDI_PARAMETER_COUNT],
             sf2_nrpn_generator_lsb: 0,
             channel_octave_tuning: [0i8; 128],
-            sys_ex_modulators: DynamicModulatorSystem::new(channel as usize),
+            matrix: ControllerMatrix::new(),
             drum_channel: false,
             midi_parameters: ChannelMidiParameter {
                 // Rx Channel is initialized to the channel number.
@@ -462,18 +464,14 @@ impl MidiChannel {
         }
     }
 
-    /// Sets the modulation depth in cents and logs it.
-    /// Equivalent to: setMIDIParameter("modulationDepth", cents) followed by the
-    /// `Modulation depth for ...` log (RPN 5 in data_entry.ts, GS LFO1 pitch depth in roland.ts).
-    pub fn set_modulation_depth(&mut self, cents: f64) {
-        // Stored in cents and converted to a multiplier (dividing by 50) at the point of use
-        // in `compute_single_modulator`.
-        self.set_midi_parameter(ChannelMidiParameterValue::ModulationDepth(cents));
-        spessa_synth_info(&format!(
-            "Channel {} modulation depth. Cents: {}",
-            self.channel,
-            cents.round()
-        ));
+    /// Stores the modulation depth range, the way RPN 5 does.
+    /// `value`: the 14-bit data entry value. Returns the stored range in cents.
+    /// Equivalent to: setModulationDepthRange(value)
+    pub fn set_modulation_depth_range(&mut self, value: f64, voices: &mut [Voice]) -> f64 {
+        // Cents, so value / 128 * 100 is value / 1.28
+        let cents = value / 1.28;
+        self.set_midi_parameter_with_voices(ChannelMidiParameterValue::ModulationDepth(cents), voices);
+        cents
     }
 
     /// Sets the pitch wheel for this channel (or per-note if midi_note >= 0).
@@ -752,6 +750,10 @@ impl MidiChannel {
         source_uses_cc: i8,
         source_index: usize,
     ) {
+        // Every matrix source goes through here
+        if self.matrix.active {
+            self.recompute_matrix();
+        }
         let filter = match source_uses_cc {
             0 => SourceFilter::NonCC,
             1 => SourceFilter::CC,
@@ -830,6 +832,9 @@ impl MidiChannel {
 
         let ch_system = self.channel_system(current_system);
         if BankSelectHacks::is_system_xg(ch_system) {
+            // XG and GM2 choose drums by the bank alone.
+            // A leftover flag would force drums on whatever bank comes next
+            self.set_is_gm_gs_drum(false);
             if is_drum {
                 if BankSelectHacks::is_xg_drum(self.patch.bank_msb) {
                     return Vec::new();
@@ -838,11 +843,7 @@ impl MidiChannel {
                     self.set_bank_msb(drum_bank);
                 }
             } else {
-                if self.channel % 16 == MIDI_DRUM_CHANNEL {
-                    SpessaLog::warn(&format!(
-                        "Cannot disable drums on channel {} for XG.",
-                        self.channel
-                    ));
+                if self.refuses_melodic_part(current_system) {
                     return Vec::new();
                 }
                 self.set_bank_msb(BankSelectHacks::get_default_bank(ch_system));
@@ -858,7 +859,7 @@ impl MidiChannel {
                 enable_event_system,
             );
         }
-        if is_drum == self.drum_channel {
+        if is_drum == self.patch.is_gm_gs_drum {
             return Vec::new();
         }
         // Flip the drums for GS
@@ -866,9 +867,110 @@ impl MidiChannel {
         let program = self.patch.program;
         let events =
             self.program_change(program, sound_bank_manager, current_system, locks, enable_event_system);
-        // Fallback if no preset matched and the flag didn't sync
-        self.set_drum_flag(is_drum);
+        // The selected preset decides if this is a drum channel.
+        // Without any preset there is nothing to follow, so take the request
+        if self.preset.is_none() {
+            self.set_drum_flag(is_drum);
+        }
         events
+    }
+
+    /// The part mode of the channel, set by the GS USE FOR RHYTHM PART and the XG PART MODE messages alike.
+    /// `value`: the part mode value, 0 is melodic and anything else is a drum channel.
+    /// Equivalent to: setPartMode(value)
+    pub fn set_part_mode(
+        &mut self,
+        value: u8,
+        sound_bank_manager: &crate::synthesizer::audio_engine::sound_bank_manager::SoundBankManager,
+        current_system: MIDISystem,
+        locks: DrumLocks,
+        enable_event_system: bool,
+    ) -> Vec<SynthProcessorEvent> {
+        let is_drum = value != MELODIC_MAP;
+        if BankSelectHacks::is_system_xg(self.channel_system(current_system)) {
+            if !is_drum && self.refuses_melodic_part(current_system) {
+                return Vec::new();
+            }
+            self.set_midi_parameter(ChannelMidiParameterValue::DrumMap(value));
+            // Testcase: xg part_mode_drum
+            // Verified with s-yxg50
+            // SetDrums switches the bank and keeps the program,
+            // But switching *to* drums re-initializes the kit
+            // To program 0 instead!
+            // But not if it's already drum
+            // Testcase: 15. U.N. Owen was her (yoimutu).mid
+            let drums_before = self.drum_channel;
+            let mut events =
+                self.set_drums(is_drum, sound_bank_manager, current_system, locks, enable_event_system);
+            if is_drum && !drums_before {
+                events.append(&mut self.program_change(
+                    0,
+                    sound_bank_manager,
+                    current_system,
+                    locks,
+                    enable_event_system,
+                ));
+            }
+            return events;
+        }
+        let previous = self.midi_parameters.drum_map;
+        self.set_midi_parameter(ChannelMidiParameterValue::DrumMap(value));
+        // Testcase: gs_drum_change_test
+        // GS resets to the default kit not only when toggling drums,
+        // But on any map change too.
+        let mut events = Vec::new();
+        if !self.system_parameters.preset_lock
+            && (is_drum != self.patch.is_gm_gs_drum || value != previous)
+        {
+            self.patch.bank_msb = 0;
+            self.patch.bank_lsb = 0;
+            self.patch.is_gm_gs_drum = is_drum;
+            events = self.program_change(0, sound_bank_manager, current_system, locks, enable_event_system);
+            // Without any preset the drum channel state takes the request, like setDrums
+            if self.preset.is_none() {
+                self.set_drum_flag(is_drum);
+            }
+        }
+        events
+    }
+
+    /// Writes one controller matrix cell and recomputes the matrix.
+    /// Equivalent to: setMatrixCell(rules, source, destination, value)
+    pub fn set_matrix_cell(
+        &mut self,
+        rules: MatrixSystem,
+        source: MatrixSource,
+        destination: MatrixDestination,
+        value: u8,
+    ) {
+        self.matrix.set_cell(rules, source, destination, value);
+        self.recompute_matrix();
+    }
+
+    /// Recomputes the controller matrix outputs from the current source values.
+    /// Equivalent to: recomputeMatrix()
+    pub fn recompute_matrix(&mut self) {
+        let pitch_wheels = if self.per_note_pitch { Some(&self.pitch_wheels[..]) } else { None };
+        self.matrix.recompute(
+            &self.midi_controllers,
+            self.midi_parameters.pitch_wheel,
+            self.midi_parameters.pressure,
+            self.midi_parameters.cc1 as usize,
+            self.midi_parameters.cc2 as usize,
+            &self.poly_pressures,
+            pitch_wheels,
+        );
+    }
+
+    /// Only XG protects its drum part, GM2 lets channel 10 be melodic.
+    /// Returns true if this channel must stay a drum channel.
+    /// Equivalent to: refusesMelodicPart()
+    pub(crate) fn refuses_melodic_part(&self, current_system: MIDISystem) -> bool {
+        if self.channel % 16 != MIDI_DRUM_CHANNEL || self.channel_system(current_system) != MIDISystem::Xg {
+            return false;
+        }
+        SpessaLog::warn(&format!("Cannot disable drums on channel {} for XG.", self.channel));
+        true
     }
 
     // -----------------------------------------------------------------------
@@ -916,14 +1018,44 @@ impl MidiChannel {
                 self.midi_parameters.efx_assign = v;
             }
             EqEnabled(v) => self.midi_parameters.eq_enabled = v,
-            Cc1(v) => self.midi_parameters.cc1 = v,
-            Cc2(v) => self.midi_parameters.cc2 = v,
+            Cc1(v) => {
+                self.midi_parameters.cc1 = v;
+                // The matrix reads the newly bound controller at once
+                self.recompute_matrix();
+            }
+            Cc2(v) => {
+                self.midi_parameters.cc2 = v;
+                self.recompute_matrix();
+            }
             DrumMap(v) => self.midi_parameters.drum_map = v,
             DryLevel(v) => self.midi_parameters.dry_level = v,
             VelocitySenseDepth(v) => self.midi_parameters.velocity_sense_depth = v,
             VelocitySenseOffset(v) => self.midi_parameters.velocity_sense_offset = v,
         }
         self.update_internal_params();
+    }
+
+    /// Sets a channel MIDI parameter and recomputes the sounding voices that read it:
+    /// `pitchWheelRange` and `modulationDepth` through the Pitch Wheel Sensitivity and
+    /// Modulation Depth Range modulator sources.
+    /// Equivalent to: setMIDIParameter(parameter, value) with its computeModulatorsAll calls
+    pub fn set_midi_parameter_with_voices(&mut self, value: ChannelMidiParameterValue, voices: &mut [Voice]) {
+        let key = value.key();
+        if self.locked_midi_parameters[key as usize] {
+            return;
+        }
+        self.set_midi_parameter(value);
+        match key {
+            ChannelMidiParameterKey::PitchWheelRange => {
+                // Sounding voices follow RPN 0 through the Pitch Wheel Sensitivity source
+                self.compute_modulators_all_impl(voices, 0, modulator_sources::PITCH_WHEEL_RANGE as usize);
+            }
+            ChannelMidiParameterKey::ModulationDepth => {
+                // Sounding voices follow RPN 5 through the Modulation Depth Range source
+                self.compute_modulators_all_impl(voices, 0, modulator_sources::MODULATION_DEPTH_RANGE as usize);
+            }
+            _ => {}
+        }
     }
 
     /// Sets a channel system parameter and refreshes the cached `current_*` values.

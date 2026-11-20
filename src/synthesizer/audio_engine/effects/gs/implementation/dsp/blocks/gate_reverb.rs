@@ -1,5 +1,6 @@
 //! The Gate Reverb: a diffuser into a line that twelve taps per side read, spread over the gate time.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/blocks/gate_reverb.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use std::sync::LazyLock;
 
@@ -76,7 +77,7 @@ pub struct GateReverb {
 
 impl GateReverb {
     pub fn new(sample_rate: f64, memory: &mut DelayMemory) -> Self {
-        let step = sample_rate / 32_000.0;
+        let step = sample_rate / HARDWARE_RATE;
         let mut dc_blocker = FirstOrderFilter::new(sample_rate);
         dc_blocker.set_high_pass(DC_BLOCKER_HZ, 1.0);
         let diffuser = DIFFUSER.iter().map(|&n| memory.line((n * step).ceil())).collect();

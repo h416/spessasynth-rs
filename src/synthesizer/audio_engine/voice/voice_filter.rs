@@ -1,5 +1,7 @@
-//! Applies a lowpass filter to a voice.
-//! Ported from: src/synthesizer/audio_engine/voice/lowpass_filter.ts
+//! Applies the voice filter:
+//! The SF2 lowpass, or one of the SFe types (highpass, bandpass, peak, notch).
+//! All are RBJ biquads.
+//! Ported from: src/synthesizer/audio_engine/voice/voice_filter.ts
 //!
 //! A lot of the tricks here come from FluidSynth.
 //! They are the real smart guys.
@@ -9,10 +11,10 @@
 //! The filtering loop itself is inlined in `render_voice` (as in the TS), so this file only
 //! holds the filter state and the coefficient calculation.
 //!
-//! Coefficient cache: TS keys it by sample rate, then resonance, then cutoff cents
-//! (chunked typed arrays). The coefficients are a pure function of (sample rate, resonance,
+//! Coefficient cache: TS keys it by sample rate, then `resonance * 8 + type`, then cutoff cents
+//! (chunked typed arrays). The coefficients are a pure function of (sample rate, resonance, type,
 //! cutoff), so any collision-free cache is observably the same; Rust keys a map by the full
-//! triple. (An additive key such as `resonanceCb + cutoffCents * 961` would collide once the
+//! tuple. (An additive key such as `resonanceCb + cutoffCents * 961` would collide once the
 //! resonance reaches 961 cB.)
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
@@ -34,16 +36,16 @@ const CACHE_MAX_CENTS: i32 = 16_384;
 type Coefficients = [f64; 5];
 
 /// Key: (sample rate bits, resonanceCb, cutoff cents).
-type CacheKey = (u64, i16, i32);
+type CacheKey = (u64, i16, u8, i32);
 
 /// Global coefficient caches, shared between all synthesizer instances.
-/// Equivalent to: LowpassFilter.caches
+/// Equivalent to: VoiceFilter.caches
 static CACHES: LazyLock<Mutex<HashMap<CacheKey, Coefficients>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Biquad lowpass filter applied per voice.
-/// Equivalent to: LowpassFilter class
-pub struct LowpassFilter {
+/// Equivalent to: VoiceFilter class
+pub struct VoiceFilter {
     /// The largest change of the cutoff frequency (in cents) per rendering quantum.
     /// This is per filter, as it depends on the sample rate.
     /// Equivalent to: smoothingStep
@@ -51,6 +53,9 @@ pub struct LowpassFilter {
     /// Resonance in centibels.
     /// Equivalent to: resonanceCb
     pub resonance_cb: i16,
+    /// The filter type, see the SFe `filterType` generator. 0 is the SF2 lowpass.
+    /// Equivalent to: type
+    pub filter_type: u8,
     /// Current cutoff frequency in absolute cents.
     /// Equivalent to: currentInitialFc
     pub current_initial_fc: f64,
@@ -86,13 +91,14 @@ pub struct LowpassFilter {
     max_cutoff: f64,
 }
 
-impl LowpassFilter {
+impl VoiceFilter {
     /// Initializes a new instance of the filter.
     /// Equivalent to: constructor(sampleRate)
     pub fn new(sample_rate: f64) -> Self {
         Self {
             smoothing_step: FILTER_SMOOTHING_STEP * (44_100.0 / sample_rate),
             resonance_cb: 0,
+            filter_type: 0,
             current_initial_fc: 13_500.0,
             a0: 0.0,
             a1: 0.0,
@@ -112,9 +118,9 @@ impl LowpassFilter {
 
     /// Pre-populates the shared coefficient cache for a sample rate.
     /// Precomputes selected cutoffs for 0q (most common).
-    /// Equivalent to: LowpassFilter.initCache(sampleRate)
+    /// Equivalent to: VoiceFilter.initCache(sampleRate)
     pub fn init_cache(sample_rate: f64) {
-        let mut dummy = LowpassFilter::new(sample_rate);
+        let mut dummy = VoiceFilter::new(sample_rate);
         dummy.resonance_cb = 0;
         // 8000 is roughly 830 Hz and 13,500 is max
         for i in 8000..13_500_i32 {
@@ -127,6 +133,7 @@ impl LowpassFilter {
     pub fn init(&mut self) {
         self.last_target_cutoff = f64::INFINITY;
         self.resonance_cb = 0;
+        self.filter_type = 0;
         self.current_initial_fc = 13_500.0;
         self.a0 = 0.0;
         self.a1 = 0.0;
@@ -150,7 +157,8 @@ impl LowpassFilter {
             return;
         }
 
-        let key = (self.sample_rate.to_bits(), self.resonance_cb, cutoff_cents);
+        // The resonance and the type are part of the key
+        let key = (self.sample_rate.to_bits(), self.resonance_cb, self.filter_type, cutoff_cents);
         let mut cache = CACHES.lock().unwrap();
         if let Some(c) = cache.get(&key) {
             [self.a0, self.a1, self.a2, self.a3, self.a4] = *c;
@@ -186,9 +194,33 @@ impl LowpassFilter {
         let cosw = w.cos();
         let alpha = w.sin() / (2.0 * resonance_gain);
 
-        let b1 = (1.0 - cosw) * q_gain;
-        let b0 = b1 / 2.0;
-        let b2 = b0;
+        let (b0, b1, b2) = match self.filter_type {
+            1 => {
+                // Highpass, s^2 / D
+                let b0 = ((1.0 + cosw) / 2.0) * q_gain;
+                (b0, -(1.0 + cosw) * q_gain, b0)
+            }
+            2 => {
+                // Bandpass with constant skirt gain, w * s / D peaks at Q
+                let b0 = (w.sin() / 2.0) * q_gain;
+                (b0, 0.0, -b0)
+            }
+            3 => {
+                // Peak, (w^2 - s^2) / D is the lowpass minus the highpass: 2 * Q at the cutoff, 1 at both ends
+                let b0 = -cosw * q_gain;
+                (b0, 2.0 * q_gain, b0)
+            }
+            4 => {
+                // Notch, (w^2 + s^2) / D
+                (q_gain, -2.0 * cosw * q_gain, q_gain)
+            }
+            _ => {
+                // SF2 lowpass, w^2 / D
+                let b1 = (1.0 - cosw) * q_gain;
+                let b0 = b1 / 2.0;
+                (b0, b1, b0)
+            }
+        };
         let a0 = 1.0 + alpha;
         let a1 = -2.0 * cosw;
         let a2 = 1.0 - alpha;
@@ -205,13 +237,13 @@ impl LowpassFilter {
 mod tests {
     use super::*;
 
-    fn coeffs(f: &LowpassFilter) -> [f64; 5] {
+    fn coeffs(f: &VoiceFilter) -> [f64; 5] {
         [f.a0, f.a1, f.a2, f.a3, f.a4]
     }
 
     #[test]
     fn test_new_defaults() {
-        let f = LowpassFilter::new(44_100.0);
+        let f = VoiceFilter::new(44_100.0);
         assert_eq!(f.max_cutoff, 44_100.0 * 0.45);
         assert!(!f.initialized);
         assert_eq!(f.current_initial_fc, 13_500.0);
@@ -221,16 +253,16 @@ mod tests {
 
     #[test]
     fn test_smoothing_step_is_per_sample_rate() {
-        assert_eq!(LowpassFilter::new(44_100.0).smoothing_step, FILTER_SMOOTHING_STEP);
+        assert_eq!(VoiceFilter::new(44_100.0).smoothing_step, FILTER_SMOOTHING_STEP);
         assert_eq!(
-            LowpassFilter::new(48_000.0).smoothing_step,
+            VoiceFilter::new(48_000.0).smoothing_step,
             FILTER_SMOOTHING_STEP * (44_100.0 / 48_000.0)
         );
     }
 
     #[test]
     fn test_init_resets_state() {
-        let mut f = LowpassFilter::new(44_100.0);
+        let mut f = VoiceFilter::new(44_100.0);
         f.initialized = true;
         f.resonance_cb = 100;
         f.current_initial_fc = 5000.0;
@@ -247,7 +279,7 @@ mod tests {
 
     #[test]
     fn test_lowpass_coefficient_shape() {
-        let mut f = LowpassFilter::new(44_100.0);
+        let mut f = VoiceFilter::new(44_100.0);
         f.calculate_coefficients(8000.0);
         assert!(f.a0 > 0.0);
         assert_eq!(f.a0, f.a2);
@@ -256,11 +288,11 @@ mod tests {
 
     #[test]
     fn test_cached_equals_computed() {
-        let mut cached = LowpassFilter::new(44_100.0);
+        let mut cached = VoiceFilter::new(44_100.0);
         cached.resonance_cb = 120;
         cached.calculate_coefficients(9000.0);
         cached.calculate_coefficients(9000.0);
-        let mut direct = LowpassFilter::new(44_100.0);
+        let mut direct = VoiceFilter::new(44_100.0);
         direct.resonance_cb = 120;
         direct.compute_coefficients(9000);
         assert_eq!(coeffs(&cached), coeffs(&direct));
@@ -269,10 +301,10 @@ mod tests {
     #[test]
     fn test_no_collision_between_resonances() {
         // An additive key `q + fc * 961` would map (q=961, fc=0) and (q=0, fc=1) together.
-        let mut a = LowpassFilter::new(44_100.0);
+        let mut a = VoiceFilter::new(44_100.0);
         a.resonance_cb = 961;
         a.calculate_coefficients(0.0);
-        let mut b = LowpassFilter::new(44_100.0);
+        let mut b = VoiceFilter::new(44_100.0);
         b.resonance_cb = 0;
         b.calculate_coefficients(1.0);
         assert_ne!(coeffs(&a), coeffs(&b));
@@ -280,9 +312,9 @@ mod tests {
 
     #[test]
     fn test_cutoff_is_truncated() {
-        let mut a = LowpassFilter::new(44_100.0);
+        let mut a = VoiceFilter::new(44_100.0);
         a.calculate_coefficients(9000.9);
-        let mut b = LowpassFilter::new(44_100.0);
+        let mut b = VoiceFilter::new(44_100.0);
         b.calculate_coefficients(9000.0);
         assert_eq!(coeffs(&a), coeffs(&b));
     }
@@ -290,9 +322,9 @@ mod tests {
     #[test]
     fn test_high_cutoff_clamped_to_max() {
         // 16000 cents is well above 0.45 * 22050 Hz at 22050 Hz, both clamp to max_cutoff
-        let mut a = LowpassFilter::new(22_050.0);
+        let mut a = VoiceFilter::new(22_050.0);
         a.calculate_coefficients(16_000.0);
-        let mut b = LowpassFilter::new(22_050.0);
+        let mut b = VoiceFilter::new(22_050.0);
         b.calculate_coefficients(15_000.0);
         assert_eq!(coeffs(&a), coeffs(&b));
     }

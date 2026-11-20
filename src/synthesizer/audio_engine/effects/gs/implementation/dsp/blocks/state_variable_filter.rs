@@ -1,10 +1,8 @@
 //! The resonant filters of the amp simulators: the 32 kHz Chamberlin filters redesigned at the host rate.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/blocks/state_variable_filter.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use super::biquad::Biquad;
-
-/// The rate the hardware runs its filters at.
-const HARDWARE_RATE: f64 = 32_000.0;
 
 /// The resonant filters of the amp simulators. On the hardware they are Chamberlin state variable filters at
 /// 32 kHz, which at 4 kHz roll off far less than their nominal analog shape. This is that 32 kHz filter turned

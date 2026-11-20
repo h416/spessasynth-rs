@@ -7,8 +7,7 @@ use crate::soundbank::basic_soundbank::basic_preset::PHDR_BYTE_SIZE;
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
 use crate::soundbank::basic_soundbank::basic_zone::BAG_BYTE_SIZE;
 use crate::soundbank::basic_soundbank::generator::{GEN_BYTE_SIZE, Generator};
-use crate::soundbank::basic_soundbank::modulator::{MOD_BYTE_SIZE, Modulator};
-use crate::soundbank::basic_soundbank::modulator_source::ModulatorSource;
+use crate::soundbank::basic_soundbank::modulator::{DecodedModulator, MOD_BYTE_SIZE, Modulator};
 use crate::soundbank::soundfont::write::types::ExtendedSF2Chunks;
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::write_word;
@@ -179,18 +178,7 @@ pub fn write_sf2_elements(bank: &BasicSoundBank, is_preset: bool) -> SF2Elements
     generators.push(Generator::new_unvalidated(0, 0.0));
 
     // Equivalent to: modulators.push(new DecodedModulator(0, 0, 0, 0, 0))
-    // (DecodedModulator extends Modulator in TypeScript; here we construct the equivalent Modulator
-    //  with all-zero fields so that write() produces 10 zero bytes.)
-    modulators.push(Modulator {
-        destination: 0,
-        transform_amount: 0.0,
-        transform_type: 0,
-        is_effect_modulator: false,
-        is_default_resonant_modulator: false,
-        is_mod_wheel_modulator: false,
-        primary_source: ModulatorSource::default(),
-        secondary_source: ModulatorSource::default(),
-    });
+    modulators.push(DecodedModulator::new(0, 0, 0, 0.0, 0));
 
     generator_indexes.push(current_gen_index);
     modulator_indexes.push(current_mod_index);

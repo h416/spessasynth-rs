@@ -34,6 +34,8 @@ pub mod modulator_sources {
     pub const CHANNEL_PRESSURE: u8 = 13;
     pub const PITCH_WHEEL: u8 = 14;
     pub const PITCH_WHEEL_RANGE: u8 = 16;
+    /// The modulation depth range (RPN 5): 0 to 1 is 0 to 16 semitones.
+    pub const MODULATION_DEPTH_RANGE: u8 = 17;
     pub const LINK: u8 = 127;
 }
 
@@ -47,6 +49,8 @@ pub mod modulator_curve_types {
     pub const CONCAVE: u8 = 1;
     pub const CONVEX: u8 = 2;
     pub const SWITCH: u8 = 3;
+    /// A curve stored in the bank (SFe only), see `CustomCurve`.
+    pub const CUSTOM: u8 = 4;
 }
 
 /// Equivalent to: ModulatorCurveType
@@ -214,11 +218,11 @@ mod tests {
 
     #[test]
     fn test_reexport_generators_amount() {
-        assert_eq!(GENERATORS_AMOUNT, 89);
+        assert_eq!(GENERATORS_AMOUNT, 90);
     }
 
     #[test]
     fn test_reexport_max_generator() {
-        assert_eq!(MAX_GENERATOR, 88);
+        assert_eq!(MAX_GENERATOR, 89);
     }
 }

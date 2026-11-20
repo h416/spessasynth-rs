@@ -1,3 +1,4 @@
+pub mod curves;
 pub mod generators;
 pub mod instrument_zones;
 pub mod instruments;

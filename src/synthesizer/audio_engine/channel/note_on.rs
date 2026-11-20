@@ -4,7 +4,7 @@ use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::{
     GENERATORS_AMOUNT, generator_types as gt,
 };
-use crate::soundbank::basic_soundbank::modulator::Modulator;
+use crate::synthesizer::audio_engine::voice::wavetable_oscillator::wavetable_oscillator::ALTERNATING_OFF;
 use crate::synthesizer::audio_engine::voice::compute_modulator::{
     compute_modulators, SourceFilter,
 };
@@ -263,6 +263,36 @@ impl SynthesizerCore {
             self.midi_channels[channel].note_on_id[midi_note as usize]
         };
 
+        // Apply exclusive class before adding the voices, so the voices of this note on do not end each other
+        // In mono mode all voices have been killed already
+        if self.midi_channels[channel].midi_parameters.poly_mode
+            && self.midi_channels[channel].voice_count > 0
+        {
+            let ch_channel = self.midi_channels[channel].channel;
+            let current_time = self.current_time;
+            for cached in cached_voices.iter() {
+                let exclusive_class = if exclusive_override != 0 {
+                    exclusive_override
+                } else {
+                    cached.exclusive_class as i32
+                };
+                if exclusive_class == 0 {
+                    continue;
+                }
+                // Kill all voices with the same exclusive class
+                for v in self.voices.iter_mut() {
+                    if v.is_active && v.channel == ch_channel && v.exclusive_class == exclusive_class {
+                        if v.start_time > current_time {
+                            // A delayed voice that has not started yet never sounds
+                            v.is_active = false;
+                        } else {
+                            v.exclusive_release(current_time, MIN_EXCLUSIVE_LENGTH);
+                        }
+                    }
+                }
+            }
+        }
+
         // -----------------------------------------------------------------------
         // Assign and configure a voice slot for each cached voice
         // -----------------------------------------------------------------------
@@ -303,7 +333,11 @@ impl SynthesizerCore {
             // overridden by generators).
             self.voices[voice_idx].target_key = cached.target_key;
             self.voices[voice_idx].velocity = cached.velocity as u8;
-            self.voices[voice_idx].exclusive_class = cached.exclusive_class as i32;
+            self.voices[voice_idx].exclusive_class = if exclusive_override != 0 {
+                exclusive_override
+            } else {
+                cached.exclusive_class as i32
+            };
             self.voices[voice_idx].root_key = cached.root_key;
             self.voices[voice_idx].looping_mode = cached.looping_mode;
 
@@ -313,41 +347,7 @@ impl SynthesizerCore {
                 Some(cached.sample_data.clone());
             self.voices[voice_idx].oscillators[osc_idx].playback_step = cached.playback_step;
 
-            // -----------------------------------------------------------------------
-            // Set modulators: merge dynamic modulators when the manager is active.
-            // Equivalent to: if (this.dynamicModulators.active) { ... } else { ... }
-            // -----------------------------------------------------------------------
-            let dynamic_active = self.midi_channels[channel].sys_ex_modulators.active;
-
-            let final_modulators: Vec<Modulator> = if dynamic_active {
-                // Clone cached modulators and apply SysEx overrides
-                let mut mods: Vec<Modulator> = cached.modulators.clone();
-                // Copy the SysEx modulator entries to avoid borrow issues
-                let sysex_mods: Vec<Modulator> = self.midi_channels[channel]
-                    .sys_ex_modulators
-                    .modulator_list
-                    .iter()
-                    .map(|e| e.modulator.clone())
-                    .collect();
-                for sysex_mod in sysex_mods {
-                    match mods
-                        .iter()
-                        .position(|m| Modulator::is_identical(m, &sysex_mod, false))
-                    {
-                        Some(pos) => mods[pos] = sysex_mod,
-                        None => mods.push(sysex_mod),
-                    }
-                }
-                mods
-            } else {
-                cached.modulators.clone()
-            };
-
-            // Convert Modulator -> DecodedModulator and assign to voice
-            self.voices[voice_idx].modulators = final_modulators
-                .iter()
-                .map(|m| m.to_decoded())
-                .collect();
+            self.voices[voice_idx].modulators = cached.modulators.clone();
 
             // Resize modulator_values table if needed
             let mod_len = self.voices[voice_idx].modulators.len();
@@ -372,39 +372,6 @@ impl SynthesizerCore {
             }
 
             // -----------------------------------------------------------------------
-            // Exclusive class: kill same-class voices (except in mono mode, already killed)
-            // -----------------------------------------------------------------------
-            // Apply drum exclusive class override
-            if exclusive_override != 0 {
-                self.voices[voice_idx].exclusive_class = exclusive_override;
-            }
-            let excl_class = self.voices[voice_idx].exclusive_class;
-            if excl_class != 0 && self.midi_channels[channel].midi_parameters.poly_mode {
-                let ch_channel = self.midi_channels[channel].channel;
-                let voice_count_ch = self.midi_channels[channel].voice_count;
-                let current_time = self.current_time;
-                if voice_count_ch > 0 {
-                    let mut vc = 0u32;
-                    for (i, v) in self.voices.iter_mut().enumerate() {
-                        if i == voice_idx {
-                            continue;
-                        }
-                        if v.is_active
-                            && v.channel == ch_channel
-                            && v.exclusive_class == excl_class
-                            && v.has_rendered
-                        {
-                            v.exclusive_release(current_time, MIN_EXCLUSIVE_LENGTH);
-                            vc += 1;
-                            if vc >= voice_count_ch {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // -----------------------------------------------------------------------
             // Compute all modulators (fills modulated_generators)
             // -----------------------------------------------------------------------
             let mut modulated = [0i16; GENERATORS_AMOUNT];
@@ -423,11 +390,10 @@ impl SynthesizerCore {
             let modulated_copy = self.voices[voice_idx].modulated_generators;
             let target_key = self.voices[voice_idx].target_key;
 
-            // Delayed voice start (SFE): everything below runs from the delayed start time
-            let voice_delay = modulated_copy[gt::DELAY_VOICE as usize];
-            if voice_delay > -12_000 {
-                self.voices[voice_idx].start_time += timecents_to_seconds(voice_delay as i32);
-            }
+            // Delayed voice start (SFe): everything below runs from the delayed start time
+            // -32768 (the default) is zero time
+            self.voices[voice_idx].start_time +=
+                timecents_to_seconds(modulated_copy[gt::DELAY_VOICE as usize] as i32);
             let start = self.voices[voice_idx].start_time;
 
             // Initialize the volume envelope (non-realtime)
@@ -449,19 +415,10 @@ impl SynthesizerCore {
                 + timecents_to_seconds(modulated_copy[gt::DELAY_VIB_LFO as usize] as i32);
             v.mod_lfo_start_time = start
                 + timecents_to_seconds(modulated_copy[gt::DELAY_MOD_LFO as usize] as i32);
-            // LFO fade in and start phase (SFE)
-            let vib_fade = modulated_copy[gt::FADE_VIB_LFO as usize];
-            v.vib_lfo_fade = if vib_fade > -12_000 {
-                timecents_to_seconds(vib_fade as i32)
-            } else {
-                0.0
-            };
-            let mod_fade = modulated_copy[gt::FADE_MOD_LFO as usize];
-            v.mod_lfo_fade = if mod_fade > -12_000 {
-                timecents_to_seconds(mod_fade as i32)
-            } else {
-                0.0
-            };
+            // LFO fade in and start phase (SFe)
+            // -32768 (the default) is zero time, so no fade
+            v.vib_lfo_fade = timecents_to_seconds(modulated_copy[gt::FADE_VIB_LFO as usize] as i32);
+            v.mod_lfo_fade = timecents_to_seconds(modulated_copy[gt::FADE_MOD_LFO as usize] as i32);
             v.vib_lfo_phase +=
                 (modulated_copy[gt::VIB_LFO_START_PHASE as usize] as f64 % 360.0) / 360.0;
             if v.vib_lfo_phase >= 1.0 {
@@ -509,18 +466,29 @@ impl SynthesizerCore {
                 std::mem::swap(&mut ls, &mut le);
             }
 
-            // Disable loop if range is < 1 sample (for continuous modes 1 and 3)
+            // Disable loop if range is < 1 sample (for continuous modes 1, 3 and 4)
+            // Don't disable on release mode. Testcase:
+            // https://github.com/spessasus/SpessaSynth/issues/174
             let looping_mode = self.voices[voice_idx].looping_mode;
-            if le - ls < 1.0 && (looping_mode == 1 || looping_mode == 3) {
+            if le - ls < 1.0 && (looping_mode == 1 || looping_mode == 3 || looping_mode == 4) {
                 self.voices[voice_idx].looping_mode = 0;
             }
 
-            self.voices[voice_idx].oscillators[osc_idx].loop_start = ls;
-            self.voices[voice_idx].oscillators[osc_idx].loop_end = le;
-            self.voices[voice_idx].oscillators[osc_idx].loop_length = le - ls;
             let lm = self.voices[voice_idx].looping_mode;
+            let osc = &mut self.voices[voice_idx].oscillators[osc_idx];
+            osc.loop_start = ls;
+            osc.loop_end = le;
+            osc.loop_length = le - ls;
+            osc.turn = ALTERNATING_OFF;
+            // An alternating loop plays as a forward loop through the turn and back, without repeating the turn points.
+            // One point long, it is the same as a forward loop.
+            if lm == 4 && osc.loop_length > 1.0 {
+                osc.turn = osc.loop_end - 1.0;
+                osc.loop_length = (osc.loop_length - 1.0) * 2.0;
+                osc.loop_end = osc.loop_start + osc.loop_length;
+            }
             self.voices[voice_idx].oscillators[osc_idx].is_looping =
-                lm == 1 || lm == 3;
+                lm == 1 || lm == 3 || lm == 4;
             self.voices[voice_idx].oscillators[osc_idx].has_looped = false;
 
             // -----------------------------------------------------------------------
@@ -578,7 +546,7 @@ impl SynthesizerCore {
         let system = self.midi_parameters.system;
         let resolve = |patch| {
             self.sound_bank_manager
-                .get_preset_and_bank_idx(patch, system)
+                .get_preset_and_bank_idx(patch, system, false)
                 // Protect from binding to self as well
                 .filter(|&(_, bank_idx)| SoundBankManager::user_drum_set_of(bank_idx).is_none())
         };

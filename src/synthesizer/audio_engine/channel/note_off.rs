@@ -85,6 +85,9 @@ impl MidiChannel {
                         } else {
                             v.release_voice(current_time, MIN_NOTE_LENGTH);
                         }
+                    } else if v.looping_mode == 2 {
+                        // Start on release never starts its sample here, so end the silent voice instead of leaking it
+                        v.is_active = false;
                     }
                     vc += 1;
                     if vc >= self.voice_count {

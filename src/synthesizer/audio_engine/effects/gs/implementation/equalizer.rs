@@ -189,6 +189,19 @@ impl DefaultGSEqualizer {
         self.high_zr = high_zr;
     }
 
+    /// Clears the filter state and sets the default parameters.
+    /// Equivalent to: reset()
+    pub fn reset(&mut self) {
+        self.low_zl = 0.0;
+        self.low_zr = 0.0;
+        self.high_zl = 0.0;
+        self.high_zr = 0.0;
+        self.set_low_frequency(0);
+        self.set_low_gain(64);
+        self.set_high_frequency(0);
+        self.set_high_gain(64);
+    }
+
     /// Equivalent to: getSnapshot()
     pub fn get_snapshot(&self) -> GSEqualizerParameter {
         GSEqualizerParameter {

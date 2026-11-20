@@ -10,6 +10,7 @@ use crate::soundbank::basic_soundbank::generator::Generator;
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::read_little_endian_indexed;
+use crate::soundbank::soundfont::sf2_compatibility::from_sf2_attenuation;
 use crate::utils::riff_chunk::RIFFChunk;
 
 /// Reads one 4-byte generator record from `data_array`, advancing the cursor by 4.
@@ -28,8 +29,9 @@ fn read_generator(data_array: &mut IndexedByteArray) -> Generator {
 
 /// Reads all SF2 generator records from a pgen or igen RIFF chunk.
 /// The terminal record (all zeros) is automatically stripped.
-/// `allow_sfe_generators`: if generators above endOper are allowed (SFE banks).
-/// Equivalent to: `readGenerators(generatorChunk, allowSFEGenerators)`
+/// `allow_sfe_generators`: if generators above endOper are allowed (SFe banks).
+/// In any other file the initial attenuation is converted from the SF2 unit.
+/// Equivalent to: `readGenerators(generatorChunk, allowSFeGenerators)`
 pub fn read_generators(generator_chunk: &mut RIFFChunk, allow_sfe_generators: bool) -> Vec<Generator> {
     let mut gens: Vec<Generator> = Vec::new();
 
@@ -39,6 +41,10 @@ pub fn read_generators(generator_chunk: &mut RIFFChunk, allow_sfe_generators: bo
         // They are kept in the list as invalid since the zones index into it
         if !allow_sfe_generators && generator.generator_type > gt::END_OPER {
             generator.generator_type = gt::INVALID;
+        }
+        // The bank holds true centibels, an SF2 file stores the EMU8000 attenuation
+        if !allow_sfe_generators && generator.generator_type == gt::INITIAL_ATTENUATION {
+            generator.generator_value = from_sf2_attenuation(generator.generator_value as i32) as i16;
         }
         gens.push(generator);
     }

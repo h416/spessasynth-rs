@@ -17,9 +17,9 @@
 use std::sync::LazyLock;
 
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
-use crate::soundbank::basic_soundbank::modulator_curves::get_modulator_curve_value;
+use crate::soundbank::basic_soundbank::modulator_curve::built_in_table;
 use crate::soundbank::enums::modulator_curve_types;
-use crate::synthesizer::audio_engine::voice::unit_converter::timecents_to_seconds;
+use crate::synthesizer::audio_engine::voice::unit_converter::raw_timecents_to_seconds;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -38,14 +38,11 @@ const CONVEX_ATTACK_SIZE: usize = 1000;
 // ---------------------------------------------------------------------------
 
 static CONVEX_ATTACK: LazyLock<Vec<f32>> = LazyLock::new(|| {
+    // Unipolar positive
+    let convex_table = built_in_table(modulator_curve_types::CONVEX, 0).expect("built-in curve");
     (0..CONVEX_ATTACK_SIZE)
-        .map(|i| {
-            get_modulator_curve_value(
-                0,
-                modulator_curve_types::CONVEX,
-                i as f64 / CONVEX_ATTACK_SIZE as f64,
-            ) as f32
-        })
+        // This makes the db linear (I think)
+        .map(|i| convex_table[((i as f64 / CONVEX_ATTACK_SIZE as f64) * 16_384.0).trunc() as usize])
         .collect()
 });
 
@@ -80,7 +77,7 @@ pub const MOD_ENV_GENERATORS: ModulationEnvelopeGenerators = ModulationEnvelopeG
     key_num_to_decay: gt::KEY_NUM_TO_MOD_ENV_DECAY as usize,
 };
 
-/// The second modulation envelope (SFE).
+/// The second modulation envelope (SFe).
 /// Equivalent to: MOD_ENV_2_GENERATORS
 pub const MOD_ENV_2_GENERATORS: ModulationEnvelopeGenerators = ModulationEnvelopeGenerators {
     delay: gt::DELAY_MOD_ENV2 as usize,
@@ -149,7 +146,7 @@ impl ModulationEnvelope {
         if timecents <= -10114 {
             return 0.0;
         }
-        timecents_to_seconds(timecents) as f64
+        raw_timecents_to_seconds(timecents)
     }
 
     /// Creates a new ModulationEnvelope with all fields at zero / false.
@@ -282,10 +279,14 @@ impl ModulationEnvelope {
         // Hold time with key excursion
         let hold_key_excursion_cents = (60 - target_key as i32) as f64
             * modulated_generators[self.gens.key_num_to_hold] as f64;
-        self.hold_duration = Self::tc2sec(
-            (hold_key_excursion_cents + modulated_generators[self.gens.hold] as f64)
-                as i32,
-        );
+        // -32768 is no hold, the key excursion included.
+        // Otherwise, the hold is clamped at -12000 before the excursion (like the volume envelope)
+        let hold = modulated_generators[self.gens.hold] as i32;
+        self.hold_duration = if hold <= -32_768 {
+            0.0
+        } else {
+            Self::tc2sec((hold.max(-12_000) as f64 + hold_key_excursion_cents) as i32)
+        };
 
         // Compute absolute phase end times
         self.delay_end = start_time

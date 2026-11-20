@@ -13,7 +13,12 @@ use std::sync::OnceLock;
 
 use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
+use crate::synthesizer::audio_engine::channel::controller_matrix::{
+    MATRIX_CHANNEL_ROW, MATRIX_DESTINATION_COUNT, MatrixSystem,
+};
+use crate::synthesizer::audio_engine::channel::enums::matrix_destinations as md;
 use crate::synthesizer::audio_engine::channel::midi_channel::MidiChannel;
+use crate::synthesizer::audio_engine::synth_constants::GS_SENDS_GAIN;
 use crate::synthesizer::audio_engine::voice::unit_converter::{
     abs_cents_to_hz, cb_attenuation_to_gain, cb_attenuation_to_gain_f64,
 };
@@ -142,10 +147,14 @@ enum SendTarget {
 
 /// Computes the LFO value for the given phase.
 /// All waveforms are at zero and rising at the default start phase of 0.25.
-/// `phase`: the LFO phase, from 0 to 1. `waveform`: 0 for triangle, 1 for sawtooth, 2 for sine.
+/// `phase`: the LFO phase, from 0 to 1. `waveform`: 0 for triangle, 1 for sawtooth, 2 for sine, 3 for square.
 /// Returns the LFO value, from -1 to 1.
 /// Equivalent to: getLfoValue(phase, waveform)
 fn get_lfo_value(phase: f64, waveform: i16) -> f64 {
+    if waveform == 3 {
+        // Square, high for the first half of the cycle from the default start
+        return if (0.25..0.75).contains(&phase) { 1.0 } else { -1.0 };
+    }
     if waveform == 2 {
         // Sine
         return (TWO_PI * (phase - 0.25)).sin();
@@ -171,20 +180,15 @@ impl MidiChannel {
         sample_count: usize,
         core: &mut RenderVoiceContext,
     ) {
-        // Delayed voice start (SFE): nothing runs until the voice starts
+        // Delayed voice start (SFe): nothing runs until the voice starts
         if time_now < voice.start_time {
-            voice.has_rendered = true;
             return;
         }
         // Check if release
         if !voice.is_in_release && time_now >= voice.release_start_time {
             // Release the voice here
             voice.is_in_release = true;
-            if voice.vol_env.start_release(
-                &voice.modulated_generators,
-                voice.target_key,
-                voice.override_release_vol_env,
-            ) {
+            if voice.vol_env.start_release(&voice.modulated_generators, voice.override_release_vol_env) {
                 voice.is_active = false;
             }
             voice.mod_env.start_release(&voice.modulated_generators);
@@ -195,7 +199,6 @@ impl MidiChannel {
                 voice.wavetable_mut().is_looping = false;
             }
         }
-        voice.has_rendered = true;
 
         // Important sanity check, as we may disable the voice now
         // Testcase: mono mode with chords
@@ -247,95 +250,172 @@ impl MidiChannel {
         // Low pass excursion with LFO and mod envelope
         let mut lowpass_excursion = 0.0f64;
         let mut volume_excursion_centibels = 0.0f64;
-        let mut voice_gain =
-            voice.gain_modifier * (1.0 + modulated[gt::AMPLITUDE as usize] as f64 / 1000.0);
+        let mut voice_gain = voice.gain_modifier;
+        // Linear tremolo terms (SFe and the GS matrix), clamped once below
+        let mut tremolo = 0.0f64;
 
-        // Vibrato LFO
-        if time_now >= voice.vib_lfo_start_time {
+        // Gain (SFe), positive is louder
+        let gain_cb = modulated[gt::GAIN as usize];
+        if gain_cb != 0 {
+            voice_gain *= cb_attenuation_to_gain(-(gain_cb as i32));
+        }
+
+        // Controller matrix (GS / XG)
+        let matrix = &self.matrix;
+        let matrix_active = matrix.active;
+        let is_xg_matrix = matrix.system == MatrixSystem::Xg;
+        let m_out = &matrix.outputs;
+        let mut m_row = MATRIX_CHANNEL_ROW;
+        if matrix_active {
+            if matrix.per_note_rows
+                || (matrix.poly_pressure_active && self.poly_pressures[voice.midi_note as usize] > 0)
+            {
+                m_row = voice.midi_note as usize * MATRIX_DESTINATION_COUNT;
+            }
+            cents += m_out[m_row + md::PITCH];
+            lowpass_excursion += m_out[m_row + md::CUTOFF];
+            let amp = m_out[m_row + md::AMPLITUDE];
+            if amp != 0.0 {
+                if is_xg_matrix {
+                    // XG works in decibels: -100 % is -96 dB, +100 % is +6 dB
+                    volume_excursion_centibels -= if amp < 0.0 { amp * 960.0 } else { amp * 60.0 };
+                } else {
+                    // GS works on the amplitude: -100 % is silence, +100 % twice the level
+                    voice_gain *= (1.0 + amp).max(0.0);
+                }
+            }
+        }
+
+        // Vibrato LFO (GS LFO1, XG LFO (the only one))
+        // GS and XG run the oscillator from note on. The patch's delay and fade only hold back its own depths,
+        // The controller (matrix) depths play at full strength from the start.
+        let matrix_vib = matrix_active && matrix.lfo1_active;
+        let vib_started = time_now >= voice.vib_lfo_start_time;
+        if vib_started || matrix_vib {
             let vib_pitch_depth = modulated[gt::VIB_LFO_TO_PITCH as usize] as f64;
             let vib_vol_depth = modulated[gt::VIB_LFO_TO_VOLUME as usize] as f64;
             let vib_filter_depth = modulated[gt::VIB_LFO_TO_FILTER_FC as usize] as f64;
-            let vib_amplitude_depth = modulated[gt::VIB_LFO_AMPLITUDE_DEPTH as usize] as f64;
-            if vib_pitch_depth != 0.0
+            let vib_amplitude_depth = modulated[gt::VIB_LFO_TO_AMPLITUDE as usize] as f64;
+            if matrix_vib
+                || vib_pitch_depth != 0.0
                 || vib_vol_depth != 0.0
                 || vib_filter_depth != 0.0
                 || vib_amplitude_depth != 0.0
             {
-                let vib_freq_hz = (abs_cents_to_hz(modulated[gt::FREQ_VIB_LFO as usize] as i32)
-                    + modulated[gt::VIB_LFO_RATE as usize] as f64 / 100.0)
-                    .max(0.0);
-                let rate_inc = (vib_freq_hz * sample_count as f64) / sample_rate;
-                let mut vib_lfo_value = get_lfo_value(
-                    voice.vib_lfo_phase,
-                    modulated[gt::VIB_LFO_WAVEFORM as usize],
-                );
-                voice.vib_lfo_phase += rate_inc;
-                if voice.vib_lfo_phase >= 1.0 {
-                    voice.vib_lfo_phase -= 1.0;
+                let mut vib_freq_hz = abs_cents_to_hz(modulated[gt::FREQ_VIB_LFO as usize] as i32);
+                if matrix_active {
+                    vib_freq_hz += m_out[m_row + md::LFO1_RATE];
                 }
-                // Fade in (SFE)
-                if voice.vib_lfo_fade > 0.0 {
-                    let fade = (time_now - voice.vib_lfo_start_time) / voice.vib_lfo_fade;
-                    if fade < 1.0 {
-                        vib_lfo_value *= fade;
+                // At or below 0 Hz the LFO stands still
+                vib_freq_hz = vib_freq_hz.max(0.0);
+                let waveform = modulated[gt::VIB_LFO_WAVEFORM as usize];
+                let mut vib_lfo_value;
+                if vib_started {
+                    vib_lfo_value = get_lfo_value(voice.vib_lfo_phase, waveform);
+                    voice.vib_lfo_phase += (vib_freq_hz * sample_count as f64) / sample_rate;
+                    if voice.vib_lfo_phase >= 1.0 {
+                        voice.vib_lfo_phase -= 1.0;
+                    }
+                } else {
+                    // Still in the patch's delay: run back from the phase the patch's LFO starts at
+                    let mut phase =
+                        voice.vib_lfo_phase - vib_freq_hz * (voice.vib_lfo_start_time - time_now);
+                    phase -= phase.floor();
+                    vib_lfo_value = get_lfo_value(phase, waveform);
+                }
+                if matrix_vib {
+                    cents += vib_lfo_value * m_out[m_row + md::LFO1_PITCH];
+                    lowpass_excursion += vib_lfo_value * m_out[m_row + md::LFO1_FILTER];
+                    let a = m_out[m_row + md::LFO1_AMPLITUDE];
+                    // XG: a swing in decibels from the level down (100 % reaches -96 dB), GS: linear
+                    if is_xg_matrix {
+                        volume_excursion_centibels += (a * 960.0 * (1.0 - vib_lfo_value)) / 2.0;
+                    } else {
+                        tremolo += vib_lfo_value * a;
                     }
                 }
-                cents += vib_lfo_value * vib_pitch_depth;
-                // Low pass frequency
-                lowpass_excursion += vib_lfo_value * vib_filter_depth;
-
-                // Vol env volume offset
-                // Negate the lfo value because audigy starts with increase rather than decrease
-                volume_excursion_centibels += -vib_lfo_value * vib_vol_depth;
-
-                // Amplitude depth
-                // Like SCVA: double gain at peak, 0 at lowest (times depth)
-                voice_gain *= 1.0 + vib_lfo_value * (vib_amplitude_depth / 1000.0);
+                if vib_started {
+                    // Fade in (SFe)
+                    if voice.vib_lfo_fade > 0.0 {
+                        let fade = (time_now - voice.vib_lfo_start_time) / voice.vib_lfo_fade;
+                        if fade < 1.0 {
+                            vib_lfo_value *= fade;
+                        }
+                    }
+                    cents += vib_lfo_value * vib_pitch_depth;
+                    // Low pass frequency
+                    lowpass_excursion += vib_lfo_value * vib_filter_depth;
+                    // Vol env volume offset
+                    // Negate the lfo value because audigy starts with increase rather than decrease
+                    volume_excursion_centibels += -vib_lfo_value * vib_vol_depth;
+                    // Amplitude depth (SFe)
+                    tremolo += vib_lfo_value * (vib_amplitude_depth / 1000.0);
+                }
             }
         }
 
-        // Mod LFO
-        if time_now >= voice.mod_lfo_start_time {
+        // Mod LFO (GS LFO2), same as above
+        let matrix_mod = matrix_active && matrix.lfo2_active;
+        let mod_started = time_now >= voice.mod_lfo_start_time;
+        if mod_started || matrix_mod {
             let mod_pitch_depth = modulated[gt::MOD_LFO_TO_PITCH as usize] as f64;
             let mod_vol_depth = modulated[gt::MOD_LFO_TO_VOLUME as usize] as f64;
             let mod_filter_depth = modulated[gt::MOD_LFO_TO_FILTER_FC as usize] as f64;
-            let mod_amplitude_depth = modulated[gt::MOD_LFO_AMPLITUDE_DEPTH as usize] as f64;
+            let mod_amplitude_depth = modulated[gt::MOD_LFO_TO_AMPLITUDE as usize] as f64;
             // Don't compute mod lfo unless necessary
-            if mod_pitch_depth != 0.0
+            if matrix_mod
+                || mod_pitch_depth != 0.0
                 || mod_filter_depth != 0.0
                 || mod_vol_depth != 0.0
                 || mod_amplitude_depth != 0.0
             {
-                let mod_freq_hz = (abs_cents_to_hz(modulated[gt::FREQ_MOD_LFO as usize] as i32)
-                    + modulated[gt::MOD_LFO_RATE as usize] as f64 / 100.0)
-                    .max(0.0);
-                let rate_inc = (mod_freq_hz * sample_count as f64) / sample_rate;
-                let mut mod_lfo_value = get_lfo_value(
-                    voice.mod_lfo_phase,
-                    modulated[gt::MOD_LFO_WAVEFORM as usize],
-                );
-                voice.mod_lfo_phase += rate_inc;
-                if voice.mod_lfo_phase >= 1.0 {
-                    voice.mod_lfo_phase -= 1.0;
+                let mut mod_freq_hz = abs_cents_to_hz(modulated[gt::FREQ_MOD_LFO as usize] as i32);
+                if matrix_active {
+                    mod_freq_hz += m_out[m_row + md::LFO2_RATE];
                 }
-                // Fade in (SFE)
-                if voice.mod_lfo_fade > 0.0 {
-                    let fade = (time_now - voice.mod_lfo_start_time) / voice.mod_lfo_fade;
-                    if fade < 1.0 {
-                        mod_lfo_value *= fade;
+                mod_freq_hz = mod_freq_hz.max(0.0);
+                let waveform = modulated[gt::MOD_LFO_WAVEFORM as usize];
+                let mut mod_lfo_value;
+                if mod_started {
+                    mod_lfo_value = get_lfo_value(voice.mod_lfo_phase, waveform);
+                    voice.mod_lfo_phase += (mod_freq_hz * sample_count as f64) / sample_rate;
+                    if voice.mod_lfo_phase >= 1.0 {
+                        voice.mod_lfo_phase -= 1.0;
                     }
+                } else {
+                    let mut phase =
+                        voice.mod_lfo_phase - mod_freq_hz * (voice.mod_lfo_start_time - time_now);
+                    phase -= phase.floor();
+                    mod_lfo_value = get_lfo_value(phase, waveform);
                 }
-                cents += mod_lfo_value * mod_pitch_depth;
-                // Vol env volume offset
-                // Negate the lfo value because audigy starts with increase rather than decrease
-                volume_excursion_centibels += -mod_lfo_value * mod_vol_depth;
-                // Low pass frequency
-                lowpass_excursion += mod_lfo_value * mod_filter_depth;
-
-                // Amplitude depth
-                // Like SCVA: double gain at peak, 0 at lowest (times depth)
-                voice_gain *= 1.0 + mod_lfo_value * (mod_amplitude_depth / 1000.0);
+                if matrix_mod {
+                    cents += mod_lfo_value * m_out[m_row + md::LFO2_PITCH];
+                    lowpass_excursion += mod_lfo_value * m_out[m_row + md::LFO2_FILTER];
+                    tremolo += mod_lfo_value * m_out[m_row + md::LFO2_AMPLITUDE];
+                }
+                if mod_started {
+                    // Fade in (SFe)
+                    if voice.mod_lfo_fade > 0.0 {
+                        let fade = (time_now - voice.mod_lfo_start_time) / voice.mod_lfo_fade;
+                        if fade < 1.0 {
+                            mod_lfo_value *= fade;
+                        }
+                    }
+                    cents += mod_lfo_value * mod_pitch_depth;
+                    // Low pass frequency
+                    lowpass_excursion += mod_lfo_value * mod_filter_depth;
+                    // Vol env volume offset
+                    // Negate the lfo value because audigy starts with increase rather than decrease
+                    volume_excursion_centibels += -mod_lfo_value * mod_vol_depth;
+                    // Amplitude depth (SFe)
+                    tremolo += mod_lfo_value * (mod_amplitude_depth / 1000.0);
+                }
             }
+        }
+
+        // One clamp for all linear amplitude modulation
+        if tremolo != 0.0 {
+            voice_gain *= (1.0 + tremolo).clamp(0.0, 2.0);
         }
 
         // Channel vibrato (custom vibrato)
@@ -366,7 +446,7 @@ impl MidiChannel {
             cents += mod_env * mod_env_pitch_depth as f64;
         }
 
-        // Second mod env (SFE)
+        // Second mod env (SFe)
         let mod_env2_pitch_depth = modulated[gt::MOD_ENV2_TO_PITCH as usize];
         let mod_env2_filter_depth = modulated[gt::MOD_ENV2_TO_FILTER_FC as usize];
         if mod_env2_filter_depth != 0 || mod_env2_pitch_depth != 0 {
@@ -374,9 +454,6 @@ impl MidiChannel {
             lowpass_excursion += mod_env2 * mod_env2_filter_depth as f64;
             cents += mod_env2 * mod_env2_pitch_depth as f64;
         }
-
-        // Default resonant modulator: it does not affect the filter gain (neither XG nor GS did that)
-        volume_excursion_centibels -= voice.resonance_offset;
 
         // Finally, calculate the playback rate
         let cents_total = cents + semitones * 100.0;
@@ -409,6 +486,11 @@ impl MidiChannel {
         let mut gain = voice.vol_env.output_gain;
         // Compute the new value
         let env_active = voice.vol_env.process(sample_count, gain_target);
+        if voice.vol_env.starts_at_peak {
+            // No delay and no attack: start the first block at the peak instead of ramping up from silence
+            gain = voice.vol_env.output_gain;
+            voice.vol_env.starts_at_peak = false;
+        }
 
         // Note, we do not use &&= as it short-circuits!
         // And we don't do = either as wavetable might've marked it as inactive (end of sample)
@@ -450,16 +532,19 @@ impl MidiChannel {
                 chorus_level = core.chorus_gain * (chorus_send / 1000.0);
             }
 
-            // XG variation send is system-only, in insertion mode CC94 does nothing.
-            // GS delay is only sent to when it's active.
+            // XG variation send is system-only, in insertion mode the send does nothing.
             let is_xg = core.is_xg;
-            if if is_xg { !core.xg_variation_insertion_mode } else { core.gs_delay_active } {
-                let variation_send = self.midi_controllers[midi_controllers::VARIATION_DEPTH as usize]
-                    as f64
-                    * voice.variation_gain;
+            if !is_xg || !core.xg_variation_insertion_mode {
+                let variation_send =
+                    modulated[gt::VARIATION_EFFECTS_SEND as usize] as f64 * voice.variation_gain;
                 if variation_send > 0.0 {
-                    variation_level = (((variation_send as i32) >> 7) as f64 / 127.0)
+                    variation_level = (variation_send / 1000.0)
                         * if is_xg { core.xg_variation_gain } else { core.gs_delay_gain };
+                    // The GS delay runs from its first use until a reset.
+                    // A zone can send without CC 94 (variationEffectsSend), so the voice turns it on
+                    if !is_xg {
+                        core.gs_delay_active = true;
+                    }
                 }
             }
         }
@@ -523,7 +608,7 @@ impl MidiChannel {
         // Calculate increase
         let gain_inc = (voice.vol_env.output_gain * output_gain - gain) / sample_count as f64;
 
-        // Low pass filter and gain (inlined for performance, confirmed with Node.js)
+        // Voice filter and gain (inlined for performance, confirmed with Node.js)
         {
             let f = &mut voice.filter;
             let initial_fc = modulated[gt::INITIAL_FILTER_FC as usize] as f64;
@@ -543,18 +628,26 @@ impl MidiChannel {
 
             // The final cutoff for this calculation
             let mut target_cutoff = f.current_initial_fc + lowpass_excursion;
-            // Cutoff ceiling (SFE), 13500 means no ceiling
+            // Cutoff ceiling (SFe), 13500 means no ceiling
             let max_cutoff = modulated[gt::MAX_FILTER_FC as usize] as f64;
             if max_cutoff < 13_500.0 && target_cutoff > max_cutoff {
                 target_cutoff = max_cutoff;
             }
-            let modulated_resonance = modulated[gt::INITIAL_FILTER_Q as usize];
+            // SF2 resonance plus the SFe offset, both already clamped to their own ranges
+            let modulated_resonance =
+                modulated[gt::INITIAL_FILTER_Q as usize] + modulated[gt::FILTER_Q_OFFSET as usize];
+            // SFe filter type, 0 is the SF2 lowpass
+            let filter_type = modulated[gt::FILTER_TYPE as usize] as u8;
             // Note:
             // the check for initialFC is because of the filter optimization
             // (if cents are the maximum then the filter is open)
             // filter cannot use this optimization if it's dynamic (see #53), and
             // the filter can only be dynamic if the initial filter is not open
-            if f.current_initial_fc > 13_499.0 && target_cutoff > 13_499.0 && modulated_resonance == 0
+            // Only the lowpass is neutral when open, the other types must always run
+            if filter_type == 0
+                && f.current_initial_fc > 13_499.0
+                && target_cutoff > 13_499.0
+                && modulated_resonance == 0
             {
                 f.current_initial_fc = 13_500.0;
                 // Filter is open, apply gain
@@ -566,9 +659,11 @@ impl MidiChannel {
                 // Check if the frequency has changed. if so, calculate new coefficients
                 if (f.last_target_cutoff - target_cutoff).abs() > 1.0
                     || f.resonance_cb != modulated_resonance
+                    || f.filter_type != filter_type
                 {
                     f.last_target_cutoff = target_cutoff;
                     f.resonance_cb = modulated_resonance;
+                    f.filter_type = filter_type;
                     f.calculate_coefficients(target_cutoff);
                 }
 
@@ -713,13 +808,13 @@ pub fn mix_voice_send_buffer(
     } else {
         // GS effects are mono
         if reverb > 0.0 {
-            send_to_mono(input, sends.gs_reverb_send, reverb, sample_count);
+            send_to_mono(input, sends.gs_reverb_send, reverb * GS_SENDS_GAIN, sample_count);
         }
         if chorus > 0.0 {
-            send_to_mono(input, sends.gs_chorus_send, chorus, sample_count);
+            send_to_mono(input, sends.gs_chorus_send, chorus * GS_SENDS_GAIN, sample_count);
         }
         if variation > 0.0 {
-            send_to_mono(input, sends.gs_delay_send, variation, sample_count);
+            send_to_mono(input, sends.gs_delay_send, variation * GS_SENDS_GAIN, sample_count);
         }
     }
     input[..sample_count].fill(0.0);

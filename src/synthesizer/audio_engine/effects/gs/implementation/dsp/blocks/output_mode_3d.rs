@@ -1,5 +1,6 @@
 //! The 3D types' output: phones pass the two ear signals, speakers cancel the crosstalk between the speakers.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/blocks/output_mode_3d.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use super::delay_line::DelayLine;
 
@@ -33,7 +34,7 @@ impl OutputMode3D {
     /// `numerator` is the numerator's delay in 32 kHz samples, `ramped` whether a switch ramps over 40 ms
     /// (else it is hard).
     pub fn new(sample_rate: f64, numerator: f64, ramped: bool) -> Self {
-        let step = sample_rate / 32_000.0;
+        let step = sample_rate / HARDWARE_RATE;
         Self {
             left: 0.0,
             right: 0.0,
