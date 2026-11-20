@@ -17,7 +17,9 @@ use crate::soundbank::downloadable_sounds::default_dls_modulators::{
 use crate::soundbank::downloadable_sounds::enums::{
     DLSDestination, DLSSource, DLSTransform, dls_destinations, dls_sources,
 };
+use crate::midi::enums::midi_controllers;
 use crate::soundbank::enums::modulator_curve_types;
+use crate::soundbank::soundfont::sf2_compatibility::{follow_modulation_depth, without_modulation_depth};
 use crate::utils::byte_functions::bit_mask::bit_mask_to_bool;
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::{read_little_endian_indexed, write_dword, write_word};
@@ -80,22 +82,6 @@ fn is_invalid_generator_type(gen_type: GeneratorType) -> bool {
     )
 }
 
-// ---------------------------------------------------------------------------
-// Private helper: compare a parsed Modulator with a DecodedModulator constant
-// Equivalent to: Modulator.isIdentical(m, decodedConst, checkAmount)
-// ---------------------------------------------------------------------------
-
-fn modulator_identical_to_decoded(
-    m: &Modulator,
-    d: &crate::soundbank::basic_soundbank::modulator::DecodedModulator,
-    check_amount: bool,
-) -> bool {
-    m.primary_source.to_source_enum() == d.source_enum
-        && m.secondary_source.to_source_enum() == d.secondary_source_enum
-        && m.destination == d.destination
-        && m.transform_type == d.transform_type
-        && (!check_amount || m.transform_amount == d.transform_amount as f64)
-}
 
 // ---------------------------------------------------------------------------
 // Private helper: convert SF2 generator/modulator destination to DLS
@@ -106,8 +92,7 @@ fn modulator_identical_to_decoded(
 fn from_sf_destination(dest: GeneratorType, amount: i32, is_modulator: bool) -> Option<SFDestResult> {
     match dest {
         gt::INITIAL_ATTENUATION => Some(SFDestResult::Complex {
-            // Amount does not get EMU corrected for modulator attenuation;
-            // generator attenuation is handled in wsmp.
+            // The generator attenuation is handled in wsmp
             destination: dls_destinations::GAIN,
             amount: -amount,
             is_bipolar: false,
@@ -330,22 +315,32 @@ impl ConnectionBlock {
 
     /// Converts an SF2 modulator to DLS and pushes it into `articulation`.
     /// Equivalent to: static fromSFModulator(m, articulation)
-    pub fn from_sf_modulator(m: &Modulator, articulation: &mut DownloadableSoundsArticulation) {
+    pub fn from_sf_modulator(modulator: &Modulator, articulation: &mut DownloadableSoundsArticulation) {
         let failed = |msg: &str| {
             SpessaLog::warn(&format!(
                 "Failed converting SF modulator into DLS:\n {} \n({msg})",
-                m
+                modulator
             ));
         };
+        // DLS has no Modulation Depth Range, the mod wheel vibrato is written with its plain amount
+        let Some(m) = without_modulation_depth(modulator) else {
+            failed("Modulation Depth Range is not supported");
+            return;
+        };
+        let m = &m;
 
         if m.transform_type != 0 {
             failed("Absolute transform type is not supported");
             return;
         }
         // Skip the default DLS effect modulators
-        if modulator_identical_to_decoded(m, &DEFAULT_DLS_CHORUS, true)
-            || modulator_identical_to_decoded(m, &DEFAULT_DLS_REVERB, true)
+        if Modulator::is_identical(m, &DEFAULT_DLS_CHORUS, true)
+            || Modulator::is_identical(m, &DEFAULT_DLS_REVERB, true)
         {
+            return;
+        }
+        // The CC 71 to gain twins are added back when the file is loaded, DLS has no gain to store them
+        if m.destination == gt::GAIN && m.primary_source.is_controller(midi_controllers::FILTER_RESONANCE) {
             return;
         }
 
@@ -495,9 +490,8 @@ impl ConnectionBlock {
                 zone.set_generator(gt::PAN, Some(value as f64), true);
             }
             dls_destinations::GAIN => {
-                // Turn to centibels and apply EMU correction
-                let centibels = (-(value as f64) / 0.4).round() as i32;
-                zone.add_to_generator(gt::INITIAL_ATTENUATION, centibels, true);
+                // Turn to attenuation
+                zone.add_to_generator(gt::INITIAL_ATTENUATION, -value, true);
             }
             dls_destinations::FILTER_CUTOFF => {
                 zone.set_generator(gt::INITIAL_FILTER_FC, Some(value as f64), true);
@@ -658,15 +652,17 @@ impl ConnectionBlock {
             amount = amount.clamp(-960, 960);
         }
 
-        let mod_ = Modulator::new(
+        let mut mod_ = Modulator::new(
             primary_source,
             secondary_source,
             modulator_destination,
             amount as f64,
             0,
-            false,
-            false,
         );
+        // A mod wheel vibrato follows RPN 5 like it does in SF2
+        if special_destination.is_some() {
+            follow_modulation_depth(&mut mod_);
+        }
         zone.add_modulators(&[mod_]);
     }
 
@@ -1271,11 +1267,10 @@ mod tests {
     #[test]
     fn test_to_sf_gen_gain_adds_to_attenuation() {
         let mut zone = BasicZone::new();
-        // DLS gain -200 → attenuation +round(200/0.4) = +500
+        // DLS gain -200 → attenuation +200
         let block = static_block(dd::GAIN, (-200_i32) << 16);
         block.to_sf_generator(&mut zone);
-        let expected = (200_f64 / 0.4).round() as i32;
-        assert_eq!(zone.get_generator(gt::INITIAL_ATTENUATION, -999), expected);
+        assert_eq!(zone.get_generator(gt::INITIAL_ATTENUATION, -999), 200);
     }
 
     #[test]

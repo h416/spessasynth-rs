@@ -6,6 +6,10 @@
 //! `process` bodies live in the sibling files of the same names.
 use crate::synthesizer::enums::{InterpolationType, interpolation_types};
 
+/// The turn point of an oscillator without an alternating loop, above any sample index.
+/// Equivalent to: ALTERNATING_OFF
+pub const ALTERNATING_OFF: f64 = 0x3f_ff_ff_ff as f64;
+
 /// Shared state for all wavetable oscillator variants.
 /// Equivalent to: WavetableOscillator (abstract class fields)
 pub struct WavetableOscillator {
@@ -26,6 +30,11 @@ pub struct WavetableOscillator {
     /// End position of the loop.
     /// Equivalent to: loopEnd
     pub loop_end: f64,
+    /// The last point of an alternating loop (sampleModes 4), where it turns back.
+    /// An alternating loop is played as a forward loop twice as long (minus the two turn points), and every index
+    /// above this one reads its reflection, `2 * turn - index`. For other loops it is above any index.
+    /// Equivalent to: turn
+    pub turn: f64,
     /// Length of the loop.
     /// Equivalent to: loopLength
     pub loop_length: f64,
@@ -55,6 +64,7 @@ impl WavetableOscillator {
             playback_step: 0.0,
             loop_start: 0.0,
             loop_end: 0.0,
+            turn: ALTERNATING_OFF,
             loop_length: 0.0,
             end: 0.0,
             cursor: 0.0,

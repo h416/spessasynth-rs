@@ -15,6 +15,7 @@ impl WavetableOscillator {
         let loop_end = self.loop_end;
         let loop_length = self.loop_length;
         let end = self.end;
+        let turn = self.turn;
         let mut cursor = self.cursor;
 
         if self.is_looping {
@@ -26,8 +27,13 @@ impl WavetableOscillator {
                     cursor -= loop_length;
                 }
 
-                // Grab the nearest neighbor
-                *out = sample_data[cursor as usize] as f64;
+                // Grab the nearest neighbor, reflected on the way back of an alternating loop
+                let index = cursor as usize;
+                *out = sample_data[if index as f64 > turn {
+                    (2.0 * turn - index as f64) as usize
+                } else {
+                    index
+                }] as f64;
                 cursor += step;
             }
         } else {

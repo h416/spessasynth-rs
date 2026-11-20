@@ -1,14 +1,12 @@
 //! The Compressor and Limiter of the Sound Canvas.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/blocks/dynamics.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use super::delay_line::DelayLine;
 use super::first_order_filter::{DC_BLOCKER_HZ, FirstOrderFilter};
 use super::mono_mix::MonoMix;
 use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::glue::saturate;
 use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::js_round;
-
-/// The rate the hardware's per sample laws were measured at.
-const HARDWARE_RATE: f64 = 32_000.0;
 
 /// The detector level above which the gain comes down, the same for both modes.
 const THRESHOLD: f64 = 519.0 / 65_536.0;

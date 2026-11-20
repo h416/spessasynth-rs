@@ -119,7 +119,9 @@ impl CachedVoice {
         let sample_data = sample.get_audio_data();
         let playback_step =
             (sample.sample_rate / sample_rate) * (2.0_f64).powf(sample.pitch_correction / 1200.0); // Cent tuning
-        let looping_mode = generators[gt::SAMPLE_MODES as usize] as SampleLoopingMode;
+        // Unknown modes do not loop
+        let mode = generators[gt::SAMPLE_MODES as usize];
+        let looping_mode = if (0..=4).contains(&mode) { mode as SampleLoopingMode } else { 0 };
 
         // Borrows of voice_params fields end here; move owned fields into CachedVoice.
         let VoiceParameters {
@@ -197,7 +199,9 @@ impl CachedVoice {
         };
 
         let exclusive_class = generators[gt::EXCLUSIVE_CLASS as usize];
-        let looping_mode = generators[gt::SAMPLE_MODES as usize] as SampleLoopingMode;
+        // Unknown modes do not loop
+        let mode = generators[gt::SAMPLE_MODES as usize];
+        let looping_mode = if (0..=4).contains(&mode) { mode as SampleLoopingMode } else { 0 };
         let playback_step = (sample_rate_hz / playback_rate_hz)
             * (2.0_f64).powf(pitch_correction_cents / 1200.0);
 

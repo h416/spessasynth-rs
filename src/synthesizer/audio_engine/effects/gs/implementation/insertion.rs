@@ -257,9 +257,9 @@ impl DefaultGSInsertion {
             sample_count,
         );
 
-        let to_reverb = (self.send_level_to_reverb as f64 / 127.0) * EFX_SENDS_GAIN_CORRECTION;
-        let to_chorus = (self.send_level_to_chorus as f64 / 127.0) * EFX_SENDS_GAIN_CORRECTION;
-        let to_delay = (self.send_level_to_delay as f64 / 127.0) * EFX_SENDS_GAIN_CORRECTION;
+        let to_reverb = (self.send_level_to_reverb as f64 / 128.0) * EFX_SENDS_GAIN_CORRECTION;
+        let to_chorus = (self.send_level_to_chorus as f64 / 128.0) * EFX_SENDS_GAIN_CORRECTION;
+        let to_delay = (self.send_level_to_delay as f64 / 128.0) * EFX_SENDS_GAIN_CORRECTION;
         for i in 0..sample_count {
             let l = processed_left[i] as f64;
             let r = processed_right[i] as f64;

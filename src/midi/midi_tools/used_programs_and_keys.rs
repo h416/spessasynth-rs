@@ -187,7 +187,10 @@ pub fn get_used_programs_and_keys(
                         if let Some(ch) = channels.get_mut(channel) {
                             let analyzed = ch.param.controller_change(cc, value, track_num, te.ev);
                             // RPN#02 Coarse Tune is key-shift according to GM2 section 3.4.3
-                            if let Some(AnalyzedMidiMessage::KeyShift { value, .. }) = analyzed {
+                            // GM ignores NRPN
+                            if (system != MIDISystem::Gm || ch.param.is_registered)
+                                && let Some(AnalyzedMidiMessage::KeyShift { value, .. }) = analyzed
+                            {
                                 // Drum channels ignore key shift.
                                 // Testcase: th07_19_user_gm.mid
                                 ch.key_shift = if ch.is_drum { 0 } else { value };
@@ -202,13 +205,18 @@ pub fn get_used_programs_and_keys(
                     }
 
                     _ if cc == midi_controllers::BANK_SELECT => {
-                        if let Some(ch) = channels.get_mut(channel) {
+                        // GM ignores bank selects
+                        if system != MIDISystem::Gm
+                            && let Some(ch) = channels.get_mut(channel)
+                        {
                             ch.bank_msb = value;
                         }
                     }
 
                     _ if cc == midi_controllers::BANK_SELECT_LSB => {
-                        if let Some(ch) = channels.get_mut(channel) {
+                        if system != MIDISystem::Gm
+                            && let Some(ch) = channels.get_mut(channel)
+                        {
                             ch.bank_lsb = value;
                         }
                     }
@@ -246,7 +254,23 @@ pub fn get_used_programs_and_keys(
 
             s if s == midi_message_types::SYSTEM_EXCLUSIVE => {
                 let syxs = MidiUtils::analyze_sysex(&e.data);
+                // GM only receives the mode messages of GS and XG (0x41 and 0x43), as the synthesizer does
+                let is_gm_ignored = system == MIDISystem::Gm
+                    && matches!(e.data.first(), Some(0x41) | Some(0x43));
                 for syx in syxs {
+                    // The system messages are { type: "Global MIDI Param", parameter: "system" }
+                    if is_gm_ignored
+                        && !matches!(
+                            syx,
+                            AnalyzedMidiMessage::XgReset
+                                | AnalyzedMidiMessage::GmOn
+                                | AnalyzedMidiMessage::GmOff
+                                | AnalyzedMidiMessage::Gm2On
+                                | AnalyzedMidiMessage::GsReset
+                        )
+                    {
+                        continue;
+                    }
                     match syx {
                         AnalyzedMidiMessage::XgReset => {
                             system = MIDISystem::Xg;

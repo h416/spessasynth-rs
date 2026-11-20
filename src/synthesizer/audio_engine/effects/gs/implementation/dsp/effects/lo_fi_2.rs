@@ -1,5 +1,6 @@
 //! Lo-Fi 2 (`01 73`): per chain `DC blocker -> shaper -> filter -> radio`, plus the noise sources.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/effects/lo_fi_2.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use std::sync::LazyLock;
 
@@ -29,7 +30,7 @@ static SHAPES: LazyLock<[[[f64; 3]; 6]; 2]> =
     LazyLock::new(|| SHAPE_BYTES.map(|chain| chain.map(|shape| shape.map(|v| v as f64 / 128.0))));
 
 /// The radio's modulator (the SC-88Pro's, from detune 125): one sine at 32000 / 17 Hz.
-const RADIO_HZ: f64 = 32_000.0 / 17.0;
+const RADIO_HZ: f64 = HARDWARE_RATE / 17.0;
 
 /// The modulator's amplitude.
 const RADIO_DEPTH: f64 = 0.156;
@@ -146,7 +147,7 @@ impl GSLoFi2 {
             pan: MonoPan::new(sample_rate),
             radio_step: RADIO_HZ / sample_rate,
             // RMS 0.49 from a uniform draw of -1 to 1, whose RMS is 1/sqrt(3)
-            radio_spread: 0.49 * (3.0 * (sample_rate / 32_000.0)).sqrt(),
+            radio_spread: 0.49 * (3.0 * (sample_rate / HARDWARE_RATE)).sqrt(),
             radio_noise_value: 0.0,
             stereo: true,
             detune: 0.0,

@@ -1,5 +1,6 @@
 //! The guitar amp simulator: shelf, resonant high pass, cabinet resonance, resonant low pass and cabinet echo.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/blocks/amp_simulator.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use super::biquad::Biquad;
 use super::delay_line::DelayLine;
@@ -7,7 +8,7 @@ use super::first_order_filter::FirstOrderFilter;
 use super::state_variable_filter::StateVariableFilter;
 
 /// The cabinet echo of the 3 Stack (27 samples on the hardware).
-const COMB_SECONDS: f64 = 27.0 / 32_000.0;
+const COMB_SECONDS: f64 = 27.0 / HARDWARE_RATE;
 
 /// Equivalent to: interface AmpModel
 struct AmpModel {

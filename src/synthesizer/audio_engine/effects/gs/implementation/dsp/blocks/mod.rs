@@ -30,6 +30,7 @@ pub mod positioner_3d;
 pub mod reverb;
 pub mod ring_modulator;
 pub mod rotary;
+pub mod send_input;
 pub mod shelf_eq;
 pub mod state_variable_filter;
 pub mod stereo_output;

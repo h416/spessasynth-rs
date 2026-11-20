@@ -1,5 +1,6 @@
 //! Lo-Fi 1's quantizer: truncation, a DC offset, a sample and hold and the hardware's two-sample average.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/blocks/lofi_quantizer.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use super::delay_line::DelayLine;
 use super::first_order_filter::{DC_BLOCKER_HZ, FirstOrderFilter};
@@ -50,7 +51,7 @@ pub struct LoFiQuantizer {
 
 impl LoFiQuantizer {
     pub fn new(sample_rate: f64) -> Self {
-        let step = sample_rate / 32_000.0;
+        let step = sample_rate / HARDWARE_RATE;
         let mut dc_blocker = FirstOrderFilter::new(sample_rate);
         dc_blocker.set_high_pass(DC_BLOCKER_HZ, 1.0);
         let mut smoothing = FirstOrderFilter::new(sample_rate);

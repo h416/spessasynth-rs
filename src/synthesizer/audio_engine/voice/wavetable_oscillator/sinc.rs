@@ -150,13 +150,16 @@ impl WavetableOscillator {
         let loop_length = self.loop_length;
         let end = self.end;
         let is_looping = self.is_looping;
+        let turn = self.turn;
         let half_width = kernel.half_width;
         let mut cursor = self.cursor;
         let mut has_looped = self.has_looped;
 
         // Points at or above this one have to be gathered (wrapped or silent)
         // The lower limit is checked in the loop since it changes after the first loop
-        let upper_limit = if is_looping { loop_end } else { end };
+        // An alternating loop reads straight only up to its turn point
+        let upper_limit = if is_looping { loop_end.min(turn + 1.0) } else { end };
+        let two_turn = 2.0 * turn;
 
         let stretch = if best && step > 1.0 { step.min(MAX_STRETCH) } else { 1.0 };
         if stretch == 1.0 {
@@ -186,10 +189,18 @@ impl WavetableOscillator {
                 let y0 = cursor as i64;
                 let mut first = y0 + 1 - half_width as i64;
                 let lower_limit = if is_looping && has_looped { loop_start } else { 0.0 };
-                let gathered = (first as f64) < lower_limit || (first + taps as i64) as f64 > upper_limit;
-                if gathered {
-                    self.gather(first, taps, has_looped);
-                    first = 0;
+                let mut direction: i64 = 1;
+                let mut gathered = false;
+                if (first as f64) < lower_limit || (first + taps as i64) as f64 > upper_limit {
+                    if first as f64 >= turn && (first + taps as i64) as f64 <= loop_end {
+                        // The way back of an alternating loop: every point is a reflection, read backwards
+                        first = two_turn as i64 - first;
+                        direction = -1;
+                    } else {
+                        self.gather(first, taps, has_looped);
+                        gathered = true;
+                        first = 0;
+                    }
                 }
                 let source: &[f32] = if gathered {
                     &self.scratch
@@ -204,12 +215,11 @@ impl WavetableOscillator {
                 let mut row = q * taps;
                 let fraction = phase - q as f64;
                 let row_end = row + taps;
-                let mut first = first as usize;
                 let mut out = 0.0f64;
                 while row < row_end {
-                    out += source[first] as f64
+                    out += source[first as usize] as f64
                         * (phases[row] as f64 + phase_deltas[row] as f64 * fraction);
-                    first += 1;
+                    first += direction;
                     row += 1;
                 }
                 output_buffer[i] = out;
@@ -242,10 +252,17 @@ impl WavetableOscillator {
                 let taps = ((cursor + reach).floor() as i64 - first + 1) as usize;
                 let mut position = (first as f64 - cursor) * table_step + center;
                 let lower_limit = if is_looping && has_looped { loop_start } else { 0.0 };
-                let gathered = (first as f64) < lower_limit || (first + taps as i64) as f64 > upper_limit;
-                if gathered {
-                    self.gather(first, taps, has_looped);
-                    first = 0;
+                let mut direction: i64 = 1;
+                let mut gathered = false;
+                if (first as f64) < lower_limit || (first + taps as i64) as f64 > upper_limit {
+                    if first as f64 >= turn && (first + taps as i64) as f64 <= loop_end {
+                        first = two_turn as i64 - first;
+                        direction = -1;
+                    } else {
+                        self.gather(first, taps, has_looped);
+                        gathered = true;
+                        first = 0;
+                    }
                 }
                 let source: &[f32] = if gathered {
                     &self.scratch
@@ -254,15 +271,13 @@ impl WavetableOscillator {
                 };
 
                 let mut out = 0.0f64;
-                let mut first = first as usize;
-                let last = first + taps;
-                while first < last {
+                for _ in 0..taps {
                     // TS: position | 0
                     let index = position as usize;
-                    out += source[first] as f64
+                    out += source[first as usize] as f64
                         * (table[index] as f64 + table_deltas[index] as f64 * (position - index as f64));
                     position += table_step;
-                    first += 1;
+                    first += direction;
                 }
                 output_buffer[i] = out * gain;
 
@@ -286,6 +301,7 @@ impl WavetableOscillator {
         let loop_end = self.loop_end;
         let loop_length = self.loop_length;
         let end = self.end;
+        let turn = self.turn;
         if self.is_looping {
             // Bring the first point into the loop, the rest just wrap at the loop end
             // Modulo instead of a single wrap: the loop may be shorter than the kernel
@@ -300,7 +316,12 @@ impl WavetableOscillator {
             }
             for s in scratch.iter_mut().take(count) {
                 // Before looping, there is no data before the sample start
-                *s = if index < 0.0 { 0.0 } else { sample_data[index as usize] };
+                // The way back of an alternating loop reads the reflected point
+                *s = if index < 0.0 {
+                    0.0
+                } else {
+                    sample_data[(if index > turn { 2.0 * turn - index } else { index }) as usize]
+                };
                 index += 1.0;
                 if index >= loop_end {
                     index = loop_start;

@@ -1,5 +1,6 @@
 //! Lo-Fi 2's noise sources (white or pink, disc, hum) and the Cut/LPF column filters.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/blocks/noise_generator.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use super::first_order_filter::FirstOrderFilter;
 use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::fround;
@@ -23,7 +24,7 @@ pub fn set_column_low_pass(filter: &mut FirstOrderFilter, value: u8, off: bool) 
     }
     let pole = CUTOFF_B[step] / 128.0;
     filter.set_low_pass(
-        (32_000.0 / std::f64::consts::PI) * ((1.0 - pole) / (1.0 + pole)).atan(),
+        (HARDWARE_RATE / std::f64::consts::PI) * ((1.0 - pole) / (1.0 + pole)).atan(),
         (2.0 * CUTOFF_A[step]) / 128.0 / (1.0 - pole),
     );
 }
@@ -34,7 +35,7 @@ pub fn set_column_high_pass(filter: &mut FirstOrderFilter, value: u8) {
     let step = (value >> 3) as usize;
     let pole = CUTOFF_B[step] / 128.0;
     filter.set_high_pass(
-        (32_000.0 / std::f64::consts::PI) * ((1.0 - pole) / (1.0 + pole)).atan(),
+        (HARDWARE_RATE / std::f64::consts::PI) * ((1.0 - pole) / (1.0 + pole)).atan(),
         (2.0 * (128.0 - CUTOFF_A[step])) / 128.0 / (1.0 + pole),
     );
 }
@@ -121,7 +122,7 @@ pub struct NoiseGenerator {
 
 impl NoiseGenerator {
     pub fn new(sample_rate: f64) -> Self {
-        let scale = 32_000.0 / sample_rate;
+        let scale = HARDWARE_RATE / sample_rate;
         Self {
             output: 0.0,
             white_filter: FirstOrderFilter::new(sample_rate),
@@ -145,7 +146,7 @@ impl NoiseGenerator {
             white2: 0.0,
             white_age: 0,
             white_gain: (1.0 / scale).sqrt() / 32.0,
-            exact_white: sample_rate == 32_000.0,
+            exact_white: sample_rate == HARDWARE_RATE,
             random32: 1,
         }
     }

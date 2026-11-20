@@ -6,10 +6,12 @@ pub mod basic_sample;
 #[allow(clippy::module_inception)]
 pub mod basic_soundbank;
 pub mod basic_zone;
+pub mod custom_curve;
 pub mod generator;
 pub mod generator_types;
 pub mod midi_patch;
 pub mod modulator;
-pub mod modulator_curves;
+pub mod modulator_curve;
 pub mod modulator_source;
 pub mod preset_resolver;
+pub mod resonance_compensation;

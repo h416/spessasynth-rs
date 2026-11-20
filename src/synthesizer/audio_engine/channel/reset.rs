@@ -38,6 +38,9 @@ const fn build_default_midi_controllers() -> [i16; CONTROLLER_TABLE_SIZE] {
     arr[midi_controllers::GENERAL_PURPOSE_CONTROLLER6 as usize] = 64 << 7;
     arr[midi_controllers::GENERAL_PURPOSE_CONTROLLER8 as usize] = 64 << 7;
 
+    // GM2, GS and XG all start with a reverb send of 40
+    arr[midi_controllers::REVERB_DEPTH as usize] = 40 << 7;
+
     arr[midi_controllers::REGISTERED_PARAMETER_LSB as usize] = (DEFAULT_RPN as i16) << 7;
     arr[midi_controllers::REGISTERED_PARAMETER_MSB as usize] = (DEFAULT_RPN as i16) << 7;
     arr[midi_controllers::NON_REGISTERED_PARAMETER_LSB as usize] = (DEFAULT_NRPN as i16) << 7;
@@ -174,7 +177,7 @@ impl MidiChannel {
         self.set_midi_parameter(ChannelMidiParameterValue::VelocitySenseOffset(64));
         self.set_midi_parameter(ChannelMidiParameterValue::VelocitySenseDepth(64));
         // TS: resetMIDIParameter("pitchWheelRange")
-        self.set_midi_parameter(ChannelMidiParameterValue::PitchWheelRange(2.0));
+        self.set_midi_parameter_with_voices(ChannelMidiParameterValue::PitchWheelRange(2.0), voices);
         // TS: resetMIDIParameter("drumMap") sets the correct default map
         let default_map = if self.channel_system(current_system) == MIDISystem::Xg {
             DEFAULT_XG_DRUM_MAP
@@ -192,14 +195,15 @@ impl MidiChannel {
         let mut sub = self.pitch_wheel(voices, 8192, -1, send_event && enable_event_system);
         events.append(&mut sub);
 
-        // Reset sysex modulators
-        self.sys_ex_modulators.reset_modulators();
+        // Reset the controller matrix
+        self.matrix.reset();
 
         self.sf2_nrpn_generator_lsb = 0;
         // TS: resetMIDIParameter("modulationDepth")
-        self.set_midi_parameter(ChannelMidiParameterValue::ModulationDepth(
-            DEFAULT_CHANNEL_MIDI_PARAMETERS.modulation_depth,
-        ));
+        self.set_midi_parameter_with_voices(
+            ChannelMidiParameterValue::ModulationDepth(DEFAULT_CHANNEL_MIDI_PARAMETERS.modulation_depth),
+            voices,
+        );
         self.reset_parameters();
 
         // Reset note-tracking state (TS: this.playingNotes.fill(false)).
@@ -268,7 +272,9 @@ impl MidiChannel {
 
         for &cc in RP_15_RESET_CC_NUMS.iter() {
             let reset_value = DEFAULT_MIDI_CONTROLLERS[cc as usize];
-            if reset_value != self.midi_controllers[cc as usize] {
+            if reset_value != self.midi_controllers[cc as usize] && !self.locked_controllers[cc as usize] {
+                // Clear the LSB too, controllerChange only sets the upper 7 bits
+                self.midi_controllers[cc as usize] &= 0x3f80;
                 let mut sub = self.controller_change(
                     cc,
                     (reset_value >> 7) as u8,

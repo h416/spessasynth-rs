@@ -6,6 +6,10 @@
 //! - `setSampleFormat()` → SF3/Vorbis compression, out of scope
 //! - `writeSF2()`, `writeDLS()`, `getSampleSoundBankFile()` → write-only, out of MIDI→WAV scope
 //! - `addCompletePresets()` → replaced by `clone_preset_from` / `merge_sound_banks`
+//! - `customCurves`, `addCustomCurves()`, `deleteCustomCurve()` and the curve bookkeeping of `flush()` and
+//!   `destroy()` → the list of a bank's custom curves is for editing and writing. A Rust modulator source holds
+//!   its curve, so the list is not needed to render
+//! - `getSF2Losses()` → writer only
 //!
 //! # TypeScript vs Rust design differences
 //!
@@ -41,7 +45,9 @@ use crate::soundbank::basic_soundbank::basic_preset::BasicPreset;
 use crate::soundbank::basic_soundbank::basic_preset_zone::BasicPresetZone;
 use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
 use crate::soundbank::basic_soundbank::midi_patch::{MidiPatch, compare, select_patch};
-use crate::soundbank::basic_soundbank::modulator::{Modulator, SPESSASYNTH_DEFAULT_MODULATORS};
+use crate::soundbank::basic_soundbank::modulator::{
+    Modulator, copy_default_modulators, copy_with_own_curves,
+};
 use crate::soundbank::basic_soundbank::preset_resolver::PresetResolver;
 use crate::soundbank::types::{PresetsWithKeyCombinations, SF2VersionTag, SoundBankInfoData};
 use crate::soundbank::types::MIDISystem;
@@ -75,10 +81,6 @@ pub struct BasicSoundBank {
     /// Equivalent to: public defaultModulators: Modulator[]
     pub default_modulators: Vec<Modulator>,
 
-    /// Whether the sound bank has custom default modulators (DMOD).
-    /// Equivalent to: public customDefaultModulators = false
-    pub custom_default_modulators: bool,
-
     /// Whether the sound bank contains valid XG drum presets.
     /// Equivalent to: private _isXGBank = false
     _is_xg_bank: bool,
@@ -104,11 +106,8 @@ impl Default for BasicSoundBank {
             presets: Vec::new(),
             samples: Vec::new(),
             instruments: Vec::new(),
-            default_modulators: SPESSASYNTH_DEFAULT_MODULATORS
-                .iter()
-                .map(Modulator::copy_from)
-                .collect(),
-            custom_default_modulators: false,
+            // The default modulators get their own copies of the curves, like any other curves of the bank
+            default_modulators: copy_default_modulators(),
             _is_xg_bank: false,
         }
     }
@@ -145,7 +144,6 @@ impl BasicSoundBank {
             instruments: bank.instruments.clone(),
             samples: bank.samples.clone(),
             default_modulators: bank.default_modulators.clone(),
-            custom_default_modulators: bank.custom_default_modulators,
             _is_xg_bank: bank._is_xg_bank,
         }
     }
@@ -161,6 +159,8 @@ impl BasicSoundBank {
 
         let mut result = BasicSoundBank::new();
         result.sound_bank_info = info;
+        // The defaults come from the first bank
+        result.default_modulators = copy_with_own_curves(&main.default_modulators);
 
         // Clone all presets from the main bank
         for pi in 0..main.presets.len() {
@@ -187,6 +187,12 @@ impl BasicSoundBank {
         }
 
         result
+    }
+
+    /// Replaces the default modulators with the spessasynth ones.
+    /// Equivalent to: resetDefaultModulators()
+    pub fn reset_default_modulators(&mut self) {
+        self.default_modulators = copy_default_modulators();
     }
 
     // -----------------------------------------------------------------------
@@ -667,7 +673,7 @@ impl BasicSoundBank {
             .iter()
             .map(|p| p.is_drum(self._is_xg_bank))
             .collect();
-        Some(select_patch(&self.presets, &is_drum, patch, system))
+        Some(select_patch(&self.presets, &is_drum, patch, system, false))
     }
 
     // -----------------------------------------------------------------------
@@ -949,12 +955,6 @@ mod tests {
     fn test_new_default_modulators_nonempty() {
         let bank = BasicSoundBank::new();
         assert!(!bank.default_modulators.is_empty());
-    }
-
-    #[test]
-    fn test_new_custom_default_modulators_false() {
-        let bank = BasicSoundBank::new();
-        assert!(!bank.custom_default_modulators);
     }
 
     #[test]

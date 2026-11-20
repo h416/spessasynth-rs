@@ -61,7 +61,8 @@ impl SoundFontPreset {
         let w_bank = read_little_endian_indexed(&mut chunk.data, 2) as u16;
         let bank_msb = (w_bank & 0x7f) as u8;
         let is_gm_gs_drum = (w_bank & 0x80) > 0;
-        let bank_lsb = (w_bank >> 8) as u8;
+        // Bit 15 is reserved
+        let bank_lsb = ((w_bank >> 8) & 0x7f) as u8;
 
         let zone_start_index = read_little_endian_indexed(&mut chunk.data, 2) as usize;
         let library = read_little_endian_indexed(&mut chunk.data, 4);

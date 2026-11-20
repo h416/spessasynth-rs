@@ -78,6 +78,10 @@ impl ConnectionSource {
                 _ => return None,
             }
         };
+        // Unable to convert into DLS
+        if source.curve_type == modulator_curve_types::CUSTOM {
+            return None;
+        }
 
         Some(ConnectionSource::new(
             source_enum,

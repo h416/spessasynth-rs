@@ -9,6 +9,9 @@ use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::generator_types::generator_types;
 use crate::soundbank::enums::modulator_sources;
 use crate::synthesizer::audio_engine::channel::parameters::midi::ChannelMidiParameterValue;
+use crate::synthesizer::audio_engine::channel::controller_matrix::MatrixSystem;
+use crate::synthesizer::audio_engine::channel::midi_channel::DrumLocks;
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::js_round;
 use crate::synthesizer::audio_engine::system_exclusive::system_exclusive::{
     sys_ex_logging, sys_ex_not_recognized,
 };
@@ -39,6 +42,17 @@ impl SynthesizerCore {
             0x42 => {
                 // This is a GS sysex
                 let message_value = syx[7];
+
+                // GM only receives the mode messages (GS reset and GS exit)
+                if self.midi_parameters.system == MIDISystem::Gm {
+                    let data = message_value.min(127);
+                    let system_mode_set =
+                        syx[4] == 0 && syx[5] == 0 && syx[6] == 0x7f && (data == 0x00 || data == 0x01);
+                    let gs_mode_set = syx[4] == 0x40 && syx[5] == 0x00 && syx[6] == 0x7f;
+                    if !system_mode_set && !gs_mode_set {
+                        return;
+                    }
+                }
 
                 // syx[5] and [6] is the system parameter, syx[7] is the value.
                 // Either patch common or SC-88 mode set.
@@ -124,27 +138,20 @@ impl SynthesizerCore {
 
                             0x15 => {
                                 // This is the Use for Rhythm Part sysex (multiple drums)
-                                let prev_map = self.midi_channels[channel].midi_parameters.drum_map;
-                                self.midi_channels[channel]
-                                    .set_midi_parameter(ChannelMidiParameterValue::DrumMap(message_value));
-                                let new_map = self.midi_channels[channel].midi_parameters.drum_map;
-                                // Non-melodic means a drum channel
-                                let is_drums = message_value > MELODIC_MAP;
-                                // Testcase: gs_drum_change_test
-                                // GS resets to the default kit not only when toggling drums,
-                                // But on any map change too.
-                                let ch = &mut self.midi_channels[channel];
-                                if !ch.system_parameters.preset_lock
-                                    && (is_drums != ch.patch.is_gm_gs_drum || new_map != prev_map)
-                                {
-                                    ch.patch.bank_msb = 0;
-                                    ch.patch.bank_lsb = 0;
-                                    ch.patch.is_gm_gs_drum = is_drums;
-                                    self.program_change_channel(channel, 0);
+                                let evs = self.midi_channels[channel].set_part_mode(
+                                    message_value,
+                                    &self.sound_bank_manager,
+                                    current_system,
+                                    DrumLocks::of(&self.system_parameters),
+                                    enable_event_system,
+                                );
+                                for ev in evs {
+                                    self.call_event(ev);
                                 }
                                 spessa_synth_info(&format!(
                                     "GS Drums on {}: {}",
-                                    channel, is_drums
+                                    channel,
+                                    message_value > MELODIC_MAP
                                 ));
                                 return;
                             }
@@ -409,96 +416,69 @@ impl SynthesizerCore {
                         let channel =
                             channel_table[(syx[5] & 0x0f) as usize] as usize + channel_offset;
 
-                        let data = message_value;
-                        let a3 = syx[6];
-
-                        // Patch parameter controller (SC-88 manual page 198).
-                        // Upper nibble of a3 selects the modulation source; the lower
-                        // nibble selects the parameter (dispatched inside setupReceiver).
-                        match a3 & 0xf0 {
-                            0x00 => {
-                                // Modulation wheel
-                                if (a3 & 0x0f) == 0x04 {
-                                    // LFO1 pitch depth special case: a mod wheel here is a
-                                    // strange way of setting the modulation depth.
-                                    // Testcase: J-Cycle.mid (affects gm.dls which uses LFO1).
-                                    let cents = (data as f64 / 127.0) * 600.0;
-                                    self.midi_channels[channel].set_modulation_depth(cents);
-                                } else {
-                                    self.midi_channels[channel].sys_ex_modulators.setup_receiver_gs(
-                                        a3,
-                                        data,
-                                        midi_controllers::MODULATION_WHEEL as usize,
-                                        true,
-                                        "mod wheel",
-                                        false,
-                                    );
-                                }
-                            }
-                            0x10 => {
-                                // Pitch wheel
-                                if (a3 & 0x0f) == 0x00 {
-                                    // Pitch control special case: a pitch wheel here is a
-                                    // strange way of setting the pitch wheel range.
-                                    // Testcase: th07_03.mid.
-                                    let centered_value = data as i32 - 64;
-                                    self.midi_channels[channel].set_midi_parameter(
-                                        ChannelMidiParameterValue::PitchWheelRange(
-                                            centered_value as f64,
-                                        ),
-                                    );
-                                } else {
-                                    self.midi_channels[channel].sys_ex_modulators.setup_receiver_gs(
-                                        a3,
-                                        data,
-                                        modulator_sources::PITCH_WHEEL as usize,
-                                        false,
-                                        "pitch wheel",
-                                        true,
-                                    );
-                                }
-                            }
-                            0x20 => {
-                                // Channel pressure
-                                self.midi_channels[channel].sys_ex_modulators.setup_receiver_gs(
-                                    a3,
-                                    data,
-                                    modulator_sources::CHANNEL_PRESSURE as usize,
-                                    false,
-                                    "channel pressure",
-                                    false,
-                                );
-                            }
-                            0x30 => {
-                                // Poly pressure
-                                self.midi_channels[channel].sys_ex_modulators.setup_receiver_gs(
-                                    a3,
-                                    data,
-                                    modulator_sources::POLY_PRESSURE as usize,
-                                    false,
-                                    "poly pressure",
-                                    false,
-                                );
-                            }
-                            0x40 => {
-                                // CC1
-                                let cc1 = self.midi_channels[channel].midi_parameters.cc1 as usize;
-                                self.midi_channels[channel].sys_ex_modulators.setup_receiver_gs(
-                                    a3, data, cc1, true, "CC1", false,
-                                );
-                            }
-                            0x50 => {
-                                // CC2
-                                let cc2 = self.midi_channels[channel].midi_parameters.cc2 as usize;
-                                self.midi_channels[channel].sys_ex_modulators.setup_receiver_gs(
-                                    a3, data, cc2, true, "CC2", false,
-                                );
-                            }
-                            _ => {
-                                // This is some other GS sysex...
-                                sys_ex_not_recognized(syx, "Roland GS");
-                            }
+                        // For example, 0x1A means A = 10, which corresponds to channel 11 (counting from 1)
+                        if channel >= self.midi_channels.len() {
+                            SpessaLog::gs_fail(
+                                &format!("Patch Parameter Controller for {}", channel),
+                                syx,
+                                "Invalid part number.",
+                            );
+                            return;
                         }
+
+                        let data = message_value.min(127);
+                        let a3 = syx[6];
+                        let source = (a3 >> 4) as usize;
+                        let destination = (a3 & 0x0f) as usize;
+                        if source > 5 || destination > 0x0a {
+                            // This is some other GS sysex...
+                            SpessaLog::gs_fail(
+                                &format!("Patch Parameter Controller for {}", channel),
+                                &[a3],
+                                "",
+                            );
+                            return;
+                        }
+                        if source == 0 && destination == 0x04 {
+                            // LFO1 Pitch depth
+                            // Special case:
+                            // If the source is a mod wheel, it's a strange way of setting the modulation depth (RPN 5)
+                            // Testcase: J-Cycle.mid (it affects gm.dls which uses LFO1 for modulation)
+                            // The data is in 5 cent steps, 6.4 is 128 / 20
+                            let cents = self.midi_channels[channel]
+                                .set_modulation_depth_range(js_round(6.4 * data as f64), &mut self.voices);
+                            spessa_synth_info(&format!(
+                                "GS Modulation wheel depth for {}: {} cents",
+                                channel, cents
+                            ));
+                            return;
+                        }
+                        if source == 1 && destination == 0x00 {
+                            // See https://github.com/spessasus/SpessaSynth/issues/154
+                            // BEND Pitch control
+                            // Special case:
+                            // If the source is a pitch wheel, it's a strange way of setting the pitch wheel range
+                            // Testcase: th07_03.mid
+                            // A control below the center gives no bend at all
+                            // SC-55 does it but SC-88Pro doesn't
+                            // And let's be real: Why would one want reverse pitch bend?
+                            let range = (data as i32 - 64).clamp(0, 24) as f64;
+                            self.midi_channels[channel].set_midi_parameter_with_voices(
+                                ChannelMidiParameterValue::PitchWheelRange(range),
+                                &mut self.voices,
+                            );
+                            spessa_synth_info(&format!(
+                                "GS Pitch Wheel Range for {}: {} semitones",
+                                channel, range
+                            ));
+                            return;
+                        }
+                        self.midi_channels[channel].set_matrix_cell(MatrixSystem::Gs, source, destination, data);
+                        spessa_synth_info(&format!(
+                            "GS Controller matrix for {}, source {} destination {}: {}",
+                            channel, source, destination, data
+                        ));
+                        return;
                     } else if syx[5] == 0x00 {
                         // This is a global system parameter
                         match syx[6] {
@@ -546,7 +526,7 @@ impl SynthesizerCore {
                             0x06 => {
                                 // Roland master pan.
                                 // Ranges from 1 to 127, NOT 0 to 127, hence the /63 divisor.
-                                let pan = (message_value as f64 - 64.0) / 63.0;
+                                let pan = ((message_value as f64 - 64.0) / 63.0).max(-1.0);
                                 spessa_synth_info(&format!(
                                     "Roland GS Master Pan set to: {} with: {:02X?}",
                                     pan, syx

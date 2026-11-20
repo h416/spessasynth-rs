@@ -1,5 +1,6 @@
 //! The near and far ear filters of the 3D types, between two direction sets.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/blocks/hrtf_pair.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use super::delay_line::DelayLine;
 
@@ -39,7 +40,7 @@ pub struct HrtfPair {
 impl HrtfPair {
     /// `set` is the starting set.
     pub fn new(sample_rate: f64, set: HrtfSet) -> Self {
-        let step = sample_rate / 32_000.0;
+        let step = sample_rate / HARDWARE_RATE;
         Self {
             near: 0.0,
             far: 0.0,

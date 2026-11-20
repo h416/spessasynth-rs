@@ -1,5 +1,6 @@
 //! The delay line of every chorus and flanger: one line read at several places that an LFO moves.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/blocks/modulated_delay.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use super::crossfade::Crossfade;
 use super::delay_line::DelayLine;
@@ -52,7 +53,7 @@ pub struct ModulatedDelay {
 impl ModulatedDelay {
     /// `reads` is the number of reads, `max_delay` the longest delay of any read (pre delay plus swing), in ms.
     pub fn new(sample_rate: f64, memory: &mut DelayMemory, reads: usize, max_delay: f64) -> Self {
-        let step = sample_rate / 32_000.0;
+        let step = sample_rate / HARDWARE_RATE;
         let step_smoothing = 1.0 - STEP_POLE.powf(1.0 / step);
         // Two more 32 kHz samples for the feedback's points
         let line = memory.line(((max_delay * sample_rate) / 1000.0 + 2.0 * step).ceil());

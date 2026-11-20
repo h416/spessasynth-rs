@@ -2,10 +2,10 @@
 //! Ported from: src/synthesizer/audio_engine/voice/voice.ts
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 use crate::soundbank::basic_soundbank::generator_types::GENERATORS_AMOUNT;
-use crate::soundbank::basic_soundbank::modulator::DecodedModulator;
+use crate::soundbank::basic_soundbank::modulator::Modulator;
 use crate::soundbank::basic_soundbank::modulator_source::{SF2Channel, VoiceModInputs};
 use crate::synthesizer::audio_engine::voice::compute_modulator::VoiceContext;
-use crate::synthesizer::audio_engine::voice::lowpass_filter::LowpassFilter;
+use crate::synthesizer::audio_engine::voice::voice_filter::VoiceFilter;
 use crate::synthesizer::audio_engine::voice::modulation_envelope::{
     MOD_ENV_2_GENERATORS, MOD_ENV_GENERATORS, ModulationEnvelope,
 };
@@ -25,11 +25,6 @@ use crate::synthesizer::types::SampleLoopingMode;
 /// Timecents value for an exclusive class release (nearly instant cutoff).
 /// Equivalent to: const EXCLUSIVE_CUTOFF_TIME = -2320
 const EXCLUSIVE_CUTOFF_TIME: i32 = -2320;
-
-/// Multiplier applied to effect modulator (reverb/chorus send) amounts.
-/// 1000 / 200 = 5.0
-/// Equivalent to: const EFFECT_MODULATOR_TRANSFORM_MULTIPLIER = 1000 / 200
-const EFFECT_MODULATOR_TRANSFORM_MULTIPLIER: f32 = 1000.0 / 200.0;
 
 // ---------------------------------------------------------------------------
 // Voice
@@ -51,8 +46,8 @@ pub struct Voice {
     pub oscillator_type: u8,
 
     /// Lowpass filter applied to the voice output.
-    /// Equivalent to: filter: LowpassFilter
-    pub filter: LowpassFilter,
+    /// Equivalent to: filter: VoiceFilter
+    pub filter: VoiceFilter,
 
     /// Unmodulated (base) generator values copied from the preset/instrument zone.
     /// Equivalent to: generators: Int16Array(GENERATORS_AMOUNT)
@@ -63,9 +58,9 @@ pub struct Voice {
     /// Equivalent to: modulatedGenerators: Int16Array(GENERATORS_AMOUNT)
     pub modulated_generators: [i16; GENERATORS_AMOUNT],
 
-    /// Decoded modulators for this voice.
+    /// Modulators for this voice.
     /// Equivalent to: modulators: Array<Modulator>
-    pub modulators: Vec<DecodedModulator>,
+    pub modulators: Vec<Modulator>,
 
     /// Cached output values for each modulator (same order as `modulators`).
     /// Stored as i16 to match TypeScript's `Int16Array(64)`.
@@ -76,7 +71,7 @@ pub struct Voice {
     /// Equivalent to: modEnv: ModulationEnvelope
     pub mod_env: ModulationEnvelope,
 
-    /// The second modulation envelope (SFE).
+    /// The second modulation envelope (SFe).
     /// Equivalent to: modEnv2
     pub mod_env2: ModulationEnvelope,
 
@@ -84,22 +79,13 @@ pub struct Voice {
     /// Equivalent to: volEnv: VolumeEnvelope
     pub vol_env: VolumeEnvelope,
 
-    /// Current resonance offset from the default resonant modulator.
-    /// Equivalent to: resonanceOffset
-    pub resonance_offset: f64,
-
     /// Voice priority used for voice stealing.
     /// Equivalent to: priority
-    pub priority: i32,
+    pub priority: f64,
 
     /// Whether the voice slot is currently in use.
     /// Equivalent to: isActive
     pub is_active: bool,
-
-    /// Whether the voice has rendered at least one buffer.
-    /// Used by exclusive class to avoid killing the note just started.
-    /// Equivalent to: hasRendered
-    pub has_rendered: bool,
 
     /// Whether the voice is in the release phase.
     /// Equivalent to: isInRelease
@@ -249,7 +235,7 @@ impl Voice {
                 WavetableOscillator::new(interpolation_types::SINC128),
             ],
             oscillator_type: DEFAULT_GLOBAL_SYSTEM_PARAMETERS.interpolation_type,
-            filter: LowpassFilter::new(sample_rate),
+            filter: VoiceFilter::new(sample_rate),
             generators: [0; GENERATORS_AMOUNT],
             modulated_generators: [0; GENERATORS_AMOUNT],
             modulators: Vec::new(),
@@ -257,10 +243,8 @@ impl Voice {
             mod_env: ModulationEnvelope::new(MOD_ENV_GENERATORS),
             mod_env2: ModulationEnvelope::new(MOD_ENV_2_GENERATORS),
             vol_env: VolumeEnvelope::new(sample_rate, buffer_size),
-            resonance_offset: 0.0,
-            priority: 0,
+            priority: 0.0,
             is_active: false,
-            has_rendered: false,
             is_in_release: false,
             is_held: false,
             channel: 0,
@@ -341,7 +325,6 @@ impl Voice {
     pub fn setup(&mut self, current_time: f64, channel: u8, midi_note: u8, note_id: i32) {
         self.is_active = true;
         self.is_in_release = false;
-        self.has_rendered = false;
         self.is_held = false;
         self.release_start_time = f64::INFINITY;
         self.pressure = 0;
@@ -368,9 +351,9 @@ impl Voice {
 // ---------------------------------------------------------------------------
 
 impl VoiceContext for Voice {
-    /// Returns the voice's decoded modulator list.
+    /// Returns the voice's modulator list.
     /// Equivalent to: voice.modulators
-    fn decoded_modulators(&self) -> &[DecodedModulator] {
+    fn modulators(&self) -> &[Modulator] {
         &self.modulators
     }
 
@@ -393,110 +376,42 @@ impl VoiceContext for Voice {
     /// Computes the modulator at `index`, caches it in `modulator_values[index]`,
     /// and returns the result.
     ///
-    /// # Design note
-    /// TypeScript calls `modulator.primarySource.getValue(channel, pitchWheel, voice)`.
-    /// In Rust, we extract modulator fields first (to release the immutable borrow of
-    /// `self.modulators`), then mutate `self.resonance_offset` and `self.modulator_values`.
-    ///
     /// Equivalent to: computeModulator(voice, pitchWheel, modulatorIndex)
-    fn compute_single_modulator(
-        &mut self,
-        channel: &SF2Channel,
-        pitch: i16,
-        modulation_depth: f64,
-        index: usize,
-    ) -> f64 {
-        // Extract all data from the modulator before taking a mutable borrow.
-        let (
-            transform_amount,
-            transform_type,
-            is_effect_mod,
-            is_resonant_mod,
-            is_mod_wheel_mod,
-            primary_src,
-            secondary_src,
-        ) = {
+    fn compute_single_modulator(&mut self, channel: &SF2Channel, pitch: i16, index: usize) -> f64 {
+        let computed_value = {
             let modulator = &self.modulators[index];
-            let primary = modulator.primary_source();
-            let secondary = modulator.secondary_source();
-            // TS `isModWheelModulator`: a CC-1 (modulation wheel) source driving
-            // the vibrato/mod LFO pitch depth. Its value is scaled by the channel
-            // modulation depth in `computeModulator`. Precomputed on the modulator
-            // (see `DecodedModulator::is_mod_wheel_modulator`).
-            let is_mod_wheel_mod = modulator.is_mod_wheel_modulator;
-            (
-                modulator.transform_amount,
-                modulator.transform_type,
-                modulator.is_effect_modulator,
-                modulator.is_default_resonant_modulator,
-                is_mod_wheel_mod,
-                primary, // returns a new ModulatorSource
-                secondary, // returns a new ModulatorSource
-            )
-        };
+            if modulator.transform_amount == 0.0 {
+                0.0
+            } else {
+                let voice_inputs = VoiceModInputs {
+                    midi_note: self.midi_note,
+                    target_key: self.target_key,
+                    velocity: self.velocity,
+                    pressure: self.pressure,
+                };
+                // Source values are f32 (Float32Array tables in TS)
+                let source_value =
+                    modulator.primary_source.get_value(channel, pitch as i32, &voice_inputs);
+                let second_src_value =
+                    modulator.secondary_source.get_value(channel, pitch as i32, &voice_inputs);
 
-        // transformAmount === 0 → short-circuit to zero.
-        // Equivalent to: if (modulator.transformAmount === 0) { ... return 0; }
-        if transform_amount == 0.0 {
-            if let Some(v) = self.modulator_values.get_mut(index) {
-                *v = 0;
+                let transform_amount = modulator.transform_amount;
+
+                // Compute the modulator
+                let mut computed_value =
+                    source_value as f64 * second_src_value as f64 * transform_amount;
+
+                if modulator.transform_type == 2 {
+                    // Abs value
+                    computed_value = computed_value.abs();
+                }
+                computed_value
             }
-            return 0.0;
-        }
-
-        // Build minimal voice view for source value lookup.
-        let voice_inputs = VoiceModInputs {
-            midi_note: self.midi_note,
-            target_key: self.target_key,
-            velocity: self.velocity,
-            pressure: self.pressure,
         };
-
-        // source values are f32 from the precomputed lookup table (Float32Array in TS)
-        let source_value = primary_src.get_value(channel, pitch as i32, &voice_inputs);
-        let second_src_value =
-            secondary_src.get_value(channel, pitch as i32, &voice_inputs);
-
-        // Use f64 for intermediate computation to match TypeScript's `number` (f64) arithmetic.
-        // TS: computedValue = sourceValue * secondSrcValue * transformAmount (all f64)
-        let mut amount = transform_amount;
-        if is_effect_mod && amount <= 1000.0 {
-            amount *= EFFECT_MODULATOR_TRANSFORM_MULTIPLIER as f64;
-            amount = amount.min(1000.0);
-        }
-
-        let mut computed_value =
-            source_value as f64 * second_src_value as f64 * amount;
-
-        // Absolute-value transform type.
-        // Equivalent to: if (modulator.transformType === 2) computedValue = Math.abs(computedValue);
-        if transform_type == 2 {
-            computed_value = computed_value.abs();
-        }
-
-        // Resonant modulator: store half the value to negate filter gain change.
-        // Equivalent to: if (isDefaultResonantModulator) this.resonanceOffset = Math.max(0, computedValue / 2);
-        if is_resonant_mod {
-            self.resonance_offset = (computed_value / 2.0).max(0.0);
-        }
-
-        // Modulation depth is in cents; convert to a multiplier by dividing by 50.
-        // The MIDI spec assumes the default modulation depth is 50 cents, but it may vary
-        // for different sound banks. For example, a modulation depth of 100 cents yields a
-        // multiplier of 2, which, for a preset with a depth of 50, creates a total
-        // modulation depth of 100 cents.
-        // Equivalent to: if (modulator.isModWheelModulator) computedValue *= this._midiParameters.modulationDepth / 50;
-        if is_mod_wheel_mod {
-            computed_value *= modulation_depth / 50.0;
-        }
-
-        // Store as i16 to match TypeScript's Int16Array truncation behavior.
-        // TS: this.modulatorValues[modulatorIndex] = computedValue; (Int16Array truncates to i16)
+        // Int16Array truncates the stored value, the full value is returned
         if let Some(v) = self.modulator_values.get_mut(index) {
             *v = computed_value as i16;
         }
-        // Return full-precision value (matches TS's `return computedValue` which is f64).
-        // The caller (computeModulators All mode) uses this return value, not the stored i16.
         computed_value
     }
 
@@ -518,13 +433,13 @@ mod tests {
     use crate::soundbank::basic_soundbank::generator_types::{
         GENERATORS_AMOUNT, generator_types as gt,
     };
-    use crate::soundbank::basic_soundbank::modulator::DecodedModulator;
+    use crate::soundbank::basic_soundbank::modulator::{DecodedModulator, Modulator};
     use crate::synthesizer::audio_engine::parameters::system::DEFAULT_GLOBAL_SYSTEM_PARAMETERS;
     use crate::synthesizer::enums::interpolation_types;
     use crate::synthesizer::audio_engine::synth_constants::CONTROLLER_TABLE_SIZE;
 
     fn test_channel(midi_controllers: &[i16]) -> SF2Channel<'_> {
-        SF2Channel { midi_controllers, pressure: 0, pitch_wheel_range: 2.0 }
+        SF2Channel { midi_controllers, pressure: 0, pitch_wheel_range: 2.0, modulation_depth: 50.0 }
     }
 
     const SAMPLE_RATE: f64 = 44_100.0;
@@ -615,12 +530,6 @@ mod tests {
         assert_eq!(v.portamento_from_key, -1);
     }
 
-    #[test]
-    fn test_new_resonance_offset_is_zero() {
-        let v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
-        assert!((v.resonance_offset - 0.0).abs() < f64::EPSILON);
-    }
-
     // -----------------------------------------------------------------------
     // wavetable() / wavetable_mut()
     // -----------------------------------------------------------------------
@@ -674,10 +583,8 @@ mod tests {
     fn test_setup_clears_release_flags() {
         let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.is_in_release = true;
-        v.has_rendered = true;
         v.setup(0.0, 0, 60, 0);
         assert!(!v.is_in_release);
-        assert!(!v.has_rendered);
     }
 
     #[test]
@@ -795,13 +702,13 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // VoiceContext trait – decoded_modulators / generators / midi_note
+    // VoiceContext trait – modulators / generators / midi_note
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_decoded_modulators_empty_by_default() {
+    fn test_modulators_empty_by_default() {
         let v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
-        assert!(v.decoded_modulators().is_empty());
+        assert!(v.modulators().is_empty());
     }
 
     #[test]
@@ -821,15 +728,15 @@ mod tests {
     // VoiceContext – compute_single_modulator()
     // -----------------------------------------------------------------------
 
-    /// Helper: build a DecodedModulator with a NO_CONTROLLER (constant 1.0) primary source
+    /// Helper: build a modulator with a NO_CONTROLLER (constant 1.0) primary source
     /// and a NO_CONTROLLER secondary source.
     ///
     /// `source_enum = 0` → index 0 (NO_CONTROLLER), non-CC, linear, unipolar, positive
     ///   → get_value → raw = 16_383 → table[0][0 + 16_383] ≈ 1.0
-    fn make_no_controller_mod(dest: i16, amount: i16) -> DecodedModulator {
+    fn make_no_controller_mod(dest: i16, amount: i16) -> Modulator {
         // source_enum = 0 → NO_CONTROLLER (returns 1.0 for linear/unipolar/positive)
         // secondary_source_enum = 0 → same
-        DecodedModulator::new(0, 0, dest, amount, 0)
+        DecodedModulator::new(0, 0, dest, amount as f64, 0)
     }
 
     #[test]
@@ -838,7 +745,7 @@ mod tests {
         v.modulators = vec![make_no_controller_mod(gt::PAN, 0)];
         v.modulator_values = vec![99];
         let midi_controllers = vec![0i16; CONTROLLER_TABLE_SIZE];
-        let result = v.compute_single_modulator(&test_channel(&midi_controllers), 0, 1.0, 0);
+        let result = v.compute_single_modulator(&test_channel(&midi_controllers), 0, 0);
         assert!((result - 0.0).abs() < 1e-5);
         assert_eq!(v.modulator_values[0], 0);
     }
@@ -851,7 +758,7 @@ mod tests {
         v.modulators = vec![make_no_controller_mod(gt::PAN, 100)];
         v.modulator_values = vec![0];
         let midi_controllers = vec![0i16; CONTROLLER_TABLE_SIZE];
-        let result = v.compute_single_modulator(&test_channel(&midi_controllers), 0, 1.0, 0);
+        let result = v.compute_single_modulator(&test_channel(&midi_controllers), 0, 0);
         // result ≈ 100.0 (NO_CONTROLLER returns full scale)
         assert!(result.abs() > 0.0, "result should be nonzero, got {result}");
         // modulatorValues stores as i16 (matches TS Int16Array)
@@ -864,7 +771,7 @@ mod tests {
         v.modulators = vec![make_no_controller_mod(gt::PAN, 50)];
         v.modulator_values = vec![0];
         let midi_controllers = vec![0i16; CONTROLLER_TABLE_SIZE];
-        let result = v.compute_single_modulator(&test_channel(&midi_controllers), 0, 1.0, 0);
+        let result = v.compute_single_modulator(&test_channel(&midi_controllers), 0, 0);
         assert_eq!(v.modulator_values[0], result as i16);
     }
 
@@ -873,11 +780,11 @@ mod tests {
         let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         // transform_type = 2 → abs. Use a negative amount to get negative before abs.
         // But NO_CONTROLLER source → positive, amount negative → negative → |result| > 0
-        let mod_ = DecodedModulator::new(0, 0, gt::PAN, -100, 2);
+        let mod_ = DecodedModulator::new(0, 0, gt::PAN, -100.0, 2);
         v.modulators = vec![mod_];
         v.modulator_values = vec![0];
         let midi_controllers = vec![0i16; CONTROLLER_TABLE_SIZE];
-        let result = v.compute_single_modulator(&test_channel(&midi_controllers), 0, 1.0, 0);
+        let result = v.compute_single_modulator(&test_channel(&midi_controllers), 0, 0);
         assert!(
             result >= 0.0,
             "transform_type 2 should produce abs value, got {result}"

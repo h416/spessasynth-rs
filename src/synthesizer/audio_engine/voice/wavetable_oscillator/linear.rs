@@ -15,11 +15,17 @@ impl WavetableOscillator {
         let loop_end = self.loop_end;
         let loop_length = self.loop_length;
         let end = self.end;
+        let turn = self.turn;
         let mut cursor = self.cursor;
 
         if self.is_looping {
             // Below this cursor, both points are inside the loop, so no wrapping is needed
-            let safe_end = loop_end - 1.0;
+            // An alternating loop reads straight only up to its turn point
+            let safe_end = loop_end.min(turn + 1.0) - 1.0;
+            // The way back of an alternating loop: from the turn point up to this cursor both points
+            // Are reflections, read backwards without wrapping
+            let mirror_end = loop_end - 1.0;
+            let two_turn = 2.0 * turn;
             let mut i = 0;
             while i < sample_count {
                 // Fast path, this is where almost all samples are rendered
@@ -36,6 +42,22 @@ impl WavetableOscillator {
                     break;
                 }
 
+                // Mirrored fast path
+                if cursor >= turn {
+                    while i < sample_count && cursor < mirror_end {
+                        let floor = cursor as usize;
+                        let fraction = cursor - floor as f64;
+                        let reflected = (two_turn - floor as f64) as usize;
+                        let lower = data[reflected] as f64;
+                        output_buffer[i] = lower + (data[reflected - 1] as f64 - lower) * fraction;
+                        cursor += step;
+                        i += 1;
+                    }
+                    if i >= sample_count {
+                        break;
+                    }
+                }
+
                 // Slow path, a single sample near the loop end
                 // Check for loop first (end is exclusive so it's `<=` and not `<`)
                 // Extreme playback rates:
@@ -45,15 +67,21 @@ impl WavetableOscillator {
                 }
 
                 // Grab the 2 nearest points
-                let floor = cursor as usize;
+                let mut floor = cursor as usize;
                 let mut ceil = floor + 1;
+                let fraction = cursor - floor as f64;
 
                 // Ensure that the point above does not go over the loop
                 if ceil as f64 >= loop_end {
                     ceil = (ceil as f64 - loop_length) as usize;
                 }
-
-                let fraction = cursor - floor as f64;
+                // The way back of an alternating loop
+                if floor as f64 > turn {
+                    floor = (two_turn - floor as f64) as usize;
+                }
+                if ceil as f64 > turn {
+                    ceil = (two_turn - ceil as f64) as usize;
+                }
 
                 // Grab the samples and interpolate
                 let upper = data[ceil] as f64;

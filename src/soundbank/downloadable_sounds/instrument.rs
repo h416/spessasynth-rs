@@ -329,15 +329,7 @@ impl DownloadableSoundsInstrument {
             .iter()
             .any(|m| m.destination == gt::REVERB_EFFECTS_SEND)
         {
-            let reverb_mod = Modulator::new(
-                DEFAULT_DLS_REVERB.primary_source(),
-                DEFAULT_DLS_REVERB.secondary_source(),
-                DEFAULT_DLS_REVERB.destination,
-                DEFAULT_DLS_REVERB.transform_amount,
-                DEFAULT_DLS_REVERB.transform_type,
-                DEFAULT_DLS_REVERB.is_effect_modulator,
-                DEFAULT_DLS_REVERB.is_default_resonant_modulator,
-            );
+            let reverb_mod = Modulator::copy_from(&DEFAULT_DLS_REVERB);
             sf_instrument.global_zone.add_modulators(&[reverb_mod]);
         }
 
@@ -348,15 +340,7 @@ impl DownloadableSoundsInstrument {
             .iter()
             .any(|m| m.destination == gt::CHORUS_EFFECTS_SEND)
         {
-            let chorus_mod = Modulator::new(
-                DEFAULT_DLS_CHORUS.primary_source(),
-                DEFAULT_DLS_CHORUS.secondary_source(),
-                DEFAULT_DLS_CHORUS.destination,
-                DEFAULT_DLS_CHORUS.transform_amount,
-                DEFAULT_DLS_CHORUS.transform_type,
-                DEFAULT_DLS_CHORUS.is_effect_modulator,
-                DEFAULT_DLS_CHORUS.is_default_resonant_modulator,
-            );
+            let chorus_mod = Modulator::copy_from(&DEFAULT_DLS_CHORUS);
             sf_instrument.global_zone.add_modulators(&[chorus_mod]);
         }
 

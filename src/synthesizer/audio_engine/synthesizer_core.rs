@@ -28,14 +28,14 @@ use crate::midi::drum_parameters::UserDrumSetParameterChange;
 use crate::synthesizer::audio_engine::channel::render_voice::{
     EffectSends, RenderVoiceContext, VoiceSendBuffer,
 };
-use crate::synthesizer::audio_engine::effects::gs::implementation::chorus::SpessaSynthChorus;
+use crate::synthesizer::audio_engine::effects::gs::implementation::chorus::DefaultGSChorus;
 use crate::synthesizer::audio_engine::effects::gs::implementation::delay::DefaultGSDelay;
 use crate::synthesizer::audio_engine::effects::gs::implementation::equalizer::{
     DEFAULT_GS_EQUALIZER, DefaultGSEqualizer,
 };
 use crate::synthesizer::audio_engine::effects::gs::implementation::insertion::DefaultGSInsertion;
-use crate::synthesizer::audio_engine::effects::gs::implementation::reverb::SpessaSynthReverb;
-use crate::synthesizer::audio_engine::voice::lowpass_filter::LowpassFilter;
+use crate::synthesizer::audio_engine::effects::gs::implementation::reverb::DefaultGSReverb;
+use crate::synthesizer::audio_engine::voice::voice_filter::VoiceFilter;
 use crate::synthesizer::audio_engine::parameters::midi::{
     DEFAULT_GLOBAL_MIDI_PARAMETERS, GLOBAL_MIDI_PARAMETER_COUNT, GlobalMIDIParameter,
 };
@@ -145,7 +145,7 @@ pub struct SynthesizerCore {
     pub current_time: f64,
 
     /// Reverb effect processor.
-    pub reverb_processor: SpessaSynthReverb,
+    pub reverb_processor: DefaultGSReverb,
     /// The synthesizer's XG reverb block.
     /// Used when `GlobalMIDIParameter.system` is `xg`.
     /// Equivalent to: xgReverbBlock
@@ -155,7 +155,7 @@ pub struct SynthesizerCore {
     pub xg_chorus_block: DefaultXGChorus,
 
     /// Chorus effect processor.
-    pub chorus_processor: SpessaSynthChorus,
+    pub chorus_processor: DefaultGSChorus,
 
     /// Delay effect processor.
     pub delay_processor: DefaultGSDelay,
@@ -296,7 +296,7 @@ impl SynthesizerCore {
     ) -> Self {
         let gain_smoothing_factor = GAIN_SMOOTHING_FACTOR * (44_100.0 / sample_rate);
         let pan_smoothing_factor = PAN_SMOOTHING_FACTOR * (44_100.0 / sample_rate);
-        LowpassFilter::init_cache(sample_rate);
+        VoiceFilter::init_cache(sample_rate);
 
         let buf_size = options.max_buffer_size;
 
@@ -327,10 +327,10 @@ impl SynthesizerCore {
             locked_midi_parameters: [false; GLOBAL_MIDI_PARAMETER_COUNT],
             system_parameters,
             current_time: options.initial_time,
-            reverb_processor: SpessaSynthReverb::new(sample_rate, buf_size),
+            reverb_processor: DefaultGSReverb::new(sample_rate, buf_size),
             xg_reverb_block: DefaultXGReverb::new(sample_rate, buf_size),
             xg_chorus_block: DefaultXGChorus::new(sample_rate, buf_size),
-            chorus_processor: SpessaSynthChorus::new(sample_rate, buf_size),
+            chorus_processor: DefaultGSChorus::new(sample_rate, buf_size),
             delay_processor: DefaultGSDelay::new(sample_rate, buf_size),
             gs_delay_active: false,
             random_generator: SplitMix32::default(),
@@ -424,7 +424,7 @@ impl SynthesizerCore {
         for i in 0..voice_cap {
             if !self.voices[i].is_active {
                 // Prevent this voice from being stolen
-                self.voices[i].priority = i32::MAX;
+                self.voices[i].priority = f64::INFINITY;
                 return i;
             }
         }
@@ -439,7 +439,7 @@ impl SynthesizerCore {
                 self.system_parameters.voice_cap
             ));
             // Prevent this voice from being stolen.
-            self.voices[new_idx].priority = i32::MAX;
+            self.voices[new_idx].priority = f64::INFINITY;
             return new_idx;
         }
         self.assign_voice_priorities();
@@ -449,7 +449,7 @@ impl SynthesizerCore {
                 lowest_idx = i;
             }
         }
-        self.voices[lowest_idx].priority = i32::MAX;
+        self.voices[lowest_idx].priority = f64::INFINITY;
         lowest_idx
     }
 
@@ -528,7 +528,7 @@ impl SynthesizerCore {
         };
         if let Some((preset, bank_idx)) = self
             .sound_bank_manager
-            .get_preset_and_bank_idx(patch, MIDISystem::Xg)
+            .get_preset_and_bank_idx(patch, MIDISystem::Xg, false)
         {
             (Some(preset.clone()), Some(bank_idx))
         } else {
@@ -550,6 +550,16 @@ impl SynthesizerCore {
         self.tunings.fill(-1.0);
         self.port_select_channel_offset = 0;
         self.custom_channel_numbers = false;
+        // Clear the GS effects, then set their defaults
+        if !self.system_parameters.gs_reverb_lock {
+            self.reverb_processor.reset();
+        }
+        if !self.system_parameters.gs_chorus_lock {
+            self.chorus_processor.reset();
+        }
+        if !self.system_parameters.gs_delay_lock {
+            self.delay_processor.reset();
+        }
         // Hall2 default
         self.set_reverb_macro(4);
         // Chorus3 default
@@ -557,6 +567,7 @@ impl SynthesizerCore {
         // Delay1 default
         self.set_delay_macro(0);
         if !self.system_parameters.gs_equalizer_lock {
+            self.gs_equalizer_processor.reset();
             self.gs_equalizer_processor.apply_snapshot(&DEFAULT_GS_EQUALIZER);
             let eq = self.gs_equalizer_processor.get_snapshot();
             for (parameter, value) in
@@ -629,6 +640,11 @@ impl SynthesizerCore {
             events.append(&mut sub);
         }
 
+        // The GS delay stops at a reset, and its reset above leaves no tail for later.
+        // A locked delay keeps its line and runs on, since the lock switches it back on below.
+        self.gs_delay_active = false;
+        self.gs_delay_send.fill(0.0);
+        self.gs_delay_input.fill(0.0);
         // Update if the effects should still be active.
         self.update_active_gs_effects();
 
@@ -715,6 +731,7 @@ impl SynthesizerCore {
         self.voice_count = 0;
 
         // Process voices
+        let gs_delay_active;
         {
             let mut ctx = RenderVoiceContext {
                 sample_rate: self.sample_rate,
@@ -763,7 +780,10 @@ impl SynthesizerCore {
             for c in self.midi_channels.iter_mut() {
                 c.mix_voice_send_buffers(&mut ctx.sends, is_xg, sample_count);
             }
+            // A voice with a variation send turns the GS delay on
+            gs_delay_active = ctx.gs_delay_active;
         }
+        self.gs_delay_active = gs_delay_active;
 
         // Move the voice sends into the effect inputs
         if is_xg {
@@ -1327,25 +1347,29 @@ impl SynthesizerCore {
     }
 
     /// Checks if we can disable insertion and delay effects.
-    ///
-    /// Both flags are recomputed from the current state at every relevant edit (not latched),
-    /// so the delay and insertion effects turn off again once nothing uses them.
-    ///
     /// Equivalent to: updateActiveGSEffects()
     pub fn update_active_gs_effects(&mut self) {
-        if !self.system_parameters.gs_insertion_lock {
-            self.gs_insertion_active = self.midi_channels.iter().any(|c| c.midi_parameters.efx_assign);
-        }
-        if !self.system_parameters.gs_delay_lock {
-            self.gs_delay_active = if self.midi_parameters.system == MIDISystem::Xg {
-                false
-            } else {
-                self.chorus_processor.send_level_to_delay() > 0
+        // Locked effects are always active.
+        // Otherwise, a fresh synthesizer would keep them disabled for the entire offline render.
+        // And it's just an optimization case, so always active is fine.
+        self.gs_insertion_active = if self.system_parameters.gs_insertion_lock {
+            true
+        } else {
+            self.midi_channels.iter().any(|c| c.midi_parameters.efx_assign)
+        };
+        // The delay only switches on here, and a reset switches it off.
+        // Most GS, GM and GM2 files never use it, and once one does, stopping it would freeze its tail
+        // And play the rest of it the next time something sends to it.
+        // A voice with a variation send switches it on too (render_voice.rs).
+        if self.system_parameters.gs_delay_lock
+            || (self.midi_parameters.system != MIDISystem::Xg
+                && (self.chorus_processor.send_level_to_delay() > 0
                     || self.gs_insertion_block.send_level_to_delay > 0
                     || self.midi_channels.iter().any(|c| {
                         c.midi_controllers[midi_controllers::VARIATION_DEPTH as usize] > 0
-                    })
-            };
+                    })))
+        {
+            self.gs_delay_active = true;
         }
     }
 
@@ -1500,20 +1524,22 @@ impl SynthesizerCore {
         self.last_priority_assignment_time = self.current_time;
         let cap = (self.system_parameters.voice_cap as usize).min(self.voices.len());
         for voice in self.voices.iter_mut().take(cap) {
-            voice.priority = 0;
+            voice.priority = 0.0;
             let ch_idx = voice.channel as usize;
             if ch_idx < self.midi_channels.len() && self.midi_channels[ch_idx].drum_channel {
-                voice.priority += 5;
+                // Important
+                voice.priority += 5.0;
             }
             if voice.is_in_release {
-                voice.priority -= 5;
+                // Not important
+                voice.priority -= 5.0;
             }
-            voice.priority += (voice.velocity as i32) / 25;
-            voice.priority -= voice.vol_env.state as i32;
-            if voice.is_in_release {
-                voice.priority -= 5;
-            }
-            voice.priority -= (voice.vol_env.attenuation_cb / 200.0) as i32;
+            // Less velocity = less important
+            voice.priority += voice.velocity as f64 / 25.0; // Map to 0-5
+            // The newer, more important
+            // Decay 2 (SFe) and sustain count the same, so a sustaining voice ranks as it always did
+            voice.priority -= (voice.vol_env.state as f64).min(4.0);
+            voice.priority -= voice.vol_env.attenuation_cb / 200.0;
         }
     }
 

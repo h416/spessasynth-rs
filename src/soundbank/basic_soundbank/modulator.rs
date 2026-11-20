@@ -1,58 +1,44 @@
-//! modulator.rs
-//! purpose: SF2 Modulator and DecodedModulator structs, default modulators list.
+//! SF2 modulators, the modulators decoded from a sound bank, and the default modulators.
 //! Ported from: src/soundbank/basic_soundbank/modulator.ts
 //!
-//! TS keeps the `isEffectModulator` / `isDefaultResonantModulator` / `isModWheelModulator`
-//! flags on a separate `VoiceModulator` (voice_modulator.ts, built by `fromData` /
-//! `fromModulator`). This port folds them into `Modulator` / `DecodedModulator` and
-//! computes them with the same conditions when the modulator is created.
+//! TS `DecodedModulator` is a subclass of `Modulator` that only adds a constructor. Rust keeps it as a unit
+//! struct whose `new()` returns a [`Modulator`].
+//!
+//! Not ported (API only, no effect on the MIDI-to-WAV output): `checkAddable`, `linkCurves` and `unlinkCurves`
+//! (the links of an edited bank's custom curves) and `writeExtended` (the SFe XMOD writer).
 use std::fmt;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
-use crate::midi::enums::midi_controllers as cc;
+use crate::midi::enums::midi_controllers;
+use crate::soundbank::basic_soundbank::custom_curve::{CustomCurve, CustomCurvePoint};
 use crate::soundbank::basic_soundbank::generator_types::{
     GeneratorType, MAX_GENERATOR, generator_types,
 };
 use crate::soundbank::basic_soundbank::modulator_source::ModulatorSource;
-use crate::soundbank::enums::modulator_curve_types;
-use crate::utils::indexed_array::IndexedByteArray;
+use crate::soundbank::enums::{modulator_curve_types, modulator_sources};
 use crate::utils::byte_functions::little_endian::write_word;
+use crate::utils::indexed_array::IndexedByteArray;
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-/// Size in bytes of a single modulator record in SF2 format (5 × 16-bit words).
-/// Equivalent to: MOD_BYTE_SIZE = 10
+/// Size in bytes of a single modulator record in SF2 format (5 x 16-bit words).
+/// Equivalent to: MOD_BYTE_SIZE
 pub const MOD_BYTE_SIZE: usize = 10;
 
-/// Source enum for the default resonant modulator.
-/// ModulatorSource::new(filterResonance=71, LINEAR, isCC=true, isBipolar=true, isNegative=false)
-///   .to_source_enum()
-/// = (0<<10) | (1<<9) | (0<<8) | (1<<7) | 71 = 512 + 128 + 71 = 711
-/// Equivalent to: DEFAULT_RESONANT_MOD_SOURCE
-pub const DEFAULT_RESONANT_MOD_SOURCE: u16 = 711;
+/// Size in bytes of a single record of the SFe XMOD chunk.
+/// Equivalent to: XMOD_BYTE_SIZE
+pub const XMOD_BYTE_SIZE: usize = 16;
 
-// ---------------------------------------------------------------------------
-// SoundFontWriteIndexes (minimal stub)
-//
-// Equivalent to: SoundFontWriteIndexes (from src/soundbank/soundfont/write/types.ts)
-// The SF2 writer is outside the MIDI-to-WAV scope, so only this stub is kept.
-// ---------------------------------------------------------------------------
+/// Bit 15 of the transform: the modulator has an XMOD record (SFe only).
+/// Equivalent to: MODULATOR_EXTENDED_FLAG
+pub const MODULATOR_EXTENDED_FLAG: u16 = 0x80_00;
 
 /// Minimal stub for SoundFontWriteIndexes.
 /// The only field used by `Modulator::write()` is the modulator counter.
-/// Note: the TypeScript field is named `mod`, which is a Rust keyword;
-///       it is renamed `mod_count` here.
+/// The TS field is named `mod`, a Rust keyword, so it is `mod_count` here.
+/// Equivalent to: SoundFontWriteIndexes (soundfont/write/types.ts)
 pub struct SoundFontWriteIndexes {
-    /// Running count of modulators written.
     /// Equivalent to: indexes.mod
     pub mod_count: u32,
 }
-
-// ---------------------------------------------------------------------------
-// get_mod_source_enum
-// ---------------------------------------------------------------------------
 
 /// Builds a raw SF2 source enum from curve/polarity/CC parameters and an index.
 /// Equivalent to: getModSourceEnum(curveType, isBipolar, isNegative, isCC, index)
@@ -66,121 +52,82 @@ pub fn get_mod_source_enum(
     ModulatorSource::new(index, curve_type, is_cc, is_bipolar, is_negative).to_source_enum()
 }
 
-// ---------------------------------------------------------------------------
-// Modulator
-// ---------------------------------------------------------------------------
+/// Linear forwards bipolar cc 71.
+/// = (0<<10) | (1<<9) | (0<<8) | (1<<7) | 71 = 711
+/// Equivalent to: DEFAULT_RESONANT_MOD_SOURCE
+pub const DEFAULT_RESONANT_MOD_SOURCE: u16 = 711;
+
+/// Switch unipolar positive cc 71: on from 64.
+/// = (3<<10) | (0<<9) | (0<<8) | (1<<7) | 71 = 3271
+/// Equivalent to: RESONANT_COMPENSATOR_AMOUNT_SOURCE
+pub const RESONANT_COMPENSATOR_AMOUNT_SOURCE: u16 = 3271;
 
 /// An SF2 Modulator with fully-parsed source objects.
 /// Equivalent to: class Modulator
 #[derive(Clone, Debug, PartialEq)]
 pub struct Modulator {
-    /// Generator destination of this modulator.
     /// Equivalent to: destination
     pub destination: GeneratorType,
-
-    /// Transform amount (signed; written as 16-bit LE in SF2 files).
     /// f64 to match TypeScript's number type (allows fractional SysEx modulator amounts).
     /// Equivalent to: transformAmount
     pub transform_amount: f64,
-
     /// Transform type (0 = linear, 2 = absolute value).
     /// Equivalent to: transformType: ModulatorTransformType
     pub transform_type: u16,
-
-    /// True if this is a reverb/chorus effect modulator (BASSMIDI compatibility).
-    /// Equivalent to: isEffectModulator
-    pub is_effect_modulator: bool,
-
-    /// True if this is the default resonant modulator (CC 71 → initialFilterQ).
-    /// The default resonant modulator does not affect filter gain.
-    /// Equivalent to: isDefaultResonantModulator
-    pub is_default_resonant_modulator: bool,
-
-    /// True if this is a modulation-wheel modulator: a CC-1 (modulation wheel)
-    /// source driving the vibrato/mod LFO pitch depth.
-    /// Corresponds to TS `VoiceModulator.isModWheelModulator`; in this port
-    /// the flag is folded into `Modulator` (matching the existing treatment of
-    /// `is_effect_modulator` / `is_default_resonant_modulator`) rather than kept on
-    /// a separate `VoiceModulator` subclass.
-    pub is_mod_wheel_modulator: bool,
-
-    /// Primary modulator source.
     /// Equivalent to: primarySource
     pub primary_source: ModulatorSource,
-
-    /// Secondary (secondary-source) modulator.
     /// Equivalent to: secondarySource
     pub secondary_source: ModulatorSource,
 }
 
 impl Default for Modulator {
-    /// Default modulator: INVALID destination, zero amounts, default (no-op) sources.
     /// Equivalent to: new Modulator() with all defaults
     fn default() -> Self {
-        Self {
-            destination: generator_types::INVALID,
-            transform_amount: 0.0,
-            transform_type: 0,
-            is_effect_modulator: false,
-            is_default_resonant_modulator: false,
-            // destination is INVALID, so this can never be a mod-wheel modulator.
-            is_mod_wheel_modulator: false,
-            primary_source: ModulatorSource::default(),
-            secondary_source: ModulatorSource::default(),
-        }
+        Self::new(
+            ModulatorSource::default(),
+            ModulatorSource::default(),
+            generator_types::INVALID,
+            0.0,
+            0,
+        )
     }
 }
 
 impl Modulator {
-    /// Computes whether this is a modulation-wheel modulator (CC-1 driving mod/vib LFO pitch).
-    /// Equivalent to VoiceModulator.isModWheelModulator (folded into Modulator in this port).
-    ///
-    /// Logic is identical to the former inline computation in `voice.rs`:
-    /// a CC-1 (modulation wheel) primary or secondary source whose destination is the
-    /// mod/vibrato LFO pitch depth.
-    fn compute_is_mod_wheel(
-        primary_source: &ModulatorSource,
-        secondary_source: &ModulatorSource,
-        destination: GeneratorType,
-    ) -> bool {
-        ((primary_source.is_cc
-            && primary_source.index as u16 == cc::MODULATION_WHEEL as u16)
-            || (secondary_source.is_cc
-                && secondary_source.index as u16 == cc::MODULATION_WHEEL as u16))
-            && (destination == generator_types::MOD_LFO_TO_PITCH
-                || destination == generator_types::VIB_LFO_TO_PITCH)
-    }
-
-    /// Creates a new Modulator with explicit parameters.
-    /// Equivalent to: constructor(primarySource, secondarySource, destination, amount,
-    ///                            transformType, isEffectModulator, isDefaultResonantModulator)
+    /// Equivalent to: constructor(primarySource, secondarySource, destination, amount, transformType)
     pub fn new(
         primary_source: ModulatorSource,
         secondary_source: ModulatorSource,
         destination: GeneratorType,
         transform_amount: f64,
         transform_type: u16,
-        is_effect_modulator: bool,
-        is_default_resonant_modulator: bool,
     ) -> Self {
-        // The mod-wheel flag is derived from the sources + destination (matches the
-        // former inline computation in voice.rs); no extra constructor argument needed.
-        let is_mod_wheel_modulator =
-            Self::compute_is_mod_wheel(&primary_source, &secondary_source, destination);
         Self {
             destination,
             transform_amount,
             transform_type,
-            is_effect_modulator,
-            is_default_resonant_modulator,
-            is_mod_wheel_modulator,
             primary_source,
             secondary_source,
         }
     }
 
+    /// If any source uses a custom curve (the modulator needs an XMOD record).
+    /// Equivalent to: get usesCustomCurve
+    pub fn uses_custom_curve(&self) -> bool {
+        self.primary_source.curve_type == modulator_curve_types::CUSTOM
+            || self.secondary_source.curve_type == modulator_curve_types::CUSTOM
+    }
+
+    /// If a source has the custom curve type but no curve.
+    /// Equivalent to: get isMissingCurve
+    pub fn is_missing_curve(&self) -> bool {
+        (self.primary_source.curve_type == modulator_curve_types::CUSTOM
+            && self.primary_source.custom_curve.is_none())
+            || (self.secondary_source.curve_type == modulator_curve_types::CUSTOM
+                && self.secondary_source.custom_curve.is_none())
+    }
+
     /// Checks if two modulators are identical (in SF2 terms).
-    /// When `check_amount` is false (default), the transform amount is not compared.
     /// Equivalent to: static isIdentical(mod1, mod2, checkAmount = false)
     pub fn is_identical(mod1: &Modulator, mod2: &Modulator, check_amount: bool) -> bool {
         mod1.primary_source.is_identical(&mod2.primary_source)
@@ -190,23 +137,20 @@ impl Modulator {
             && (!check_amount || mod1.transform_amount == mod2.transform_amount)
     }
 
-    /// Copies a modulator.
+    /// Copies a modulator, with the same curves.
     /// Equivalent to: static copyFrom(mod)
     pub fn copy_from(mod_: &Modulator) -> Self {
-        Self {
-            primary_source: ModulatorSource::copy_from(&mod_.primary_source),
-            secondary_source: ModulatorSource::copy_from(&mod_.secondary_source),
-            destination: mod_.destination,
-            transform_amount: mod_.transform_amount,
-            transform_type: mod_.transform_type,
-            is_effect_modulator: mod_.is_effect_modulator,
-            is_default_resonant_modulator: mod_.is_default_resonant_modulator,
-            is_mod_wheel_modulator: mod_.is_mod_wheel_modulator,
-        }
+        Self::new(
+            ModulatorSource::copy_from(&mod_.primary_source),
+            ModulatorSource::copy_from(&mod_.secondary_source),
+            mod_.destination,
+            mod_.transform_amount,
+            mod_.transform_type,
+        )
     }
 
-    /// Writes this modulator to an IndexedByteArray (10 bytes = 5 × 16-bit LE words).
-    /// Optionally increments the modulator counter in `indexes`.
+    /// Writes this modulator (10 bytes = 5 x 16-bit LE words).
+    /// Not ported (writer only): the `sfe` argument that sets the extended flag.
     /// Equivalent to: write(modData, indexes?)
     pub fn write(
         &self,
@@ -215,7 +159,7 @@ impl Modulator {
     ) {
         write_word(mod_data, self.primary_source.to_source_enum() as u32);
         write_word(mod_data, self.destination as u16 as u32);
-        write_word(mod_data, self.transform_amount as i16 as u16 as u32); // lower 16 bits (two's complement)
+        write_word(mod_data, self.transform_amount as i16 as u16 as u32);
         write_word(mod_data, self.secondary_source.to_source_enum() as u32);
         write_word(mod_data, self.transform_type as u32);
         if let Some(idx) = indexes {
@@ -229,20 +173,6 @@ impl Modulator {
         let mut m = Modulator::copy_from(self);
         m.transform_amount += modulator.transform_amount;
         m
-    }
-
-    /// Converts this Modulator to a DecodedModulator using raw source enum values.
-    /// Used when assigning cached modulators to a voice at note-on time.
-    /// Preserves f64 precision for SysEx modulators with fractional amounts.
-    /// Equivalent to: no direct TS equivalent; bridges Modulator -> DecodedModulator
-    pub fn to_decoded(&self) -> DecodedModulator {
-        DecodedModulator::new_f64(
-            self.primary_source.to_source_enum(),
-            self.secondary_source.to_source_enum(),
-            self.destination,
-            self.transform_amount,
-            self.transform_type,
-        )
     }
 }
 
@@ -266,143 +196,64 @@ impl fmt::Display for Modulator {
     }
 }
 
-// ---------------------------------------------------------------------------
-// DecodedModulator  (backward-compatible, const-fn-capable)
-// ---------------------------------------------------------------------------
+/// Equivalent to: GENERAL_SOURCES
+const GENERAL_SOURCES: [u8; 8] = [
+    modulator_sources::NO_CONTROLLER,
+    modulator_sources::NOTE_ON_VELOCITY,
+    modulator_sources::NOTE_ON_KEY_NUM,
+    modulator_sources::POLY_PRESSURE,
+    modulator_sources::CHANNEL_PRESSURE,
+    modulator_sources::PITCH_WHEEL,
+    modulator_sources::PITCH_WHEEL_RANGE,
+    modulator_sources::MODULATION_DEPTH_RANGE,
+];
 
-/// Decoded SF2 Modulator parsed from raw source-enum fields.
-/// Stores raw 16-bit source enums in addition to derived flags.
-/// Use `primary_source()` / `secondary_source()` to obtain parsed ModulatorSource objects.
-/// Equivalent to: class DecodedModulator extends Modulator
-#[derive(Clone, Debug, PartialEq)]
-pub struct DecodedModulator {
-    /// Raw SF2 primary source enum (16-bit).
-    pub source_enum: u16,
-    /// Raw SF2 secondary source enum (16-bit).
-    pub secondary_source_enum: u16,
-    /// Destination generator type.
-    pub destination: GeneratorType,
-    /// Transform amount. Read from SF2 as signed 16-bit, but stored as f64
-    /// to match TypeScript's number type (allows fractional SysEx modulator amounts).
-    pub transform_amount: f64,
-    /// Transform type.
-    pub transform_type: u16,
-    /// True if this is a reverb/chorus effect modulator (BASSMIDI compatibility).
-    /// Equivalent to: isEffectModulator
-    pub is_effect_modulator: bool,
-    /// True if this is the default resonant modulator.
-    /// Equivalent to: isDefaultResonantModulator
-    pub is_default_resonant_modulator: bool,
-    /// True if this is a modulation-wheel modulator (CC-1 driving mod/vib LFO pitch).
-    /// Corresponds to TS `VoiceModulator.isModWheelModulator`; folded here so the
-    /// voice render loop can read the precomputed flag instead of recomputing it per call.
-    pub is_mod_wheel_modulator: bool,
+/// A source SF2 does not allow: a reserved or non-continuous controller, or an undefined general source
+/// (including the link source 127).
+/// Equivalent to: isIllegalSource(source)
+pub fn is_illegal_source(source: &ModulatorSource) -> bool {
+    if source.is_cc {
+        source.index == 0
+            || source.index == 6
+            || source.index == 32
+            || source.index == 38
+            || (98..=101).contains(&source.index)
+            || source.index >= 120
+    } else {
+        !GENERAL_SOURCES.contains(&source.index)
+    }
 }
 
+/// A modulator decoded from the raw SF2 fields.
+/// Equivalent to: class DecodedModulator extends Modulator
+pub struct DecodedModulator;
+
 impl DecodedModulator {
-    /// Creates a new `DecodedModulator` from raw SF2 fields.
-    /// This is a `const fn` so it can be used in static/const contexts.
     /// Equivalent to: new DecodedModulator(sourceEnum, secondarySourceEnum, destination, amount, transformType)
-    pub const fn new(
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(
         source_enum: u16,
         secondary_source_enum: u16,
         destination: GeneratorType,
-        transform_amount: i16,
+        amount: f64,
         transform_type: u16,
-    ) -> Self {
-        let is_effect_modulator = (source_enum == 0x00db || source_enum == 0x00dd)
-            && secondary_source_enum == 0x0
-            && (destination == generator_types::REVERB_EFFECTS_SEND
-                || destination == generator_types::CHORUS_EFFECTS_SEND);
-
-        let is_default_resonant_modulator = source_enum == DEFAULT_RESONANT_MOD_SOURCE
-            && secondary_source_enum == 0x0
-            && destination == generator_types::INITIAL_FILTER_Q;
-
-        // Mod-wheel flag: CC-1 (modulation wheel) primary/secondary source driving the
-        // mod/vibrato LFO pitch depth. Computed from raw enum bits to stay `const fn`;
-        // logically identical to `Modulator::compute_is_mod_wheel`. Valid pitch-LFO
-        // destinations are never clamped, so computing before the clamp is equivalent.
-        let is_mod_wheel_modulator = (((source_enum & 0x80) != 0
-            && (source_enum & 0x7F) == cc::MODULATION_WHEEL as u16)
-            || ((secondary_source_enum & 0x80) != 0
-                && (secondary_source_enum & 0x7F) == cc::MODULATION_WHEEL as u16))
-            && (destination == generator_types::MOD_LFO_TO_PITCH
-                || destination == generator_types::VIB_LFO_TO_PITCH);
-
-        // Clamp invalid destinations (must happen after the flag checks above).
-        let destination = if destination > MAX_GENERATOR {
-            generator_types::INVALID
-        } else {
-            destination
-        };
-
-        Self {
-            source_enum,
-            secondary_source_enum,
+    ) -> Modulator {
+        let mut m = Modulator::new(
+            ModulatorSource::from_source_enum(source_enum),
+            ModulatorSource::from_source_enum(secondary_source_enum),
             destination,
-            transform_amount: transform_amount as f64,
+            amount,
             transform_type,
-            is_effect_modulator,
-            is_default_resonant_modulator,
-            is_mod_wheel_modulator,
+        );
+        // Linked modulators are reserved: a link source, or a destination with bit 15 set, is ignored.
+        // So is a modulator with an illegal or reserved controller as a source
+        if m.destination > MAX_GENERATOR
+            || is_illegal_source(&m.primary_source)
+            || is_illegal_source(&m.secondary_source)
+        {
+            m.destination = generator_types::INVALID;
         }
-    }
-
-    /// Creates a new `DecodedModulator` with an f64 transform_amount.
-    /// Used for SysEx modulators that can have fractional amounts.
-    pub fn new_f64(
-        source_enum: u16,
-        secondary_source_enum: u16,
-        destination: GeneratorType,
-        transform_amount: f64,
-        transform_type: u16,
-    ) -> Self {
-        let is_effect_modulator = (source_enum == 0x00db || source_enum == 0x00dd)
-            && secondary_source_enum == 0x0
-            && (destination == generator_types::REVERB_EFFECTS_SEND
-                || destination == generator_types::CHORUS_EFFECTS_SEND);
-
-        let is_default_resonant_modulator = source_enum == DEFAULT_RESONANT_MOD_SOURCE
-            && secondary_source_enum == 0x0
-            && destination == generator_types::INITIAL_FILTER_Q;
-
-        // Mod-wheel flag: see `DecodedModulator::new` for the rationale.
-        let is_mod_wheel_modulator = (((source_enum & 0x80) != 0
-            && (source_enum & 0x7F) == cc::MODULATION_WHEEL as u16)
-            || ((secondary_source_enum & 0x80) != 0
-                && (secondary_source_enum & 0x7F) == cc::MODULATION_WHEEL as u16))
-            && (destination == generator_types::MOD_LFO_TO_PITCH
-                || destination == generator_types::VIB_LFO_TO_PITCH);
-
-        let destination = if destination > MAX_GENERATOR {
-            generator_types::INVALID
-        } else {
-            destination
-        };
-
-        Self {
-            source_enum,
-            secondary_source_enum,
-            destination,
-            transform_amount,
-            transform_type,
-            is_effect_modulator,
-            is_default_resonant_modulator,
-            is_mod_wheel_modulator,
-        }
-    }
-
-    /// Returns the primary ModulatorSource decoded from `source_enum`.
-    /// Equivalent to: this.primarySource (decoded from source enum at read time in TS)
-    pub fn primary_source(&self) -> ModulatorSource {
-        ModulatorSource::from_source_enum(self.source_enum)
-    }
-
-    /// Returns the secondary ModulatorSource decoded from `secondary_source_enum`.
-    /// Equivalent to: this.secondarySource (decoded from secondary source enum)
-    pub fn secondary_source(&self) -> ModulatorSource {
-        ModulatorSource::from_source_enum(self.secondary_source_enum)
+        m
     }
 }
 
@@ -466,24 +317,21 @@ fn generator_type_name(gt: GeneratorType) -> String {
         generator_types::SCALE_TUNING => "scaleTuning".to_string(),
         generator_types::EXCLUSIVE_CLASS => "exclusiveClass".to_string(),
         generator_types::OVERRIDING_ROOT_KEY => "overridingRootKey".to_string(),
-        generator_types::AMPLITUDE => "amplitude".to_string(),
-        generator_types::VIB_LFO_RATE => "vibLfoRate".to_string(),
-        generator_types::VIB_LFO_AMPLITUDE_DEPTH => "vibLfoAmplitudeDepth".to_string(),
+        generator_types::FILTER_TYPE => "filterType".to_string(),
+        generator_types::MAX_FILTER_FC => "maxFilterFc".to_string(),
+        generator_types::FILTER_Q_OFFSET => "filterQOffset".to_string(),
         generator_types::VIB_LFO_TO_FILTER_FC => "vibLfoToFilterFc".to_string(),
         generator_types::VIB_LFO_TO_VOLUME => "vibLfoToVolume".to_string(),
-        generator_types::MOD_LFO_RATE => "modLfoRate".to_string(),
-        generator_types::MOD_LFO_AMPLITUDE_DEPTH => "modLfoAmplitudeDepth".to_string(),
-        generator_types::IGNORE_NOTE_OFF => "ignoreNoteOff".to_string(),
-        generator_types::DELAY_VOICE => "delayVoice".to_string(),
-        generator_types::FADE_VIB_LFO => "fadeVibLFO".to_string(),
+        generator_types::MOD_LFO_TO_AMPLITUDE => "modLfoToAmplitude".to_string(),
+        generator_types::VIB_LFO_TO_AMPLITUDE => "vibLfoToAmplitude".to_string(),
         generator_types::FADE_MOD_LFO => "fadeModLFO".to_string(),
-        generator_types::VIB_LFO_WAVEFORM => "vibLfoWaveform".to_string(),
+        generator_types::FADE_VIB_LFO => "fadeVibLFO".to_string(),
         generator_types::MOD_LFO_WAVEFORM => "modLfoWaveform".to_string(),
-        generator_types::VIB_LFO_START_PHASE => "vibLfoStartPhase".to_string(),
+        generator_types::VIB_LFO_WAVEFORM => "vibLfoWaveform".to_string(),
         generator_types::MOD_LFO_START_PHASE => "modLfoStartPhase".to_string(),
-        generator_types::MAX_FILTER_FC => "maxFilterFc".to_string(),
-        generator_types::DECAY2_VOL_ENV => "decay2VolEnv".to_string(),
-        generator_types::SUSTAIN2_VOL_ENV => "sustain2VolEnv".to_string(),
+        generator_types::VIB_LFO_START_PHASE => "vibLfoStartPhase".to_string(),
+        generator_types::MOD_ENV2_TO_PITCH => "modEnv2ToPitch".to_string(),
+        generator_types::MOD_ENV2_TO_FILTER_FC => "modEnv2ToFilterFc".to_string(),
         generator_types::DELAY_MOD_ENV2 => "delayModEnv2".to_string(),
         generator_types::ATTACK_MOD_ENV2 => "attackModEnv2".to_string(),
         generator_types::HOLD_MOD_ENV2 => "holdModEnv2".to_string(),
@@ -492,8 +340,13 @@ fn generator_type_name(gt: GeneratorType) -> String {
         generator_types::RELEASE_MOD_ENV2 => "releaseModEnv2".to_string(),
         generator_types::KEY_NUM_TO_MOD_ENV2_HOLD => "keyNumToModEnv2Hold".to_string(),
         generator_types::KEY_NUM_TO_MOD_ENV2_DECAY => "keyNumToModEnv2Decay".to_string(),
-        generator_types::MOD_ENV2_TO_PITCH => "modEnv2ToPitch".to_string(),
-        generator_types::MOD_ENV2_TO_FILTER_FC => "modEnv2ToFilterFc".to_string(),
+        generator_types::DECAY2_VOL_ENV => "decay2VolEnv".to_string(),
+        generator_types::SUSTAIN2_VOL_ENV => "sustain2VolEnv".to_string(),
+        generator_types::GAIN => "gain".to_string(),
+        generator_types::DELAY_VOICE => "delayVoice".to_string(),
+        generator_types::IGNORE_NOTE_OFF => "ignoreNoteOff".to_string(),
+        generator_types::VARIATION_EFFECTS_SEND => "variationEffectsSend".to_string(),
+        generator_types::END_OPER => "endOper".to_string(),
         v => v.to_string(),
     }
 }
@@ -502,197 +355,200 @@ fn generator_type_name(gt: GeneratorType) -> String {
 // SPESSASYNTH_DEFAULT_MODULATORS
 // ---------------------------------------------------------------------------
 
-/// Creates a `Modulator` from raw source enums, applying the same logic as
-/// `DecodedModulator::new()` (effect/resonant detection, destination clamping).
-/// Used internally when building `SPESSASYNTH_DEFAULT_MODULATORS`.
-fn decoded_mod(
-    src_enum: u16,
-    sec_enum: u16,
-    dest: GeneratorType,
-    amount: i32,
-    transform_type: u16,
-) -> Modulator {
-    let primary_source = ModulatorSource::from_source_enum(src_enum);
-    let secondary_source = ModulatorSource::from_source_enum(sec_enum);
-
-    let is_effect_modulator = (src_enum == 0x00db || src_enum == 0x00dd)
-        && sec_enum == 0x0
-        && (dest == generator_types::REVERB_EFFECTS_SEND
-            || dest == generator_types::CHORUS_EFFECTS_SEND);
-
-    let is_default_resonant_modulator = src_enum == DEFAULT_RESONANT_MOD_SOURCE
-        && sec_enum == 0x0
-        && dest == generator_types::INITIAL_FILTER_Q;
-
-    let dest = if dest > MAX_GENERATOR {
-        generator_types::INVALID
-    } else {
-        dest
-    };
-
-    Modulator::new(
-        primary_source,
-        secondary_source,
-        dest,
-        amount as f64,
-        transform_type,
-        is_effect_modulator,
-        is_default_resonant_modulator,
-    )
+/// Equivalent to: getCurve(name, points)
+fn get_curve(name: &str, points: &[(i32, i32)]) -> Arc<CustomCurve> {
+    let points: Vec<CustomCurvePoint> = points
+        .iter()
+        .map(|&(cc, y)| CustomCurvePoint { x: cc << 7, y })
+        .collect();
+    Arc::new(CustomCurve::new(&points, name).expect("valid default curve"))
 }
 
-/// One term of an envelope time response: a bipolar CC source gated to one half of the CC.
-/// `below` is true for the half under 64, false for the half over it.
-/// Equivalent to: envelopeCC(cc, curve, destination, amount, below)
-fn envelope_cc(
-    cc: u8,
-    curve: u8,
-    destination: GeneratorType,
-    amount: i32,
-    below: bool,
-) -> Modulator {
-    decoded_mod(
-        get_mod_source_enum(curve, true, false, true, cc),
-        get_mod_source_enum(modulator_curve_types::SWITCH, false, below, true, cc),
+/// Equivalent to: ATTACK_TIME_CURVE
+pub static ATTACK_TIME_CURVE: LazyLock<Arc<CustomCurve>> = LazyLock::new(|| {
+    get_curve(
+        "Attack time",
+        &[
+            (0, 0),
+            (64, 8192),
+            (69, 8192),
+            (70, 8260),
+            (72, 8453),
+            (74, 8661),
+            (77, 8988),
+            (81, 9444),
+            (87, 10_149),
+            (95, 11_112),
+            (105, 12_337),
+            (119, 14_075),
+            (127, 15_074),
+        ],
+    )
+});
+
+/// Equivalent to: DECAY_RELEASE_TIME_CURVE
+pub static DECAY_RELEASE_TIME_CURVE: LazyLock<Arc<CustomCurve>> = LazyLock::new(|| {
+    get_curve(
+        "Decay and release time",
+        &[
+            (0, 0),
+            (64, 8192),
+            (65, 8263),
+            (66, 8290),
+            (67, 8297),
+            (110, 8297),
+            (111, 8309),
+            (113, 8387),
+            (114, 8434),
+            (115, 8488),
+            (116, 8548),
+            (117, 8618),
+            (118, 8697),
+            (119, 8789),
+            (120, 8896),
+            (121, 9023),
+            (122, 9176),
+            (123, 9363),
+            (124, 9601),
+            (125, 9919),
+            (126, 10_384),
+            (127, 11_205),
+        ],
+    )
+});
+
+/// Equivalent to: envelopeTime(cc, curve, destination)
+fn envelope_time(cc: u8, curve: &Arc<CustomCurve>, destination: GeneratorType) -> Modulator {
+    Modulator::new(
+        ModulatorSource::with_custom_curve(cc, Arc::clone(curve), true, true, false),
+        ModulatorSource::default(),
         destination,
-        amount,
+        9600.0,
         0,
     )
 }
 
-/// The full set of default SF2 + SpessaSynth modulators applied to every voice.
-///
-/// Layout: 9 SF2 standard modulators followed by 14 SpessaSynth custom modulators.
-/// Total: 23 entries.
-///
+/// The default SF2 modulators followed by the spessasynth ones.
 /// Equivalent to: SPESSASYNTH_DEFAULT_MODULATORS (= [...defaultSoundFont2Modulators, ...defaultSpessaSynthModulators])
 pub static SPESSASYNTH_DEFAULT_MODULATORS: LazyLock<Vec<Modulator>> = LazyLock::new(|| {
-    // Shorthand constants
-    let concave = modulator_curve_types::CONCAVE; // 1
-    let linear = modulator_curve_types::LINEAR; // 0
-    let convex = modulator_curve_types::CONVEX; // 2
-    let switch = modulator_curve_types::SWITCH; // 3
-
-    // Precomputed MIDI CC numbers
-    const NOTE_ON_VELOCITY: u8 = 2; // modulatorSources.noteOnVelocity
-    const MAIN_VOLUME: u8 = 7; // midiControllers.mainVolume
-    const EXPRESSION: u8 = 11; // midiControllers.expressionController
-    const TREMOLO_DEPTH: u8 = 92; // midiControllers.tremoloDepth
-    const ATTACK_TIME: u8 = 73; // midiControllers.attackTime
-    const RELEASE_TIME: u8 = 72; // midiControllers.releaseTime
-    const DECAY_TIME: u8 = 75; // midiControllers.decayTime
-    const BRIGHTNESS: u8 = 74; // midiControllers.brightness
-    const FILTER_RESONANCE: u8 = 71; // midiControllers.filterResonance
-    const SOFT_PEDAL: u8 = 67; // midiControllers.softPedal
-
-    // --- SF2 standard default modulators (Section 8.4 of the SF2 spec) ---
-
+    use modulator_curve_types::{CONCAVE, LINEAR, SWITCH};
     vec![
-        // 1. Velocity → initial attenuation (concave, unipolar, negative, non-CC)
-        //    source_enum = (1<<10)|(0<<9)|(1<<8)|(0<<7)|2 = 1024+256+2 = 1282 = 0x0502
-        decoded_mod(
-            get_mod_source_enum(concave, false, true, false, NOTE_ON_VELOCITY),
+        // Vel to attenuation
+        DecodedModulator::new(
+            get_mod_source_enum(CONCAVE, false, true, false, modulator_sources::NOTE_ON_VELOCITY),
             0x0,
             generator_types::INITIAL_ATTENUATION,
-            960,
+            960.0,
             0,
         ),
-        // 2. Mod wheel → vibLFO pitch
-        //    source_enum = 0x0081 (CC, index=1=modulation_wheel, linear, unipolar, positive)
-        decoded_mod(0x0081, 0x0, generator_types::VIB_LFO_TO_PITCH, 50, 0),
-        // 3. Main volume (CC 7) → initial attenuation (concave, unipolar, negative, CC)
-        //    source_enum = (1<<10)|(0<<9)|(1<<8)|(1<<7)|7 = 1024+256+128+7 = 1415 = 0x0587
-        decoded_mod(
-            get_mod_source_enum(concave, false, true, true, MAIN_VOLUME),
+        // Mod wheel to vibrato, scaled by the modulation depth range (RPN 5)
+        // 1600 is 50 cents at the default range, the source is full at 16 semitones
+        DecodedModulator::new(
+            0x00_81,
+            modulator_sources::MODULATION_DEPTH_RANGE as u16,
+            generator_types::VIB_LFO_TO_PITCH,
+            1600.0,
+            0,
+        ),
+        // Vol to attenuation
+        DecodedModulator::new(
+            get_mod_source_enum(CONCAVE, false, true, true, midi_controllers::MAIN_VOLUME),
             0x0,
             generator_types::INITIAL_ATTENUATION,
-            960,
+            960.0,
             0,
         ),
-        // 4. Channel pressure → vibLFO pitch
-        //    source_enum = 0x000d (non-CC, index=13=channel_pressure, linear, unipolar, positive)
-        decoded_mod(0x000d, 0x0, generator_types::VIB_LFO_TO_PITCH, 50, 0),
-        // 5. Pitch wheel → fine tune
-        //    primary = 0x020e (non-CC, bipolar, index=14=pitch_wheel)
-        //    secondary = 0x0010 (non-CC, unipolar, index=16=pitch_wheel_range)
-        decoded_mod(0x020e, 0x0010, generator_types::FINE_TUNE, 12_700, 0),
-        // 6. Pan (CC 10) → pan
-        //    source_enum = 0x028a (CC, bipolar, index=10=pan)
-        //    Amount: 500 instead of 1000 (see spessasynth issue #59)
-        decoded_mod(0x028a, 0x0, generator_types::PAN, 500, 0),
-        // 7. Expression (CC 11) → initial attenuation (concave, unipolar, negative, CC)
-        //    source_enum = (1<<10)|(0<<9)|(1<<8)|(1<<7)|11 = 1024+256+128+11 = 1419 = 0x058b
-        decoded_mod(
-            get_mod_source_enum(concave, false, true, true, EXPRESSION),
+        // Pitch wheel to tuning
+        DecodedModulator::new(0x02_0e, 0x00_10, generator_types::FINE_TUNE, 12_700.0, 0),
+        // Pan to uhh, pan
+        // Amount is 500 instead of 1000, see #59
+        DecodedModulator::new(0x02_8a, 0x0, generator_types::PAN, 500.0, 0),
+        // Expression to attenuation
+        DecodedModulator::new(
+            get_mod_source_enum(CONCAVE, false, true, true, midi_controllers::EXPRESSION_CONTROLLER),
             0x0,
             generator_types::INITIAL_ATTENUATION,
-            960,
+            960.0,
             0,
         ),
-        // 8. Reverb send (effect mod)
-        //    source_enum = 0x00db (non-CC, index=0xdb)
-        decoded_mod(0x00db, 0x0, generator_types::REVERB_EFFECTS_SEND, 200, 0),
-        // 9. Chorus send (effect mod)
-        //    source_enum = 0x00dd (non-CC, index=0xdd)
-        decoded_mod(0x00dd, 0x0, generator_types::CHORUS_EFFECTS_SEND, 200, 0),
-        // --- SpessaSynth custom default modulators ---
-
-        // Attack
-        envelope_cc(ATTACK_TIME, linear, generator_types::ATTACK_VOL_ENV, 9600, true),
-        envelope_cc(ATTACK_TIME, linear, generator_types::ATTACK_VOL_ENV, 9657, false),
-        envelope_cc(ATTACK_TIME, convex, generator_types::ATTACK_VOL_ENV, -1445, false),
-        // Decay
-        envelope_cc(DECAY_TIME, linear, generator_types::DECAY_VOL_ENV, 9779, true),
-        envelope_cc(DECAY_TIME, linear, generator_types::DECAY_VOL_ENV, -2997, false),
-        envelope_cc(DECAY_TIME, concave, generator_types::RELEASE_VOL_ENV, 8035, false),
-        envelope_cc(DECAY_TIME, convex, generator_types::DECAY_VOL_ENV, 435, false),
-        // Release
-        envelope_cc(RELEASE_TIME, linear, generator_types::RELEASE_VOL_ENV, 9779, true),
-        envelope_cc(RELEASE_TIME, linear, generator_types::RELEASE_VOL_ENV, -2997, false),
-        envelope_cc(RELEASE_TIME, concave, generator_types::RELEASE_VOL_ENV, 8035, false),
-        envelope_cc(RELEASE_TIME, convex, generator_types::RELEASE_VOL_ENV, 435, false),
-        // CC 74 (brightness) → initialFilterFc (linear, bipolar, positive, CC)
-        //     source_enum = 0|(1<<9)|(0<<8)|(1<<7)|74 = 512+128+74 = 714 = 0x02ca
-        decoded_mod(
-            get_mod_source_enum(linear, true, false, true, BRIGHTNESS),
-            0x0,
+        // Reverb effects to send
+        DecodedModulator::new(0x00_db, 0x0, generator_types::REVERB_EFFECTS_SEND, 1000.0, 0),
+        // Chorus effects to send
+        DecodedModulator::new(0x00_dd, 0x0, generator_types::CHORUS_EFFECTS_SEND, 1000.0, 0),
+        // Custom modulators heck yeah
+        // Attack time to attackVolEnv
+        envelope_time(
+            midi_controllers::ATTACK_TIME,
+            &ATTACK_TIME_CURVE,
+            generator_types::ATTACK_VOL_ENV,
+        ),
+        // Decay time to decayVolEnv
+        envelope_time(
+            midi_controllers::DECAY_TIME,
+            &DECAY_RELEASE_TIME_CURVE,
+            generator_types::DECAY_VOL_ENV,
+        ),
+        // Release time to releaseVolEnv
+        envelope_time(
+            midi_controllers::RELEASE_TIME,
+            &DECAY_RELEASE_TIME_CURVE,
+            generator_types::RELEASE_VOL_ENV,
+        ),
+        // Cc 74 (brightness) to filterFc
+        DecodedModulator::new(
+            // Linear forwards bipolar cc 74
+            get_mod_source_enum(LINEAR, true, false, true, midi_controllers::BRIGHTNESS),
+            0x0, // No controller
             generator_types::INITIAL_FILTER_FC,
-            9600,
+            4800.0,
             0,
         ),
-        // CC 71 (filter Q) → initialFilterQ (linear, bipolar, positive, CC)
-        //     source_enum = DEFAULT_RESONANT_MOD_SOURCE = 711 = 0x02c7
-        //     This is the default resonant modulator.
-        decoded_mod(
+        // Cc 71 (filter Q) to filter Q (default resonant modulator)
+        DecodedModulator::new(
             DEFAULT_RESONANT_MOD_SOURCE,
-            0x0,
+            0x0, // No controller
             generator_types::INITIAL_FILTER_Q,
-            250,
+            250.0,
             0,
         ),
-        // CC 67 (soft pedal) → initialFilterFc (switch, unipolar, positive, CC)
-        //     source_enum = (3<<10)|(0<<9)|(0<<8)|(1<<7)|67 = 3072+128+67 = 3267 = 0x0cc3
-        decoded_mod(
-            get_mod_source_enum(switch, false, false, true, SOFT_PEDAL),
-            0x0,
+        // Cc 71 to gain: cancels the filter's gain reduction for the resonance cc 71 adds, as GS and XG don't get quieter
+        // Half of the amount above, only above 64 (where the resonance goes up)
+        DecodedModulator::new(
+            DEFAULT_RESONANT_MOD_SOURCE,
+            RESONANT_COMPENSATOR_AMOUNT_SOURCE,
+            generator_types::GAIN,
+            125.0,
+            0,
+        ),
+        // Cc 67 (soft pedal) to filter fc
+        DecodedModulator::new(
+            // Switch unipolar positive 67
+            get_mod_source_enum(SWITCH, false, false, true, midi_controllers::SOFT_PEDAL),
+            0x0, // No controller
             generator_types::INITIAL_FILTER_FC,
-            -1200,
+            -1200.0,
             0,
         ),
+        // CC 94 (variation depth) to the variation send
+        DecodedModulator::new(0x00_de, 0x0, generator_types::VARIATION_EFFECTS_SEND, 1000.0, 0),
     ]
 });
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+/// Copies modulators. A Rust custom curve never changes after it is created, so the copies share the curves.
+/// Equivalent to: copyWithOwnCurves(modulators).modulators
+pub fn copy_with_own_curves(modulators: &[Modulator]) -> Vec<Modulator> {
+    modulators.iter().map(Modulator::copy_from).collect()
+}
+
+/// Equivalent to: copyDefaultModulators().modulators
+pub fn copy_default_modulators() -> Vec<Modulator> {
+    copy_with_own_curves(&SPESSASYNTH_DEFAULT_MODULATORS)
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::soundbank::enums::{modulator_curve_types, modulator_sources};
-    use crate::utils::indexed_array::IndexedByteArray;
-
-    // ── SPESSASYNTH_DEFAULT_MODULATORS ───────────────────────────────────────
+    use crate::soundbank::enums::modulator_curve_types;
 
     /// The default modulator table, as printed by TS. Re-capture it from TS when upstream
     /// changes the table (do not edit by hand):
@@ -703,28 +559,21 @@ mod tests {
     fn test_default_modulators_match_typescript() {
         let expected = [
             "2,0,0,1,1|0,0,0,0,0|48|960|0",
-            "1,1,0,0,0|0,0,0,0,0|6|50|0",
+            "1,1,0,0,0|17,0,0,0,0|6|1600|0",
             "7,1,0,1,1|0,0,0,0,0|48|960|0",
-            "13,0,0,0,0|0,0,0,0,0|6|50|0",
             "14,0,1,0,0|16,0,0,0,0|52|12700|0",
             "10,1,1,0,0|0,0,0,0,0|17|500|0",
             "11,1,0,1,1|0,0,0,0,0|48|960|0",
-            "91,1,0,0,0|0,0,0,0,0|16|200|0",
-            "93,1,0,0,0|0,0,0,0,0|15|200|0",
-            "73,1,1,0,0|73,1,0,1,3|34|9600|0",
-            "73,1,1,0,0|73,1,0,0,3|34|9657|0",
-            "73,1,1,0,2|73,1,0,0,3|34|-1445|0",
-            "75,1,1,0,0|75,1,0,1,3|36|9779|0",
-            "75,1,1,0,0|75,1,0,0,3|36|-2997|0",
-            "75,1,1,0,1|75,1,0,0,3|38|8035|0",
-            "75,1,1,0,2|75,1,0,0,3|36|435|0",
-            "72,1,1,0,0|72,1,0,1,3|38|9779|0",
-            "72,1,1,0,0|72,1,0,0,3|38|-2997|0",
-            "72,1,1,0,1|72,1,0,0,3|38|8035|0",
-            "72,1,1,0,2|72,1,0,0,3|38|435|0",
-            "74,1,1,0,0|0,0,0,0,0|8|9600|0",
+            "91,1,0,0,0|0,0,0,0,0|16|1000|0",
+            "93,1,0,0,0|0,0,0,0,0|15|1000|0",
+            "73,1,1,0,4|0,0,0,0,0|34|9600|0",
+            "75,1,1,0,4|0,0,0,0,0|36|9600|0",
+            "72,1,1,0,4|0,0,0,0,0|38|9600|0",
+            "74,1,1,0,0|0,0,0,0,0|8|4800|0",
             "71,1,1,0,0|0,0,0,0,0|9|250|0",
+            "71,1,1,0,0|71,1,0,0,3|86|125|0",
             "67,1,0,0,3|0,0,0,0,0|8|-1200|0",
+            "94,1,0,0,0|0,0,0,0,0|89|1000|0",
         ];
         let src = |s: &ModulatorSource| {
             format!(
@@ -746,550 +595,42 @@ mod tests {
             })
             .collect();
         assert_eq!(actual, expected);
-    }
-
-    // ── MOD_BYTE_SIZE ────────────────────────────────────────────────────────
-
-    #[test]
-    fn test_mod_byte_size() {
-        assert_eq!(MOD_BYTE_SIZE, 10);
-    }
-
-    // ── get_mod_source_enum ──────────────────────────────────────────────────
-
-    #[test]
-    fn test_get_mod_source_enum_linear_unipolar_positive_cc() {
-        // CC, linear, unipolar, positive, index=7 (main volume)
-        // = (0<<10)|(0<<9)|(0<<8)|(1<<7)|7 = 128+7 = 135
-        let e = get_mod_source_enum(modulator_curve_types::LINEAR, false, false, true, 7);
-        assert_eq!(e, 135);
-    }
-
-    #[test]
-    fn test_get_mod_source_enum_concave_negative_non_cc() {
-        // non-CC, concave, unipolar, negative, index=2 (note_on_velocity)
-        // = (1<<10)|(0<<9)|(1<<8)|(0<<7)|2 = 1024+256+2 = 1282
-        let e = get_mod_source_enum(modulator_curve_types::CONCAVE, false, true, false, 2);
-        assert_eq!(e, 1282);
-    }
-
-    #[test]
-    fn test_get_mod_source_enum_default_resonant() {
-        // The default resonant mod source must equal the module constant
-        // linear, bipolar, positive, CC, index=71 (filterResonance)
-        // = (0<<10)|(1<<9)|(0<<8)|(1<<7)|71 = 512+128+71 = 711
-        let e = get_mod_source_enum(modulator_curve_types::LINEAR, true, false, true, 71);
-        assert_eq!(e, DEFAULT_RESONANT_MOD_SOURCE);
-        assert_eq!(e, 711);
-    }
-
-    // ── Modulator::new / default ─────────────────────────────────────────────
-
-    #[test]
-    fn test_modulator_default() {
-        let m = Modulator::default();
-        assert_eq!(m.destination, generator_types::INVALID);
-        assert_eq!(m.transform_amount, 0.0);
-        assert_eq!(m.transform_type, 0);
-        assert!(!m.is_effect_modulator);
-        assert!(!m.is_default_resonant_modulator);
-    }
-
-    #[test]
-    fn test_modulator_new_sets_all_fields() {
-        let ps = ModulatorSource::new(7, modulator_curve_types::CONCAVE, true, false, true);
-        let ss = ModulatorSource::default();
-        let m = Modulator::new(ps.clone(), ss.clone(), 48, 960.0, 0, false, false);
-        assert_eq!(m.destination, 48);
-        assert_eq!(m.transform_amount, 960.0);
-        assert_eq!(m.transform_type, 0);
-        assert!(!m.is_effect_modulator);
-        assert!(!m.is_default_resonant_modulator);
-        assert_eq!(m.primary_source, ps);
-        assert_eq!(m.secondary_source, ss);
-    }
-
-    // ── Modulator::is_identical ──────────────────────────────────────────────
-
-    #[test]
-    fn test_is_identical_equal_modulators() {
-        let m1 = Modulator::default();
-        let m2 = Modulator::default();
-        assert!(Modulator::is_identical(&m1, &m2, false));
-    }
-
-    #[test]
-    fn test_is_identical_different_destination() {
-        let mut m1 = Modulator::default();
-        let m2 = Modulator::default();
-        m1.destination = 5;
-        assert!(!Modulator::is_identical(&m1, &m2, false));
-    }
-
-    #[test]
-    fn test_is_identical_different_transform_type() {
-        let mut m1 = Modulator::default();
-        let m2 = Modulator::default();
-        m1.transform_type = 2;
-        assert!(!Modulator::is_identical(&m1, &m2, false));
-    }
-
-    #[test]
-    fn test_is_identical_ignores_amount_when_check_false() {
-        let mut m1 = Modulator::default();
-        let m2 = Modulator::default();
-        m1.transform_amount = 999.0;
-        assert!(Modulator::is_identical(&m1, &m2, false));
-    }
-
-    #[test]
-    fn test_is_identical_checks_amount_when_check_true() {
-        let mut m1 = Modulator::default();
-        let m2 = Modulator::default();
-        m1.transform_amount = 999.0;
-        assert!(!Modulator::is_identical(&m1, &m2, true));
-    }
-
-    #[test]
-    fn test_is_identical_same_amount_check_true() {
-        let mut m1 = Modulator::default();
-        let mut m2 = Modulator::default();
-        m1.transform_amount = 500.0;
-        m2.transform_amount = 500.0;
-        assert!(Modulator::is_identical(&m1, &m2, true));
-    }
-
-    // ── Modulator::copy_from ────────────────────────────────────────────────
-
-    #[test]
-    fn test_copy_from_equal() {
-        let ps = ModulatorSource::new(7, modulator_curve_types::CONCAVE, true, false, true);
-        let m = Modulator::new(ps, ModulatorSource::default(), 48, 960.0, 0, true, false);
-        let copy = Modulator::copy_from(&m);
-        assert_eq!(m, copy);
-    }
-
-    #[test]
-    fn test_copy_from_independent() {
-        let mut m = Modulator::default();
-        m.transform_amount = 100.0;
-        let mut copy = Modulator::copy_from(&m);
-        copy.transform_amount = 999.0;
-        assert_eq!(m.transform_amount, 100.0); // original unchanged
-        assert_eq!(copy.transform_amount, 999.0);
-    }
-
-    // ── Modulator::sum_transform ─────────────────────────────────────────────
-
-    #[test]
-    fn test_sum_transform_adds_amounts() {
-        let mut m1 = Modulator::default();
-        m1.transform_amount = 300.0;
-        let mut m2 = Modulator::default();
-        m2.transform_amount = 200.0;
-        let result = m1.sum_transform(&m2);
-        assert_eq!(result.transform_amount, 500.0);
-    }
-
-    #[test]
-    fn test_sum_transform_returns_new_modulator() {
-        let mut m1 = Modulator::default();
-        m1.transform_amount = 300.0;
-        let m2 = Modulator::default();
-        let result = m1.sum_transform(&m2);
-        assert_eq!(m1.transform_amount, 300.0); // original unchanged
-        assert_eq!(result.transform_amount, 300.0);
-    }
-
-    #[test]
-    fn test_sum_transform_negative() {
-        let mut m1 = Modulator::default();
-        m1.transform_amount = 100.0;
-        let mut m2 = Modulator::default();
-        m2.transform_amount = -200.0;
-        let result = m1.sum_transform(&m2);
-        assert_eq!(result.transform_amount, -100.0);
-    }
-
-    // ── Modulator::write ─────────────────────────────────────────────────────
-
-    fn make_mod_buffer() -> IndexedByteArray {
-        IndexedByteArray::new(MOD_BYTE_SIZE)
-    }
-
-    #[test]
-    fn test_write_advances_index_by_10() {
-        let m = Modulator::default();
-        let mut buf = make_mod_buffer();
-        m.write(&mut buf, None);
-        assert_eq!(buf.current_index, 10);
-    }
-
-    #[test]
-    fn test_write_does_not_increment_index_without_indexes() {
-        // When no SoundFontWriteIndexes is provided, no counter is changed
-        let m = Modulator::default();
-        let mut buf = make_mod_buffer();
-        m.write(&mut buf, None);
-        // Just check no panic and correct buffer advancement
-        assert_eq!(buf.current_index, 10);
-    }
-
-    #[test]
-    fn test_write_increments_mod_count() {
-        let m = Modulator::default();
-        let mut buf = make_mod_buffer();
-        let mut idx = SoundFontWriteIndexes { mod_count: 0 };
-        m.write(&mut buf, Some(&mut idx));
-        assert_eq!(idx.mod_count, 1);
-    }
-
-    #[test]
-    fn test_write_encodes_correct_bytes() {
-        // Modulator: primary_source=(CC, linear, unipolar, positive, index=7) = 0x0087
-        //            destination=48 (INITIAL_ATTENUATION)
-        //            transform_amount=960
-        //            secondary_source=default=0x0000
-        //            transform_type=0
-        let ps = ModulatorSource::new(7, modulator_curve_types::LINEAR, true, false, false);
-        let ss = ModulatorSource::default();
-        let m = Modulator::new(ps, ss, 48, 960.0, 0, false, false);
-        let mut buf = IndexedByteArray::new(10);
-        m.write(&mut buf, None);
-
-        // primary source enum: (0<<10)|(0<<9)|(0<<8)|(1<<7)|7 = 135 = 0x0087
-        let ps_enum: u16 = 135;
-        // destination: 48 = 0x0030
-        let dest: u16 = 48;
-        // transform_amount: 960 = 0x03C0
-        let amt: u16 = 960;
-        // secondary source enum: 0
-        let ss_enum: u16 = 0;
-        // transform_type: 0
-        let tt: u16 = 0;
-
-        let expected: Vec<u8> = [ps_enum, dest, amt, ss_enum, tt]
-            .iter()
-            .flat_map(|&w| w.to_le_bytes())
-            .collect();
-        assert_eq!(&(*buf)[..10], expected.as_slice());
-    }
-
-    #[test]
-    fn test_write_negative_transform_amount() {
-        // transform_amount = -2400, written as i16 two's complement: 0xF6A0
-        let m = Modulator {
-            transform_amount: -2400.0,
-            ..Modulator::default()
-        };
-        let mut buf = IndexedByteArray::new(10);
-        m.write(&mut buf, None);
-        // bytes 4-5 = transform_amount as LE i16
-        let amt_bytes = [buf[4], buf[5]];
-        let read_back = i16::from_le_bytes(amt_bytes);
-        assert_eq!(read_back, -2400i16);
-    }
-
-    // ── DecodedModulator::new ────────────────────────────────────────────────
-
-    #[test]
-    fn test_decoded_modulator_new_basic() {
-        let dm = DecodedModulator::new(0x0502, 0x0, 48, 960, 0);
-        assert_eq!(dm.source_enum, 0x0502);
-        assert_eq!(dm.secondary_source_enum, 0x0);
-        assert_eq!(dm.destination, 48);
-        assert_eq!(dm.transform_amount, 960.0);
-        assert_eq!(dm.transform_type, 0);
-        assert!(!dm.is_effect_modulator);
-        assert!(!dm.is_default_resonant_modulator);
-    }
-
-    #[test]
-    fn test_decoded_modulator_effect_reverb() {
-        let dm = DecodedModulator::new(0x00db, 0x0, generator_types::REVERB_EFFECTS_SEND, 200, 0);
-        assert!(dm.is_effect_modulator);
-        assert!(!dm.is_default_resonant_modulator);
-    }
-
-    #[test]
-    fn test_decoded_modulator_effect_chorus() {
-        let dm = DecodedModulator::new(0x00dd, 0x0, generator_types::CHORUS_EFFECTS_SEND, 200, 0);
-        assert!(dm.is_effect_modulator);
-    }
-
-    #[test]
-    fn test_decoded_modulator_effect_wrong_destination() {
-        // Reverb source_enum but wrong destination → not effect mod
-        let dm = DecodedModulator::new(0x00db, 0x0, generator_types::INITIAL_ATTENUATION, 200, 0);
-        assert!(!dm.is_effect_modulator);
-    }
-
-    #[test]
-    fn test_decoded_modulator_effect_wrong_secondary() {
-        // Reverb source_enum but non-zero secondary → not effect mod
-        let dm =
-            DecodedModulator::new(0x00db, 0x0001, generator_types::REVERB_EFFECTS_SEND, 200, 0);
-        assert!(!dm.is_effect_modulator);
-    }
-
-    #[test]
-    fn test_decoded_modulator_default_resonant() {
-        // source_enum = 711 (DEFAULT_RESONANT_MOD_SOURCE), secondary=0, dest=initialFilterQ(9)
-        let dm = DecodedModulator::new(
-            DEFAULT_RESONANT_MOD_SOURCE,
-            0x0,
-            generator_types::INITIAL_FILTER_Q,
-            200,
-            0,
-        );
-        assert!(dm.is_default_resonant_modulator);
-        assert!(!dm.is_effect_modulator);
-    }
-
-    #[test]
-    fn test_decoded_modulator_resonant_wrong_source() {
-        let dm = DecodedModulator::new(0x0001, 0x0, generator_types::INITIAL_FILTER_Q, 200, 0);
-        assert!(!dm.is_default_resonant_modulator);
-    }
-
-    #[test]
-    fn test_decoded_modulator_clamps_invalid_destination() {
-        let dm = DecodedModulator::new(0x0, 0x0, 100, 0, 0); // 100 > MAX_GENERATOR(66)
-        assert_eq!(dm.destination, generator_types::INVALID);
-    }
-
-    #[test]
-    fn test_decoded_modulator_valid_destination_not_clamped() {
-        let dm = DecodedModulator::new(0x0, 0x0, 66, 0, 0); // 66 == MAX_GENERATOR
-        assert_eq!(dm.destination, 66);
-    }
-
-    // ── DecodedModulator primary_source / secondary_source ───────────────────
-
-    #[test]
-    fn test_decoded_modulator_primary_source_roundtrip() {
-        let ps = ModulatorSource::new(7, modulator_curve_types::CONCAVE, true, true, false);
-        let enum_val = ps.to_source_enum();
-        let dm = DecodedModulator::new(enum_val, 0, 0, 0, 0);
-        let decoded = dm.primary_source();
-        assert_eq!(decoded, ps);
-    }
-
-    #[test]
-    fn test_decoded_modulator_secondary_source_default() {
-        let dm = DecodedModulator::new(0, 0, 0, 0, 0);
-        let sec = dm.secondary_source();
-        assert_eq!(sec, ModulatorSource::default());
-    }
-
-    // ── DEFAULT_RESONANT_MOD_SOURCE value ────────────────────────────────────
-
-    #[test]
-    fn test_default_resonant_mod_source_value() {
-        // Verify the computed constant matches the expected formula
-        // = (0<<10)|(1<<9)|(0<<8)|(1<<7)|71 = 512+128+71 = 711
-        assert_eq!(DEFAULT_RESONANT_MOD_SOURCE, 711);
-    }
-
-    #[test]
-    fn test_default_resonant_mod_source_matches_get_fn() {
-        let computed = get_mod_source_enum(
-            modulator_curve_types::LINEAR,
-            true,  // isBipolar
-            false, // isNegative
-            true,  // isCC
-            71,    // filterResonance
-        );
-        assert_eq!(computed, DEFAULT_RESONANT_MOD_SOURCE);
-    }
-
-    // ── SPESSASYNTH_DEFAULT_MODULATORS ───────────────────────────────────────
-
-    #[test]
-    fn test_default_modulators_count() {
-        let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
-        assert_eq!(
-            mods.len(),
-            23,
-            "Expected 9 SF2 + 14 SpessaSynth = 23 modulators"
-        );
-    }
-
-    #[test]
-    fn test_default_mod_0_vel_to_attenuation() {
-        let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
-        let m = &mods[0];
-        assert_eq!(m.destination, generator_types::INITIAL_ATTENUATION);
-        assert_eq!(m.transform_amount, 960.0);
-        // primary: non-CC, concave, unipolar, negative, note_on_velocity=2
-        assert_eq!(m.primary_source.index, modulator_sources::NOTE_ON_VELOCITY);
-        assert!(!m.primary_source.is_cc);
-        assert!(m.primary_source.is_negative);
-        assert!(!m.primary_source.is_bipolar);
-    }
-
-    #[test]
-    fn test_default_mod_1_mod_wheel_to_vibrato() {
-        let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
-        let m = &mods[1];
-        assert_eq!(m.destination, generator_types::VIB_LFO_TO_PITCH);
-        assert_eq!(m.transform_amount, 50.0);
-        // primary source_enum = 0x0081 → CC, index=1 (mod wheel), linear, unipolar, positive
-        assert_eq!(m.primary_source.to_source_enum(), 0x0081);
-        assert!(m.primary_source.is_cc);
-        assert_eq!(m.primary_source.index, 1);
-    }
-
-    #[test]
-    fn test_default_mod_4_pitch_wheel() {
-        // Pitch wheel to tuning: source=0x020e, secondary=0x0010, dest=FINE_TUNE, amount=12700
-        let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
-        let m = &mods[4];
-        assert_eq!(m.destination, generator_types::FINE_TUNE);
-        assert_eq!(m.transform_amount, 12_700.0);
-        assert_eq!(m.primary_source.to_source_enum(), 0x020e);
-        assert_eq!(m.secondary_source.to_source_enum(), 0x0010);
-    }
-
-    #[test]
-    fn test_default_mod_7_reverb_is_effect() {
-        let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
-        let m = &mods[7];
-        assert_eq!(m.destination, generator_types::REVERB_EFFECTS_SEND);
-        assert_eq!(m.transform_amount, 200.0);
-        assert!(m.is_effect_modulator);
-    }
-
-    #[test]
-    fn test_default_mod_8_chorus_is_effect() {
-        let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
-        let m = &mods[8];
-        assert_eq!(m.destination, generator_types::CHORUS_EFFECTS_SEND);
-        assert_eq!(m.transform_amount, 200.0);
-        assert!(m.is_effect_modulator);
-    }
-
-    #[test]
-    fn test_default_mod_21_resonant_is_default_resonant() {
-        // Index 21 (0-based) = CC 71 filter Q → initialFilterQ (default resonant)
-        let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
-        let m = &mods[21];
-        assert_eq!(m.destination, generator_types::INITIAL_FILTER_Q);
-        assert_eq!(m.transform_amount, 250.0);
-        assert!(m.is_default_resonant_modulator);
-        assert!(!m.is_effect_modulator);
-    }
-
-    #[test]
-    fn test_default_mod_22_soft_pedal_filter_fc_negative_amount() {
-        // Index 22 (last entry) = CC 67 soft pedal → initialFilterFc, amount=-1200.
-        let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
-        let m = &mods[22];
-        assert_eq!(m.destination, generator_types::INITIAL_FILTER_FC);
-        assert_eq!(m.transform_amount, -1200.0);
-        assert!(m.primary_source.is_cc);
-        assert_eq!(m.primary_source.index, 67); // soft pedal = CC 67
-    }
-
-    #[test]
-    fn test_default_modulators_no_invalid_destination() {
-        // All default modulators should have valid destinations
-        let mods = &*SPESSASYNTH_DEFAULT_MODULATORS;
-        for (i, m) in mods.iter().enumerate() {
-            assert_ne!(
-                m.destination,
-                generator_types::INVALID,
-                "modulator[{}] has INVALID destination",
-                i
-            );
+        for m in SPESSASYNTH_DEFAULT_MODULATORS.iter() {
+            assert!(!m.is_missing_curve());
         }
     }
 
-    // ── Display ──────────────────────────────────────────────────────────────
-
     #[test]
-    fn test_modulator_display_contains_source_and_destination() {
-        let ps = ModulatorSource::new(
-            modulator_sources::NOTE_ON_VELOCITY,
-            modulator_curve_types::CONCAVE,
-            false,
-            false,
-            true,
-        );
-        let m = Modulator::new(
-            ps,
-            ModulatorSource::default(),
-            generator_types::INITIAL_ATTENUATION,
-            960.0,
-            0,
-            false,
-            false,
-        );
-        let s = m.to_string();
-        assert!(s.contains("Source:"), "got: {}", s);
-        assert!(s.contains("Secondary source:"), "got: {}", s);
-        assert!(s.contains("initialAttenuation"), "got: {}", s);
-        assert!(s.contains("960"), "got: {}", s);
-    }
-
-    #[test]
-    fn test_modulator_display_absolute_value_suffix() {
-        let m = Modulator {
-            transform_type: 2,
-            transform_amount: 100.0,
-            ..Modulator::default()
-        };
-        let s = m.to_string();
-        assert!(s.contains("absolute value"), "got: {}", s);
-    }
-
-    #[test]
-    fn test_modulator_display_no_suffix_for_linear() {
-        let m = Modulator {
-            transform_type: 0,
-            transform_amount: 100.0,
-            ..Modulator::default()
-        };
-        let s = m.to_string();
-        assert!(!s.contains("absolute value"), "got: {}", s);
-    }
-
-    // ── generator_type_name ──────────────────────────────────────────────────
-
-    #[test]
-    fn test_generator_type_name_known() {
+    fn test_source_enum_constants() {
         assert_eq!(
-            generator_type_name(generator_types::INITIAL_ATTENUATION),
-            "initialAttenuation"
+            get_mod_source_enum(modulator_curve_types::LINEAR, true, false, true, 71),
+            DEFAULT_RESONANT_MOD_SOURCE
         );
         assert_eq!(
-            generator_type_name(generator_types::VIB_LFO_TO_PITCH),
-            "vibLfoToPitch"
+            get_mod_source_enum(modulator_curve_types::SWITCH, false, false, true, 71),
+            RESONANT_COMPENSATOR_AMOUNT_SOURCE
         );
-        assert_eq!(generator_type_name(generator_types::INVALID), "INVALID");
-        assert_eq!(generator_type_name(generator_types::FINE_TUNE), "fineTune");
-        assert_eq!(generator_type_name(generator_types::PAN), "pan");
     }
 
     #[test]
-    fn test_generator_type_name_unknown() {
-        assert_eq!(generator_type_name(100), "100");
+    fn test_decoded_modulator_illegal_sources() {
+        // Link source (non-CC 127)
+        assert_eq!(DecodedModulator::new(0x007f, 0, 48, 1.0, 0).destination, generator_types::INVALID);
+        // CC 6 (data entry)
+        assert_eq!(DecodedModulator::new(0x0086, 0, 48, 1.0, 0).destination, generator_types::INVALID);
+        // Destination above the last generator
+        assert_eq!(DecodedModulator::new(0x0081, 0, 90, 1.0, 0).destination, generator_types::INVALID);
+        // Modulation depth range is a general source
+        assert_eq!(DecodedModulator::new(0x0011, 0, 48, 1.0, 0).destination, 48);
     }
 
-    // ── SoundFontWriteIndexes ─────────────────────────────────────────────────
-
     #[test]
-    fn test_sound_font_write_indexes_initial() {
-        let idx = SoundFontWriteIndexes { mod_count: 0 };
-        assert_eq!(idx.mod_count, 0);
-    }
-
-    #[test]
-    fn test_sound_font_write_indexes_increment_via_write() {
-        let m = Modulator::default();
-        let mut buf = IndexedByteArray::new(10);
-        let mut idx = SoundFontWriteIndexes { mod_count: 5 };
-        m.write(&mut buf, Some(&mut idx));
-        assert_eq!(idx.mod_count, 6);
+    fn test_write_roundtrip() {
+        let m = DecodedModulator::new(0x0502, 0x0081, 48, -960.0, 2);
+        let mut data = IndexedByteArray::new(MOD_BYTE_SIZE);
+        let mut idx = SoundFontWriteIndexes { mod_count: 0 };
+        m.write(&mut data, Some(&mut idx));
+        assert_eq!(idx.mod_count, 1);
+        assert_eq!(data.to_vec(), vec![0x02u8, 0x05, 48, 0, 0x40, 0xfc, 0x81, 0x00, 2, 0]);
     }
 }

@@ -1,5 +1,6 @@
 //! Time Ctrl Delay (`01 54`): a mono delay whose time slews toward the delay parameter.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/effects/time_control_delay.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use super::prelude::*;
 use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::blocks::delay::Delay;
@@ -99,8 +100,8 @@ impl GSEffect for GSTimeControlDelay {
         let p = self.base.parameters;
         self.target = ((delay2(self.base.controlled(0, 0)) * 127.0) / 128.0) * 32.0;
         // The slew per 32 kHz sample is 1 / (32000 x the time constant)
-        let step = 1.0 / (32_000.0 * slew_time(p[1]));
-        self.slew = 1.0 - (1.0 - step).powf(32_000.0 / self.base.sample_rate);
+        let step = 1.0 / (HARDWARE_RATE * slew_time(p[1]));
+        self.slew = 1.0 - (1.0 - step).powf(HARDWARE_RATE / self.base.sample_rate);
         self.feedback = feedback_gain(self.base.controlled(1, 2));
         self.delay.set_hf_damp(hf_damp(p[3]));
         self.pan_l = pan_left(p[4]);

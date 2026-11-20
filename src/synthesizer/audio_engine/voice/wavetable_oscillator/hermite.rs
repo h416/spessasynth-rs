@@ -31,13 +31,19 @@ impl WavetableOscillator {
         let loop_end = self.loop_end;
         let loop_length = self.loop_length;
         let end = self.end;
+        let turn = self.turn;
         let mut cursor = self.cursor;
         let at = |idx: usize| sample_data[idx] as f64;
 
         if self.is_looping {
             let mut has_looped = self.has_looped;
             // Below this cursor, the points after the cursor are inside the loop, so no wrapping is needed
-            let safe_end = loop_end - 2.0;
+            // An alternating loop reads straight only up to its turn point
+            let safe_end = loop_end.min(turn + 1.0) - 2.0;
+            // The way back of an alternating loop: from the turn point up to this cursor all four points
+            // Are reflections, read backwards without wrapping
+            let mirror_end = loop_end - 2.0;
+            let two_turn = 2.0 * turn;
             let mut i = 0;
             while i < sample_count {
                 // Above this cursor, the point before the cursor is valid without wrapping
@@ -58,6 +64,21 @@ impl WavetableOscillator {
                     }
                 }
 
+                // Mirrored fast path, the same as above with the points read from their reflections
+                if cursor >= turn + 1.0 {
+                    while i < sample_count && cursor < mirror_end {
+                        let y0 = cursor as usize;
+                        let t = cursor - y0 as f64;
+                        let r = (two_turn - y0 as f64) as usize;
+                        output_buffer[i] = hermite(at(r + 1), at(r), at(r - 1), at(r - 2), t);
+                        cursor += step;
+                        i += 1;
+                    }
+                    if i >= sample_count {
+                        break;
+                    }
+                }
+
                 // Slow path, a single sample near the loop points or the sample start
                 // Check for loop first (end is exclusive so it's `<=` and not `<`)
                 // Extreme playback rates:
@@ -70,7 +91,7 @@ impl WavetableOscillator {
                 }
 
                 // Grab the 4 points
-                let y0 = cursor as i64; // Point before the cursor.
+                let mut y0 = cursor as i64; // Point before the cursor.
                 let mut ym1 = y0 - 1; // Point before y0
                 let mut y1 = y0 + 1; // Point after the cursor
                 let mut y2 = y0 + 2; // Point after y1
@@ -100,6 +121,21 @@ impl WavetableOscillator {
                 }
                 while y2 as f64 >= loop_end {
                     y2 = (y2 as f64 - loop_length) as i64;
+                }
+
+                // The way back of an alternating loop
+                let two_turn_i = two_turn as i64;
+                if ym1 as f64 > turn {
+                    ym1 = two_turn_i - ym1;
+                }
+                if y0 as f64 > turn {
+                    y0 = two_turn_i - y0;
+                }
+                if y1 as f64 > turn {
+                    y1 = two_turn_i - y1;
+                }
+                if y2 as f64 > turn {
+                    y2 = two_turn_i - y2;
                 }
 
                 output_buffer[i] = hermite(

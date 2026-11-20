@@ -5,13 +5,15 @@
 //! `getValue()` takes an `SF2Channel` (`midiControllers`, `polyPressures`,
 //! `midiParameters.pressure` / `pitchWheelRange`). Rust passes [`SF2Channel`] without the
 //! poly pressures: those are copied to the voice before the modulators are computed.
+//!
+//! TS keeps the curve as a `ModulatorCurve` object (`storedCurve`). Rust keeps the curve type and, for a
+//! custom curve that was resolved from the bank, the curve itself (`custom_curve`). A custom type without a
+//! curve, or a type this version does not know, outputs 0 like TS `UnresolvedCurve`.
 use std::fmt;
-use std::sync::LazyLock;
+use std::sync::Arc;
 
-use crate::soundbank::basic_soundbank::modulator_curves::{
-    MOD_CURVE_TYPES_AMOUNT, MOD_SOURCE_TRANSFORM_POSSIBILITIES, MODULATOR_RESOLUTION,
-    get_modulator_curve_value,
-};
+use crate::soundbank::basic_soundbank::custom_curve::CustomCurve;
+use crate::soundbank::basic_soundbank::modulator_curve::{built_in_table, curve_type_name};
 use crate::soundbank::enums::{ModulatorCurveType, modulator_curve_types, modulator_sources};
 use crate::soundbank::types::ModulatorSourceIndex;
 use crate::utils::byte_functions::bit_mask::{bit_mask_to_bool, to_numeric_bool};
@@ -31,6 +33,9 @@ pub struct SF2Channel<'a> {
     pub pressure: i32,
     /// Equivalent to: midiParameters.pitchWheelRange
     pub pitch_wheel_range: f64,
+    /// The modulation depth range (RPN 5) in cents.
+    /// Equivalent to: midiParameters.modulationDepth
+    pub modulation_depth: f64,
 }
 
 /// Minimal voice data needed by [`ModulatorSource::get_value`].
@@ -50,32 +55,11 @@ pub struct VoiceModInputs {
     pub pressure: u8,
 }
 
-// ---------------------------------------------------------------------------
-// Precomputed transform table
-// Equivalent to: const MODULATOR_TRANSFORMS = new Float32Array(...)
-//
-// Layout:
-//   table[MODULATOR_RESOLUTION * (curve_type * MOD_CURVE_TYPES_AMOUNT + transform_type) + raw_value]
-// ---------------------------------------------------------------------------
-
-static MODULATOR_TRANSFORMS: LazyLock<Vec<f32>> = LazyLock::new(|| {
-    let size = MODULATOR_RESOLUTION * MOD_SOURCE_TRANSFORM_POSSIBILITIES * MOD_CURVE_TYPES_AMOUNT;
-    let mut table = vec![0.0f32; size];
-    for curve_type in 0..MOD_CURVE_TYPES_AMOUNT {
-        for transform_type in 0..MOD_SOURCE_TRANSFORM_POSSIBILITIES {
-            let table_index =
-                MODULATOR_RESOLUTION * (curve_type * MOD_CURVE_TYPES_AMOUNT + transform_type);
-            for value in 0..MODULATOR_RESOLUTION {
-                table[table_index + value] = get_modulator_curve_value(
-                    transform_type as u8,
-                    curve_type as u8,
-                    value as f64 / MODULATOR_RESOLUTION as f64,
-                ) as f32;
-            }
-        }
-    }
-    table
-});
+/// `Math.round`: half-up, unlike `f64::round` (half away from zero).
+#[inline]
+fn js_round(x: f64) -> f64 {
+    (x + 0.5).floor()
+}
 
 // ---------------------------------------------------------------------------
 // ModulatorSource
@@ -100,6 +84,9 @@ pub struct ModulatorSource {
     /// The curve type applied to the source value.
     /// Equivalent to: curveType
     pub curve_type: ModulatorCurveType,
+    /// The custom curve (SFe only), when `curve_type` is custom and the curve was found in the bank.
+    /// Equivalent to: curve (when it is a CustomCurve)
+    pub custom_curve: Option<Arc<CustomCurve>>,
 }
 
 impl ModulatorSource {
@@ -118,13 +105,54 @@ impl ModulatorSource {
             index,
             is_cc,
             curve_type,
+            custom_curve: None,
         }
+    }
+
+    /// Creates a source that uses a custom curve.
+    /// Equivalent to: constructor(index, curve, isCC, isBipolar, isNegative) with a CustomCurve
+    pub fn with_custom_curve(
+        index: ModulatorSourceIndex,
+        curve: Arc<CustomCurve>,
+        is_cc: bool,
+        is_bipolar: bool,
+        is_negative: bool,
+    ) -> Self {
+        let mut source = Self::new(
+            index,
+            modulator_curve_types::CUSTOM,
+            is_cc,
+            is_bipolar,
+            is_negative,
+        );
+        source.custom_curve = Some(curve);
+        source
+    }
+
+    /// Selects a built-in curve type (a custom type without a curve outputs 0).
+    /// Equivalent to: set curveType(type)
+    pub fn set_curve_type(&mut self, curve_type: ModulatorCurveType) {
+        self.curve_type = curve_type;
+        self.custom_curve = None;
+    }
+
+    /// Assigns a custom curve.
+    /// Equivalent to: set curve(curve) with a CustomCurve
+    pub fn set_custom_curve(&mut self, curve: Arc<CustomCurve>) {
+        self.curve_type = modulator_curve_types::CUSTOM;
+        self.custom_curve = Some(curve);
+    }
+
+    /// Checks if the source is a given MIDI Controller.
+    /// Equivalent to: isController(controller)
+    pub fn is_controller(&self, controller: u8) -> bool {
+        self.is_cc && self.index == controller
     }
 
     /// Decodes a ModulatorSource from a raw SF2 source enum (16-bit).
     ///
     /// Bit layout (SF2 spec 2.10):
-    ///   bits [11:10] = curve type, bit 9 = bipolar, bit 8 = negative,
+    ///   bits [15:10] = curve type, bit 9 = bipolar, bit 8 = negative,
     ///   bit 7 = CC flag, bits [6:0] = index.
     ///
     /// Equivalent to: static fromSourceEnum(sourceEnum)
@@ -133,11 +161,12 @@ impl ModulatorSource {
         let is_negative = bit_mask_to_bool(source_enum as u32, 8);
         let is_cc = bit_mask_to_bool(source_enum as u32, 7);
         let index = (source_enum & 0x7F) as ModulatorSourceIndex;
-        let curve_type = ((source_enum >> 10) & 0x3) as ModulatorCurveType;
+        // 6 bits, SF2 curve types are 0 to 3, SFe adds 4 (custom)
+        let curve_type = ((source_enum >> 10) & 0x3f) as ModulatorCurveType;
         Self::new(index, curve_type, is_cc, is_bipolar, is_negative)
     }
 
-    /// Copies a ModulatorSource.
+    /// Copies a ModulatorSource, with the same curve.
     /// Equivalent to: static copyFrom(source)
     pub fn copy_from(source: &ModulatorSource) -> Self {
         source.clone()
@@ -160,7 +189,21 @@ impl ModulatorSource {
             && self.is_negative == other.is_negative
             && self.is_cc == other.is_cc
             && self.is_bipolar == other.is_bipolar
-            && self.curve_type == other.curve_type
+            // Custom curves are the same only if their points are
+            && self.curve_is_identical(other)
+    }
+
+    /// Equivalent to: ModulatorCurve.isIdentical(other) / CustomCurve.isIdentical(other)
+    fn curve_is_identical(&self, other: &ModulatorSource) -> bool {
+        match (&self.custom_curve, &other.custom_curve) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b) || a.points() == b.points(),
+            (None, None) => {
+                // A custom curve is only identical to a custom curve with the same points, never to an unresolved one
+                self.curve_type == other.curve_type
+                    && self.curve_type != modulator_curve_types::CUSTOM
+            }
+            _ => false,
+        }
     }
 
     /// Computes the current float value from this source.
@@ -179,41 +222,45 @@ impl ModulatorSource {
         pitch_wheel: i32,
         voice: &VoiceModInputs,
     ) -> f32 {
-        // Compute the raw 14-bit value (0 – 16 383).
-        let raw_value: usize = if self.is_cc {
-            channel.midi_controllers[self.index as usize].max(0) as usize
+        // The raw 14-bit value (0 - 16,383)
+        let raw_value: i32 = if self.is_cc {
+            channel.midi_controllers[self.index as usize] as i32
         } else {
             match self.index {
-                // TS: voice.targetKey << 7 (effective key, not the raw pressed note).
-                modulator_sources::NOTE_ON_KEY_NUM => (voice.target_key.max(0) as usize) << 7,
-                modulator_sources::NOTE_ON_VELOCITY => (voice.velocity as usize) << 7,
-                modulator_sources::POLY_PRESSURE => (voice.pressure as usize) << 7,
-                modulator_sources::PITCH_WHEEL => pitch_wheel.max(0) as usize,
-                modulator_sources::CHANNEL_PRESSURE => (channel.pressure.max(0) as usize) << 7,
+                modulator_sources::NOTE_ON_VELOCITY => (voice.velocity as i32) << 7,
+                modulator_sources::NOTE_ON_KEY_NUM => (voice.target_key as i32) << 7,
+                // Use MIDI Note here as key shift is internal
+                modulator_sources::POLY_PRESSURE => (voice.pressure as i32) << 7,
+                modulator_sources::CHANNEL_PRESSURE => channel.pressure << 7,
+                modulator_sources::PITCH_WHEEL => pitch_wheel,
                 // Pitch wheel range may be a floating point number!
                 // Therefore, something like "0.5 << 7" won't work,
                 // So we multiply it by 128 which is essentially the same here
                 // But it allows for fractional pitch wheel range!
+                // Ranges of 128 semitones and more would read past the curve tables
                 modulator_sources::PITCH_WHEEL_RANGE => {
-                    (channel.pitch_wheel_range * 128.0).floor().max(0.0) as usize
+                    16_383.min((channel.pitch_wheel_range * 128.0).floor() as i32)
                 }
-                // `default:` falls through to noController: any undefined non-CC index
-                // (e.g. the SF2.04 link source 127) equals 1
-                _ => 16_383,
+                // The parameter is in cents, RPN 5 value is cents * 1.28 (100/128 cents per step)
+                // The source is full at 16 semitones, so it is 8 times that value
+                modulator_sources::MODULATION_DEPTH_RANGE => {
+                    16_383.min(js_round(channel.modulation_depth * 1.28) as i32 * 8)
+                }
+                // `default:` falls through to noController
+                _ => 16_383, // Equals to 1
             }
         };
 
-        // Clamp to valid table range.
-        let raw_value = raw_value.min(MODULATOR_RESOLUTION - 1);
-
-        // 2-bit transform type: 0bPD (polarity MSB, direction LSB).
-        // Equivalent to: const transformType = (isBipolar ? 0b10 : 0) | (isNegative ? 1 : 0)
-        let transform_type: usize =
-            (if self.is_bipolar { 0b10 } else { 0 }) | (if self.is_negative { 1 } else { 0 });
-
-        MODULATOR_TRANSFORMS[MODULATOR_RESOLUTION
-            * (self.curve_type as usize * MOD_CURVE_TYPES_AMOUNT + transform_type)
-            + raw_value]
+        if let Some(curve) = &self.custom_curve {
+            return curve.get_value(raw_value, self.is_bipolar, self.is_negative);
+        }
+        // 2-bit transform as in 0bPD
+        let transform = (if self.is_bipolar { 0b10 } else { 0 }) | (if self.is_negative { 1 } else { 0 });
+        match built_in_table(self.curve_type, transform) {
+            Some(table) => table[raw_value as usize],
+            // An unresolved curve outputs 0
+            None => 0.0,
+        }
     }
 }
 
@@ -221,7 +268,10 @@ impl fmt::Display for ModulatorSource {
     /// Equivalent to: toString()
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let source_name = source_index_name(self.index, self.is_cc);
-        let curve_name = curve_type_name(self.curve_type);
+        let curve_name = match &self.custom_curve {
+            Some(curve) => curve.to_string(),
+            None => curve_type_name(self.curve_type),
+        };
         let polarity = if self.is_bipolar {
             "bipolar"
         } else {
@@ -286,6 +336,7 @@ fn source_index_name(index: ModulatorSourceIndex, is_cc: bool) -> String {
             13 => Some("channel_pressure"),
             14 => Some("pitch_wheel"),
             16 => Some("pitch_wheel_range"),
+            17 => Some("modulation_depth_range"),
             127 => Some("link"),
             _ => None,
         };
@@ -294,15 +345,6 @@ fn source_index_name(index: ModulatorSourceIndex, is_cc: bool) -> String {
     }
 }
 
-fn curve_type_name(curve_type: ModulatorCurveType) -> &'static str {
-    match curve_type {
-        modulator_curve_types::LINEAR => "linear",
-        modulator_curve_types::CONCAVE => "concave",
-        modulator_curve_types::CONVEX => "convex",
-        modulator_curve_types::SWITCH => "switch",
-        _ => "unknown",
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -326,7 +368,7 @@ mod tests {
 
     /// A channel with the default pressure (0) and pitch wheel range (2).
     fn chan(midi_controllers: &[i16]) -> SF2Channel<'_> {
-        SF2Channel { midi_controllers, pressure: 0, pitch_wheel_range: 2.0 }
+        SF2Channel { midi_controllers, pressure: 0, pitch_wheel_range: 2.0, modulation_depth: 50.0 }
     }
 
     fn voice(midi_note: u8, velocity: u8, pressure: u8) -> VoiceModInputs {
@@ -573,7 +615,7 @@ mod tests {
         let v = voice(60, 100, 0);
         let val = s.get_value(&chan(&cc), 0, &v);
         // Main volume default is 100, stored as 100 << 7 = 12800
-        let expected = 12800.0f32 / MODULATOR_RESOLUTION as f32;
+        let expected = 12800.0f32 / 16_384.0;
         assert!(
             approx_eq(val, expected),
             "expected {}, got {}",
@@ -694,17 +736,5 @@ mod tests {
         let display = s.to_string();
         assert!(display.contains("pitch_wheel"), "got: {}", display);
         assert!(display.contains("bipolar"), "got: {}", display);
-    }
-
-    // ── MODULATOR_TRANSFORMS table sanity ───────────────────────────────────
-
-    #[test]
-    fn test_precomputed_table_size() {
-        // Force table initialization
-        let _ = ModulatorSource::default().get_value(&chan(&make_controllers()), 0, &voice(60, 100, 0));
-        assert_eq!(
-            MODULATOR_TRANSFORMS.len(),
-            MODULATOR_RESOLUTION * MOD_SOURCE_TRANSFORM_POSSIBILITIES * MOD_CURVE_TYPES_AMOUNT
-        );
     }
 }

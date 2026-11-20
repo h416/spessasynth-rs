@@ -1,5 +1,5 @@
 pub mod compute_modulator;
-pub mod lowpass_filter;
+pub mod voice_filter;
 pub mod modulation_envelope;
 pub mod unit_converter;
 pub mod voice;

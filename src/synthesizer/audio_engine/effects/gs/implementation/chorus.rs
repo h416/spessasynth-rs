@@ -1,11 +1,14 @@
-//! chorus.rs
-//! purpose: The default GS chorus implementation.
+//! The default GS chorus implementation, modeled on the chorus of the Sound Canvas.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/chorus.ts
 
-use std::f64::consts::PI;
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::blocks::delay_line::DelayLine;
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::blocks::lfo::Lfo;
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::blocks::send_input::{
+    GAIN_SCALE, LEVEL_UNITY, SendInput,
+};
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
-const CHORUS_GAIN: f64 = 1.3;
-
+/// Equivalent to: GSChorusParameter
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChorusSnapshot {
     pub level: u8,
@@ -18,76 +21,95 @@ pub struct ChorusSnapshot {
     pub feedback: u8,
 }
 
-pub struct SpessaSynthChorus {
-    left_delay_buffer: Vec<f32>,
-    right_delay_buffer: Vec<f32>,
-    sample_rate: f64,
-    phase: f64,
-    write: usize,
+/// CHORUS RATE to Hz. The LFO adds 64 x rate to a 24 bit phase every 32 kHz sample (15.5 Hz at 127).
+const RATE_HZ: f64 = (64.0 * HARDWARE_RATE) / 16_777_216.0;
+
+/// CHORUS DELAY in 32 kHz samples per step (23.8 ms at 127).
+const DELAY_STEP: f64 = 6.0;
+
+/// CHORUS DEPTH in 32 kHz samples per step: what the LFO adds on top of the delay, with one step at 0
+/// (20 ms at 127).
+const DEPTH_STEP: f64 = 5.0;
+
+/// The default GS Chorus implementation.
+///
+/// It is modeled on the chorus of the Sound Canvas (as Sound Canvas VA runs it): a mono input through a DC blocker
+/// and the PRE-LPF into one delay line, read at two places that a triangle LFO moves in opposite directions.
+/// The first read is the left output and the feedback, the second one the right output.
+/// The reads interpolate linearly between samples, like the Sound Canvas does at 32 kHz.
+pub struct DefaultGSChorus {
+    /// One 32 kHz sample in host samples.
+    step: f64,
+    input: SendInput,
+    lfo: Lfo,
+    delay_line: DelayLine,
     gain: f64,
     reverb_gain: f64,
-    delay_gain_value: f64,
-    depth_samples: f64,
-    delay_samples: f64,
-    rate_inc: f64,
+    delay_gain: f64,
     feedback_gain: f64,
+    // The delay at the bottom of the LFO's swing and the swing on top of it, in host samples
+    delay_samples: f64,
+    depth_samples: f64,
+    /// The first read of the previous sample, which is what feeds back.
+    feedback_sample: f64,
 
-    // Pre-LPF state
-    pre_lpf_a: f64,
-    pre_lpf_z: f64,
-
-    // Stored parameter values
     level: u8,
+    send_level_to_reverb: u8,
+    send_level_to_delay: u8,
     pre_lowpass: u8,
     depth: u8,
     delay: u8,
-    send_level_to_reverb: u8,
-    send_level_to_delay: u8,
-    rate: u8,
     feedback: u8,
+    rate: u8,
 }
 
-impl SpessaSynthChorus {
+impl DefaultGSChorus {
+    /// Constructs a new default GS chorus processor.
+    /// `max_buffer_size` is unused (TS: for consistency across effects).
     pub fn new(sample_rate: f64, _max_buffer_size: usize) -> Self {
-        // For consistency across effects; the chorus delay buffers are sized to the
-        // sample rate, so max_buffer_size is intentionally unused (matches TS `void`).
-        let buf_len = sample_rate as usize;
+        let step = sample_rate / HARDWARE_RATE;
         let mut chorus = Self {
-            left_delay_buffer: vec![0.0; buf_len],
-            right_delay_buffer: vec![0.0; buf_len],
-            sample_rate,
-            phase: 0.0,
-            write: 0,
-            gain: 0.5,
+            step,
+            input: SendInput::new(sample_rate),
+            lfo: Lfo::new(sample_rate),
+            // The longest read, plus the older point of the linear read
+            delay_line: DelayLine::new(((127.0 * DELAY_STEP + 128.0 * DEPTH_STEP) * step).ceil() + 1.0),
+            gain: 1.0,
             reverb_gain: 0.0,
-            delay_gain_value: 0.0,
-            depth_samples: 0.0,
-            delay_samples: 1.0,
-            rate_inc: 0.0,
+            delay_gain: 0.0,
             feedback_gain: 0.0,
-            pre_lpf_a: 0.0,
-            pre_lpf_z: 0.0,
-            level: 64,
+            delay_samples: 0.0,
+            depth_samples: 0.0,
+            feedback_sample: 0.0,
+            level: LEVEL_UNITY as u8,
+            send_level_to_reverb: 0,
+            send_level_to_delay: 0,
             pre_lowpass: 0,
             depth: 0,
             delay: 0,
-            send_level_to_reverb: 0,
-            send_level_to_delay: 0,
-            rate: 0,
             feedback: 0,
+            rate: 0,
         };
-        chorus.set_pre_lowpass(0);
+        chorus.reset();
         chorus
+    }
+
+    pub fn level(&self) -> u8 {
+        self.level
+    }
+
+    pub fn set_level(&mut self, value: u8) {
+        self.level = value;
+        self.gain = value as f64 / LEVEL_UNITY;
+    }
+
+    pub fn send_level_to_reverb(&self) -> u8 {
+        self.send_level_to_reverb
     }
 
     pub fn set_send_level_to_reverb(&mut self, value: u8) {
         self.send_level_to_reverb = value;
-        self.reverb_gain = value as f64 / 127.0;
-    }
-
-    pub fn set_send_level_to_delay(&mut self, value: u8) {
-        self.send_level_to_delay = value;
-        self.delay_gain_value = value as f64 / 127.0;
+        self.reverb_gain = value as f64 / GAIN_SCALE;
     }
 
     /// Read back the raw GS send level (0-127). Used by `update_active_gs_effects`.
@@ -95,47 +117,60 @@ impl SpessaSynthChorus {
         self.send_level_to_delay
     }
 
+    pub fn set_send_level_to_delay(&mut self, value: u8) {
+        self.send_level_to_delay = value;
+        self.delay_gain = value as f64 / GAIN_SCALE;
+    }
+
+    pub fn pre_lowpass(&self) -> u8 {
+        self.pre_lowpass
+    }
+
     pub fn set_pre_lowpass(&mut self, value: u8) {
         self.pre_lowpass = value;
-        let fc = 8000.0 * 0.63_f64.powi(value as i32);
-        let decay_val = (-2.0 * PI * fc / self.sample_rate).exp();
-        self.pre_lpf_a = 1.0 - decay_val;
+        self.input.set_pre_low_pass(value as f64);
+    }
+
+    pub fn depth(&self) -> u8 {
+        self.depth
     }
 
     pub fn set_depth(&mut self, value: u8) {
         self.depth = value;
-        self.depth_samples = (value as f64 / 127.0) * 0.025 * self.sample_rate;
+        self.depth_samples = ((value as f64).clamp(0.0, 127.0) + 1.0) * DEPTH_STEP * self.step;
+    }
+
+    pub fn delay(&self) -> u8 {
+        self.delay
     }
 
     pub fn set_delay(&mut self, value: u8) {
         self.delay = value;
-        self.delay_samples = ((value as f64 / 127.0) * 0.025 * self.sample_rate).max(1.0);
+        self.delay_samples = (value as f64).clamp(0.0, 127.0) * DELAY_STEP * self.step;
+    }
+
+    pub fn feedback(&self) -> u8 {
+        self.feedback
     }
 
     pub fn set_feedback(&mut self, value: u8) {
         self.feedback = value;
-        // GM2 section 4.5.4
-        self.feedback_gain = value as f64 * 0.007_63;
+        self.feedback_gain = value as f64 / GAIN_SCALE;
+    }
+
+    pub fn rate(&self) -> u8 {
+        self.rate
     }
 
     pub fn set_rate(&mut self, value: u8) {
         self.rate = value;
-        // GS Advanced Editor actually specifies the rate!
-        // 127 - 15.50Hz, 1 - 0.12 Hz
-        // And GM2 section 4.5.2 actually specifies the equation!
-        let rate_hz = value as f64 * 0.122;
-        self.rate_inc = rate_hz / self.sample_rate;
+        self.lfo.set_rate(value as f64 * RATE_HZ);
     }
 
-    pub fn set_level(&mut self, value: u8) {
-        self.level = value;
-        self.gain = (value as f64 / 127.0) * CHORUS_GAIN;
-    }
-
-    /// Process chorus effect.
     /// - input: 0-based mono input
     /// - output_left/right: start_index-based stereo output (ADDS)
     /// - output_reverb/delay: 0-based mono send outputs (ADDS)
+    #[allow(clippy::too_many_arguments)]
     pub fn process(
         &mut self,
         input: &[f32],
@@ -146,93 +181,48 @@ impl SpessaSynthChorus {
         start_index: usize,
         sample_count: usize,
     ) {
-        let rate_inc = self.rate_inc;
-        let buf_len = self.left_delay_buffer.len();
-        let depth = self.depth_samples;
-        let delay = self.delay_samples;
         let gain = self.gain;
         let reverb_gain = self.reverb_gain;
-        let delay_gain = self.delay_gain_value;
-        let feedback = self.feedback_gain;
-        let use_pre_lpf = self.pre_lowpass > 0;
-
-        let mut phase = self.phase;
-        let mut write = self.write;
-        let mut z = self.pre_lpf_z;
-        let a = self.pre_lpf_a;
-
+        let delay_gain = self.delay_gain;
+        let feedback_gain = self.feedback_gain;
+        let delay_samples = self.delay_samples;
+        let depth_samples = self.depth_samples;
+        let mut feedback_sample = self.feedback_sample;
         for i in 0..sample_count {
-            let mut input_sample = input[i] as f64;
+            // The feedback does not pass through the input stage
+            let x = self.input.process(input[i] as f64);
+            self.delay_line.write(x + feedback_sample * feedback_gain);
 
-            // Pre lowpass filter
-            if use_pre_lpf {
-                z += a * (input_sample - z);
-                input_sample = z;
-            }
+            // Triangle LFO, the second read is half a cycle away
+            let triangle = self.lfo.process().abs();
+            let left = self.delay_line.read_linear(delay_samples + depth_samples * triangle);
+            let right = self.delay_line.read_linear(delay_samples + depth_samples * (1.0 - triangle));
+            feedback_sample = left;
 
-            // Triangle LFO
-            let lfo = 2.0 * (phase - 0.5).abs();
-
-            // Left channel
-            let d_l = (delay + lfo * depth).clamp(1.0, buf_len as f64);
-            let mut read_pos_l = write as f64 - d_l;
-            if read_pos_l < 0.0 {
-                read_pos_l += buf_len as f64;
-            }
-
-            // Linear interpolation
-            let x0 = read_pos_l as usize;
-            let mut x1 = x0 + 1;
-            if x1 >= buf_len {
-                x1 -= buf_len;
-            }
-            let frac = read_pos_l - x0 as f64;
-            let out_l = self.left_delay_buffer[x0] as f64 * (1.0 - frac)
-                + self.left_delay_buffer[x1] as f64 * frac;
-
-            // Write left
-            self.left_delay_buffer[write] = (input_sample + out_l * feedback) as f32;
-
-            // Right channel (inverted LFO)
-            let d_r = (delay + (1.0 - lfo) * depth).clamp(1.0, buf_len as f64);
-            let mut read_pos_r = write as f64 - d_r;
-            if read_pos_r < 0.0 {
-                read_pos_r += buf_len as f64;
-            }
-
-            let x0 = read_pos_r as usize;
-            let mut x1 = x0 + 1;
-            if x1 >= buf_len {
-                x1 -= buf_len;
-            }
-            let frac = read_pos_r - x0 as f64;
-            let out_r = self.right_delay_buffer[x0] as f64 * (1.0 - frac)
-                + self.right_delay_buffer[x1] as f64 * frac;
-
-            // Mix to output
             let o = i + start_index;
-            output_left[o] = (output_left[o] as f64 + out_l * gain) as f32;
-            output_right[o] = (output_right[o] as f64 + out_r * gain) as f32;
-            let mono = (out_l + out_r) / 2.0;
+            output_left[o] = (output_left[o] as f64 + left * gain) as f32;
+            output_right[o] = (output_right[o] as f64 + right * gain) as f32;
+            // The sends take both reads, before the level
+            let mono = left + right;
             output_reverb[i] = (output_reverb[i] as f64 + mono * reverb_gain) as f32;
             output_delay[i] = (output_delay[i] as f64 + mono * delay_gain) as f32;
-
-            // Write right and advance
-            self.right_delay_buffer[write] = (input_sample + out_r * feedback) as f32;
-
-            write += 1;
-            if write >= buf_len {
-                write = 0;
-            }
-
-            phase += rate_inc;
-            if phase >= 1.0 {
-                phase -= 1.0;
-            }
         }
-        self.write = write;
-        self.phase = phase;
-        self.pre_lpf_z = z;
+        self.feedback_sample = feedback_sample;
+    }
+
+    pub fn reset(&mut self) {
+        self.input.clear();
+        self.lfo.clear();
+        self.delay_line.clear();
+        self.feedback_sample = 0.0;
+        self.set_level(LEVEL_UNITY as u8);
+        self.set_pre_lowpass(0);
+        self.set_feedback(0);
+        self.set_delay(0);
+        self.set_rate(0);
+        self.set_depth(0);
+        self.set_send_level_to_reverb(0);
+        self.set_send_level_to_delay(0);
     }
 
     pub fn get_snapshot(&self) -> ChorusSnapshot {
@@ -259,139 +249,5 @@ impl SpessaSynthChorus {
         self.set_depth(snapshot.depth);
         self.set_send_level_to_reverb(snapshot.send_level_to_reverb);
         self.set_send_level_to_delay(snapshot.send_level_to_delay);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const SR: f64 = 44100.0;
-    const EPS: f64 = 1e-6;
-
-    #[test]
-    fn new_creates_valid_chorus() {
-        let c = SpessaSynthChorus::new(SR, 128);
-        assert_eq!(c.sample_rate, SR);
-        assert_eq!(c.left_delay_buffer.len(), SR as usize);
-    }
-
-    #[test]
-    fn set_level_calculates_gain() {
-        let mut c = SpessaSynthChorus::new(SR, 128);
-        c.set_level(127);
-        assert!((c.gain - CHORUS_GAIN).abs() < EPS);
-        c.set_level(0);
-        assert!(c.gain.abs() < EPS);
-        c.set_level(64);
-        assert!((c.gain - (64.0 / 127.0) * CHORUS_GAIN).abs() < EPS);
-    }
-
-    #[test]
-    fn set_depth_calculates_samples() {
-        let mut c = SpessaSynthChorus::new(SR, 128);
-        c.set_depth(127);
-        let expected = 0.025 * SR; // 1102.5
-        assert!((c.depth_samples - expected).abs() < 1.0);
-        c.set_depth(0);
-        assert!(c.depth_samples.abs() < EPS);
-    }
-
-    #[test]
-    fn set_delay_minimum_is_one() {
-        let mut c = SpessaSynthChorus::new(SR, 128);
-        c.set_delay(0);
-        assert!((c.delay_samples - 1.0).abs() < EPS, "Min delay should be 1.0, got {}", c.delay_samples);
-    }
-
-    #[test]
-    fn set_delay_calculates_samples() {
-        let mut c = SpessaSynthChorus::new(SR, 128);
-        c.set_delay(127);
-        let expected = 0.025 * SR; // 1102.5
-        assert!((c.delay_samples - expected).abs() < 1.0);
-    }
-
-    #[test]
-    fn set_rate_calculates_increment() {
-        let mut c = SpessaSynthChorus::new(SR, 128);
-        c.set_rate(127);
-        // rate_hz = 127 * 0.122, rate_inc = rate_hz / 44100
-        let expected = (127.0 * 0.122) / SR;
-        assert!((c.rate_inc - expected).abs() < EPS);
-        c.set_rate(0);
-        assert!(c.rate_inc.abs() < EPS);
-    }
-
-    #[test]
-    fn set_feedback_calculates_gain() {
-        let mut c = SpessaSynthChorus::new(SR, 128);
-        c.set_feedback(127);
-        assert!((c.feedback_gain - 127.0 * 0.007_63).abs() < EPS);
-        c.set_feedback(0);
-        assert!(c.feedback_gain.abs() < EPS);
-    }
-
-    #[test]
-    fn set_send_level_to_reverb() {
-        let mut c = SpessaSynthChorus::new(SR, 128);
-        c.set_send_level_to_reverb(127);
-        assert!((c.reverb_gain - 1.0).abs() < EPS);
-    }
-
-    #[test]
-    fn set_send_level_to_delay() {
-        let mut c = SpessaSynthChorus::new(SR, 128);
-        c.set_send_level_to_delay(127);
-        assert!((c.delay_gain_value - 1.0).abs() < EPS);
-    }
-
-    #[test]
-    fn set_pre_lowpass_coefficient() {
-        let mut c = SpessaSynthChorus::new(SR, 128);
-        c.set_pre_lowpass(0);
-        // fc = 8000, decay = exp(-2*PI*8000/44100), a = 1-decay
-        let fc = 8000.0;
-        let decay = (-2.0 * PI * fc / SR).exp();
-        let expected_a = 1.0 - decay;
-        assert!((c.pre_lpf_a - expected_a).abs() < EPS);
-    }
-
-    #[test]
-    fn process_zero_input_produces_zero_output() {
-        let mut c = SpessaSynthChorus::new(SR, 128);
-        c.set_level(127);
-        c.set_depth(64);
-        c.set_delay(64);
-        c.set_rate(64);
-
-        let input = vec![0.0f32; 128];
-        let mut out_l = vec![0.0f32; 256];
-        let mut out_r = vec![0.0f32; 256];
-        let mut out_rev = vec![0.0f32; 128];
-        let mut out_del = vec![0.0f32; 128];
-        c.process(&input, &mut out_l, &mut out_r, &mut out_rev, &mut out_del, 0, 128);
-
-        // With zero input and empty buffers, output should be zero
-        for i in 0..128 {
-            assert!((out_l[i] as f64).abs() < EPS);
-            assert!((out_r[i] as f64).abs() < EPS);
-        }
-    }
-
-    #[test]
-    fn snapshot_captures_parameters() {
-        let mut c = SpessaSynthChorus::new(SR, 128);
-        c.set_level(100);
-        c.set_depth(50);
-        c.set_delay(30);
-        c.set_rate(80);
-        c.set_feedback(64);
-        let snap = c.get_snapshot();
-        assert_eq!(snap.level, 100);
-        assert_eq!(snap.depth, 50);
-        assert_eq!(snap.delay, 30);
-        assert_eq!(snap.rate, 80);
-        assert_eq!(snap.feedback, 64);
     }
 }

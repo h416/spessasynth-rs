@@ -1,5 +1,6 @@
 //! Lo-Fi 1 (`01 72`): compressor, low pass, quantizer, high pass and dip, mixed with the dry input.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/effects/lo_fi_1.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use std::sync::LazyLock;
 
@@ -19,7 +20,7 @@ const PRE_GAINS: [f64; 6] = [1.0, 2.0, 2.0, 4.0, 4.0, (2.0 * 127.0) / 32.0];
 /// The pre filters' low pass: the hardware's bytes (b = 37/128, pole 53/128), 4.0 kHz with -0.11 dB at DC.
 const PRE_POLE: f64 = 53.0 / 128.0;
 static PRE_HZ: LazyLock<f64> =
-    LazyLock::new(|| (32_000.0 / std::f64::consts::PI) * ((1.0 - PRE_POLE) / (1.0 + PRE_POLE)).atan());
+    LazyLock::new(|| (HARDWARE_RATE / std::f64::consts::PI) * ((1.0 - PRE_POLE) / (1.0 + PRE_POLE)).atan());
 const PRE_GAIN: f64 = (2.0 * 37.0) / 128.0 / (1.0 - PRE_POLE);
 
 /// A post filter: the high pass as its bytes (b0, pole) and the dip at 1 kHz (-12 dB), its poles and zeros at one
@@ -169,7 +170,7 @@ impl GSEffect for GSLoFi1 {
         if let Some(post) = post {
             let pole = post.pole / 128.0;
             self.high_pass.set_high_pass(
-                (32_000.0 / std::f64::consts::PI) * ((1.0 - pole) / (1.0 + pole)).atan(),
+                (HARDWARE_RATE / std::f64::consts::PI) * ((1.0 - pole) / (1.0 + pole)).atan(),
                 (2.0 * post.b0) / 128.0 / (1.0 + pole),
             );
             self.dip.set_pole_zero(post.hz, post.pole_q, post.hz, post.zero_q);

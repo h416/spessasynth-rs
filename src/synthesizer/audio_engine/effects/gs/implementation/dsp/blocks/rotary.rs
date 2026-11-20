@@ -1,5 +1,6 @@
 //! The rotary speaker: a crossover into a horn and a drum line, each with a turning rotor.
 //! Ported from: src/synthesizer/audio_engine/effects/gs/implementation/dsp/blocks/rotary.ts
+use crate::synthesizer::audio_engine::effects::gs::implementation::dsp::hardware::HARDWARE_RATE;
 
 use std::sync::LazyLock;
 
@@ -19,14 +20,14 @@ const HORN_D2: f64 = 1.0 + HORN_A1 - HORN_A2;
 const HORN_D1: f64 = 2.0 + 2.0 * HORN_A2;
 const HORN_D0: f64 = 1.0 - HORN_A1 - HORN_A2;
 static HORN_HZ: LazyLock<f64> =
-    LazyLock::new(|| (32_000.0 / std::f64::consts::PI) * (HORN_D0 / HORN_D2).sqrt().atan());
+    LazyLock::new(|| (HARDWARE_RATE / std::f64::consts::PI) * (HORN_D0 / HORN_D2).sqrt().atan());
 static HORN_Q: LazyLock<f64> = LazyLock::new(|| (HORN_D0 * HORN_D2).sqrt() / HORN_D1);
 const HORN_GAIN: f64 = (4.0 * HORN_B0) / HORN_D2;
 
 /// The drum crossover: the hardware's one-pole low pass (pole 0.668, unity at DC), its corner is 2000 Hz too.
 const DRUM_POLE: f64 = 0.668_151_855_468_75;
 static DRUM_HZ: LazyLock<f64> =
-    LazyLock::new(|| (32_000.0 / std::f64::consts::PI) * ((1.0 - DRUM_POLE) / (1.0 + DRUM_POLE)).atan());
+    LazyLock::new(|| (HARDWARE_RATE / std::f64::consts::PI) * ((1.0 - DRUM_POLE) / (1.0 + DRUM_POLE)).atan());
 
 /// The Doppler swing of the horn (a parabola over the turn) and the drum (a triangle), in 32 kHz samples.
 const HORN_SWING: f64 = 33.25;
@@ -76,7 +77,7 @@ pub struct Rotary {
 
 impl Rotary {
     pub fn new(sample_rate: f64, memory: &mut DelayMemory) -> Self {
-        let step = sample_rate / 32_000.0;
+        let step = sample_rate / HARDWARE_RATE;
         // Two more 32 kHz samples for the right side's lag and the interpolation
         let horn_line = memory.line(((HORN_TAP_RIGHT + 2.0) * step).ceil());
         let drum_line = memory.line(((DRUM_TAP_RIGHT + 2.0) * step).ceil());
@@ -133,9 +134,9 @@ impl Rotary {
     /// `horn` is the horn rotor's ramp time constant in seconds, `drum` the drum rotor's.
     pub fn set_acceleration(&mut self, horn: f64, drum: f64) {
         // The ramps' step per 32 kHz sample is 1 / (32000 x the time constant)
-        let per_sample = 32_000.0 / self.sample_rate;
-        self.horn_ramp = 1.0 - (1.0 - 1.0 / (32_000.0 * horn)).powf(per_sample);
-        self.drum_ramp = 1.0 - (1.0 - 1.0 / (32_000.0 * drum)).powf(per_sample);
+        let per_sample = HARDWARE_RATE / self.sample_rate;
+        self.horn_ramp = 1.0 - (1.0 - 1.0 / (HARDWARE_RATE * horn)).powf(per_sample);
+        self.drum_ramp = 1.0 - (1.0 - 1.0 / (HARDWARE_RATE * drum)).powf(per_sample);
     }
 
     /// `horn` is the horn line's gain (the high level), `drum` the drum line's (the low level).

@@ -15,7 +15,7 @@
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 use crate::synthesizer::audio_engine::synth_constants::SPESSA_BUFSIZE;
 use crate::synthesizer::audio_engine::voice::unit_converter::{
-    cb_attenuation_to_gain_f64, timecents_to_seconds,
+    cb_attenuation_to_gain_f64, raw_timecents_to_seconds, timecents_to_seconds,
 };
 
 // ---------------------------------------------------------------------------
@@ -38,15 +38,17 @@ const PERCEIVED_CB_SILENCE: f64 = 900.0;
 ///
 /// Stage mapping (state field):
 ///   0 = delay, 1 = attack, 2 = hold/peak, 3 = decay,
-///   5 = decay 2 (SFE, runs between decay and sustain), 4 = sustain
+///   4 = decay 2 (SFe, runs between decay and sustain), 5 = sustain
 ///   Release is indicated by `entered_release`.
-///   Decay 2 is 5 so the sustain keeps its number (voice priorities use it).
 ///
 /// Equivalent to: VolumeEnvelope class
 pub struct VolumeEnvelope {
     /// The target gain for the current rendering block (the last sample's gain).
     /// Equivalent to: outputGain
     pub output_gain: f64,
+    /// If the delay and attack round to zero samples, so the first block starts at the peak instead of fading in.
+    /// Equivalent to: startsAtPeak
+    pub starts_at_peak: bool,
     /// The current attenuation of the envelope in cB.
     /// Equivalent to: attenuationCb
     pub attenuation_cb: f64,
@@ -125,6 +127,7 @@ impl VolumeEnvelope {
             output_gain: 0.0,
             attenuation_cb: CB_SILENCE,
             state: 0,
+            starts_at_peak: false,
             sample_rate,
             update_interval: buffer_size as f64,
             sample_time: 0.0,
@@ -146,15 +149,18 @@ impl VolumeEnvelope {
         }
     }
 
-    /// Converts timecents to a sample count (>= 0).
+    /// Converts timecents to a sample count, with the -12000 floor of `timecentsToSeconds`.
     /// Returns f64 to match TS behavior (JS Math.floor returns f64).
     /// Equivalent to: timecentsToSamples(tc)
     fn timecents_to_samples(&self, tc: i32) -> f64 {
-        // Match TS: Math.max(0, Math.floor(timecentsToSeconds(tc) * this.sampleRate))
-        // TS order: floor first, then max(0, ...).
-        // JS Math.max(0, NaN) returns NaN; Rust f64::NAN.max(0.0) returns 0.0.
-        // We must preserve NaN propagation to match TS behavior.
-        let samples = (timecents_to_seconds(tc) as f64 * self.sample_rate).floor();
+        (timecents_to_seconds(tc) * self.sample_rate).floor()
+    }
+
+    /// Converts timecents to a sample count (>= 0). No clamp.
+    /// Equivalent to: rawTimecentsToSamples(tc)
+    fn raw_timecents_to_samples(&self, tc: i32) -> f64 {
+        // Math.max(0, NaN) is NaN in JS; Rust f64::NAN.max(0.0) is 0.0, so keep NaN explicitly.
+        let samples = (raw_timecents_to_seconds(tc) * self.sample_rate).floor();
         if samples > 0.0 {
             samples
         } else if samples.is_nan() {
@@ -204,7 +210,7 @@ impl VolumeEnvelope {
         let key_num_addition = (60 - target_key as i32) as f64
             * modulated_generators[gt::KEY_NUM_TO_VOL_ENV_DECAY as usize] as f64;
         let fraction = self.sustain_cb / CB_SILENCE;
-        self.decay_duration = self.timecents_to_samples(
+        self.decay_duration = self.raw_timecents_to_samples(
             (modulated_generators[gt::DECAY_VOL_ENV as usize] as f64 + key_num_addition) as i32,
         ) * fraction;
 
@@ -212,18 +218,25 @@ impl VolumeEnvelope {
         self.delay_end =
             self.timecents_to_samples(modulated_generators[gt::DELAY_VOL_ENV as usize] as i32);
         self.attack_end = self.attack_duration + self.delay_end;
+        // Only an instant time (-32768) for both gets here, anything above plays as -12000 at least (1 ms)
+        self.starts_at_peak = self.attack_end == 0.0;
 
         // Hold: also account for keyNumToVolEnvHold.
         let hold_excursion = (60 - target_key as i32) as f64
             * modulated_generators[gt::KEY_NUM_TO_VOL_ENV_HOLD as usize] as f64;
-        self.hold_end = self.timecents_to_samples(
-            (modulated_generators[gt::HOLD_VOL_ENV as usize] as f64 + hold_excursion) as i32,
-        ) + self.attack_end;
+        // -32768 is no hold, the key excursion included.
+        // Otherwise, the hold is clamped at -12000 before the excursion
+        let hold = modulated_generators[gt::HOLD_VOL_ENV as usize] as i32;
+        self.hold_end = (if hold <= -32_768 {
+            0.0
+        } else {
+            self.raw_timecents_to_samples((hold.max(-12_000) as f64 + hold_excursion) as i32)
+        }) + self.attack_end;
 
         self.decay_end = self.decay_duration + self.hold_end;
 
         // Decay 2 uses the same rate convention (time for 100dB) and key scaling as decay
-        self.decay2_duration = self.timecents_to_samples(
+        self.decay2_duration = self.raw_timecents_to_samples(
             (modulated_generators[gt::DECAY2_VOL_ENV as usize] as f64 + key_num_addition) as i32,
         ) * ((self.sustain2_cb - self.sustain_cb).abs() / CB_SILENCE);
         self.decay2_end = self.decay2_duration + self.decay_end;
@@ -239,7 +252,6 @@ impl VolumeEnvelope {
     /// Transitions the envelope into the release phase.
     ///
     /// `modulated_generators`    – voice.modulatedGenerators
-    /// `target_key`              – voice.targetKey
     /// `override_release_vol_env`– voice.overrideReleaseVolEnv (0 = use generator)
     ///
     /// Returns `true` when the voice should be deactivated immediately
@@ -250,7 +262,6 @@ impl VolumeEnvelope {
     pub fn start_release(
         &mut self,
         modulated_generators: &[i16],
-        target_key: i16,
         override_release_vol_env: i32,
     ) -> bool {
         self.release_start_time_samples = self.sample_time;
@@ -263,23 +274,15 @@ impl VolumeEnvelope {
             modulated_generators[gt::RELEASE_VOL_ENV as usize] as i32
         };
         // SF2 spec: min −7200 timecents to prevent clicks.
-        self.release_duration = self.timecents_to_samples(timecents.max(-7200));
+        self.release_duration = self.raw_timecents_to_samples(timecents.max(-7200));
 
         if self.entered_release {
             // Already in release (e.g. exclusive class update): just track the
             // current attenuation as the new release starting point.
             self.release_start_cb = self.attenuation_cb;
         } else {
+            // The decay keeps the duration it started with, so the level here is the one that was playing
             let sustain_cb = self.sustain_cb.clamp(0.0, CB_SILENCE);
-            let fraction = sustain_cb / CB_SILENCE;
-
-            // Recalculate the (already-started) decay duration so we can estimate
-            // the release start level for voices in the decay stage.
-            let key_num_addition = (60 - target_key as i32) as f64
-                * modulated_generators[gt::KEY_NUM_TO_VOL_ENV_DECAY as usize] as f64;
-            self.decay_duration = self.timecents_to_samples(
-                (modulated_generators[gt::DECAY_VOL_ENV as usize] as f64 + key_num_addition) as i32,
-            ) * fraction;
 
             // Estimate the attenuation (in cB) at the moment of release,
             // depending on which stage the envelope was in.
@@ -304,7 +307,7 @@ impl VolumeEnvelope {
                     (1.0 - (self.decay_end - self.release_start_time_samples) / self.decay_duration)
                         * sustain_cb
                 }
-                5 => {
+                4 => {
                     // Decay 2 stage: interpolate between sustainCb and sustain2Cb.
                     (1.0 - (self.decay2_end - self.release_start_time_samples) / self.decay2_duration)
                         * (self.sustain2_cb - sustain_cb)
@@ -400,11 +403,11 @@ impl VolumeEnvelope {
                     gain_target * cb_attenuation_to_gain_f64(self.attenuation_cb) as f64;
                 return true;
             }
-            self.state = 5;
+            self.state += 1;
         }
 
         // Decay 2 phase: linear centibel ramp from sustain to sustain 2.
-        if self.state == 5 {
+        if self.state == 4 {
             if sample_time < self.decay2_end {
                 self.attenuation_cb = (1.0 - (self.decay2_end - sample_time) / self.decay2_duration)
                     * (self.sustain2_cb - self.sustain_cb)
@@ -413,7 +416,7 @@ impl VolumeEnvelope {
                     gain_target * cb_attenuation_to_gain_f64(self.attenuation_cb) as f64;
                 return true;
             }
-            self.state = 4;
+            self.state += 1;
         }
 
         // Sustain phase: stay at sustain.
@@ -657,7 +660,7 @@ mod tests {
     #[test]
     fn test_process_sustain_is_constant() {
         let mut env = new_env();
-        env.state = 4;
+        env.state = 5;
         env.sustain_cb = 200.0;
         env.sustain2_cb = 200.0;
 
@@ -674,7 +677,7 @@ mod tests {
     #[test]
     fn test_process_sustain_returns_true() {
         let mut env = new_env();
-        env.state = 4;
+        env.state = 5;
         env.sustain_cb = 0.0;
         let active = env.process(32, 1.0);
         assert!(active);
@@ -684,7 +687,7 @@ mod tests {
     fn test_process_sustain_silent_can_end() {
         // can_end_on_silent_sustain && sustain_cb >= PERCEIVED_CB_SILENCE → end, gain 0.
         let mut env = new_env();
-        env.state = 4;
+        env.state = 5;
         env.sustain_cb = 960.0;
         env.sustain2_cb = 960.0;
         env.can_end_on_silent_sustain = true;
@@ -701,7 +704,7 @@ mod tests {
     #[test]
     fn test_process_release_attenuates_to_silence() {
         let mut env = new_env();
-        env.state = 4;
+        env.state = 5;
         env.sustain_cb = 0.0;
         env.entered_release = true;
         env.release_start_cb = 0.0;
@@ -740,12 +743,12 @@ mod tests {
     #[test]
     fn test_start_release_sets_entered_release() {
         let mut env = new_env();
-        env.state = 4;
+        env.state = 5;
         env.sustain_cb = 0.0;
         env.init(&default_gens(), 60);
 
         let gens = gens_with(default_gens(), gt::RELEASE_VOL_ENV, 0);
-        env.start_release(&gens, 60, 0);
+        env.start_release(&gens, 0);
         assert!(env.entered_release);
     }
 
@@ -758,7 +761,7 @@ mod tests {
         env.sample_time = 0.0;
 
         let gens = gens_with(default_gens(), gt::RELEASE_VOL_ENV, 0);
-        let deactivate = env.start_release(&gens, 60, 0);
+        let deactivate = env.start_release(&gens, 0);
         assert!(deactivate);
     }
 
@@ -774,7 +777,7 @@ mod tests {
         env.decay_duration = 100.0;
 
         let gens = gens_with(default_gens(), gt::RELEASE_VOL_ENV, 0);
-        let deactivate = env.start_release(&gens, 60, 0);
+        let deactivate = env.start_release(&gens, 0);
         assert!(!deactivate);
         assert!(approx_eq64(env.release_start_cb, 0.0));
     }
@@ -789,7 +792,7 @@ mod tests {
         env.decay_duration = 0.0;
 
         let gens = default_gens();
-        env.start_release(&gens, 60, -2320);
+        env.start_release(&gens, -2320);
         // Duration is based on max(-7200, -2320) = -2320; releaseFraction = 1.0 (releaseStartCb=0).
         let expected_secs = 2f64.powf(-2320.0 / 1200.0) * SAMPLE_RATE;
         assert!(
@@ -810,11 +813,11 @@ mod tests {
         env.decay_duration = 0.0;
 
         let gens = gens_with(default_gens(), gt::RELEASE_VOL_ENV, 0);
-        env.start_release(&gens, 60, 0);
+        env.start_release(&gens, 0);
         assert!(env.entered_release);
 
         env.attenuation_cb = 200.0;
-        env.start_release(&gens, 60, 0);
+        env.start_release(&gens, 0);
         assert!(approx_eq64(env.release_start_cb, 200.0));
     }
 }

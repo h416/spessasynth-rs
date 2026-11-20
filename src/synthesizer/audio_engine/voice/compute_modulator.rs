@@ -17,11 +17,11 @@
 //! `modulated_generators` is passed separately as `&mut [i16]` by the caller.
 //!
 //! ## generator_offsets (Mode 2)
-//! TypeScript: creates an offset-applied copy with `generators = new Int16Array(generators)`.
+//! TypeScript: creates an offset-applied copy (`OFFSET_GENERATORS`), clamping each sum to the i16 range.
 //! Rust: uses the helper function `effective_base` to compute offsets per index.
 
 use crate::soundbank::basic_soundbank::generator_types::GENERATOR_LIMITS;
-use crate::soundbank::basic_soundbank::modulator::DecodedModulator;
+use crate::soundbank::basic_soundbank::modulator::Modulator;
 use crate::soundbank::basic_soundbank::modulator_source::SF2Channel;
 use crate::soundbank::enums::modulator_sources;
 
@@ -103,9 +103,9 @@ pub trait ChannelContext {
 /// Operations that `compute_modulators` requires from `Voice`.
 /// Implement this trait when porting `Voice`.
 pub trait VoiceContext {
-    /// The voice's decoded modulator list.
-    /// Equivalent to: `voice.modulators` (DecodedModulator[])
-    fn decoded_modulators(&self) -> &[DecodedModulator];
+    /// The voice's modulator list.
+    /// Equivalent to: `voice.modulators`
+    fn modulators(&self) -> &[Modulator];
 
     /// The voice's base generator values (i16).
     /// Equivalent to: `voice.generators`
@@ -123,7 +123,6 @@ pub trait VoiceContext {
         &mut self,
         channel: &SF2Channel,
         pitch: i16,
-        modulation_depth: f64,
         index: usize,
     ) -> f64;
 
@@ -143,7 +142,8 @@ pub trait VoiceContext {
 // ---------------------------------------------------------------------------
 
 /// Returns the generator base value after applying offsets.
-/// Equivalent to: `generators[i]` after `generators[i] += this.generatorOffsets[i]`
+/// An Int16Array wraps, so a negative offset would turn -32768 (instant) into a long time: the sum is clamped.
+/// Equivalent to: `generators[i] = Math.min(32_767, Math.max(-32_768, generators[i] + g[i]))`
 #[inline]
 fn effective_base(gens: &[i16], offsets: &[i16], i: usize, offsets_enabled: bool) -> i16 {
     let base = gens.get(i).copied().unwrap_or(0);
@@ -155,19 +155,6 @@ fn effective_base(gens: &[i16], offsets: &[i16], i: usize, offsets_enabled: bool
     }
 }
 
-/// Extracts the CC flag from bit7 of `source_enum` (SF2 spec).
-/// Equivalent to: `primarySource.isCC`
-#[inline]
-fn source_is_cc(source_enum: u16) -> bool {
-    (source_enum >> 7) & 1 != 0
-}
-
-/// Extracts the source index from bits 0-6 of `source_enum` (SF2 spec).
-/// Equivalent to: `primarySource.index`
-#[inline]
-fn source_index(source_enum: u16) -> usize {
-    (source_enum & 0x7F) as usize
-}
 
 // ---------------------------------------------------------------------------
 // compute_modulators
@@ -212,8 +199,8 @@ pub fn compute_modulators<C: ChannelContext, V: VoiceContext>(
         midi_controllers: channel.midi_controllers(),
         pressure: channel.channel_pressure(),
         pitch_wheel_range: channel.pitch_wheel_range(),
+        modulation_depth: channel.modulation_depth(),
     };
-    let modulation_depth = channel.modulation_depth();
     // Use MIDI Note here as key shift is internal
     voice.set_pressure(channel.poly_pressure(voice.midi_note()));
 
@@ -224,10 +211,7 @@ pub fn compute_modulators<C: ChannelContext, V: VoiceContext>(
         SourceFilter::All => {
             // Step 1: Copy generators → modulated_generators (with offsets applied)
             // Equivalent to:
-            //   if (this.generatorOffsetsEnabled) {
-            //     generators = new Int16Array(generators);
-            //     generators[i] += this.generatorOffsets[i];
-            //   }
+            //   if (this.generators.offsetsEnabled) { generators[i] = clamp(generators[i] + g[i]) }
             //   modulatedGenerators.set(generators);
             {
                 let base = voice.generators();
@@ -244,17 +228,17 @@ pub fn compute_modulators<C: ChannelContext, V: VoiceContext>(
             //   for (let i = 0; i < modulators.length; i++) {
             //     modulatedGenerators[mod.destination] = clamp(
             //         modulatedGenerators[mod.destination] + voice.computeModulator(...))
-            let num_mods = voice.decoded_modulators().len();
+            let num_mods = voice.modulators().len();
             for i in 0..num_mods {
                 // Get destination (limiting borrow scope)
-                let dest_raw = { voice.decoded_modulators()[i].destination };
+                let dest_raw = { voice.modulators()[i].destination };
                 if dest_raw < 0 || (dest_raw as usize) >= modulated_generators.len() {
                     continue; // Skip invalid destination
                 }
                 let dest = dest_raw as usize;
 
                 // Compute modulator value (separate borrow needed for &mut self)
-                let mod_val = voice.compute_single_modulator(&sf2_channel, pitch, modulation_depth, i);
+                let mod_val = voice.compute_single_modulator(&sf2_channel, pitch, i);
 
                 // Clamp and add (prevent i16 overflow)
                 // TS: modulatedGenerators[mod.destination] + voice.computeModulator(...)
@@ -285,17 +269,17 @@ pub fn compute_modulators<C: ChannelContext, V: VoiceContext>(
         // ---------------------------------------------------------------
         SourceFilter::NonCC | SourceFilter::CC => {
             let target_is_cc = filter == SourceFilter::CC;
-            let num_mods = voice.decoded_modulators().len();
+            let num_mods = voice.modulators().len();
 
             for i in 0..num_mods {
                 // Get modulator source info and destination
                 // Equivalent to: mod.primarySource.isCC / .index / secondarySource.*
                 let (dest_raw, influenced) = {
-                    let mod_ = &voice.decoded_modulators()[i];
-                    let prim_is_cc = source_is_cc(mod_.source_enum);
-                    let prim_idx = source_index(mod_.source_enum);
-                    let sec_is_cc = source_is_cc(mod_.secondary_source_enum);
-                    let sec_idx = source_index(mod_.secondary_source_enum);
+                    let mod_ = &voice.modulators()[i];
+                    let prim_is_cc = mod_.primary_source.is_cc;
+                    let prim_idx = mod_.primary_source.index as usize;
+                    let sec_is_cc = mod_.secondary_source.is_cc;
+                    let sec_idx = mod_.secondary_source.index as usize;
 
                     // Equivalent to:
                     //   (mod.primarySource.isCC === sourceCC &&
@@ -327,7 +311,7 @@ pub fn compute_modulators<C: ChannelContext, V: VoiceContext>(
 
                 // Compute modulator (also writes to voice.modulatorValues[i])
                 // Equivalent to: voice.computeModulator(this.midiControllers, pitch, i)
-                voice.compute_single_modulator(&sf2_channel, pitch, modulation_depth, i);
+                voice.compute_single_modulator(&sf2_channel, pitch, i);
 
                 // Sum all modulator values for this destination
                 // Equivalent to:
@@ -339,7 +323,7 @@ pub fn compute_modulators<C: ChannelContext, V: VoiceContext>(
                 // Sum all modulator values (i16, matching TS Int16Array) for this destination.
                 // TS: outputValue += voice.modulatorValues[j]; (Int16Array → integer sum)
                 let output = {
-                    let mods = voice.decoded_modulators();
+                    let mods = voice.modulators();
                     let vals = voice.modulator_values();
                     let mut sum = base_val;
                     for (j, mod_) in mods.iter().enumerate() {
@@ -374,7 +358,7 @@ pub fn compute_modulators<C: ChannelContext, V: VoiceContext>(
 mod tests {
     use super::*;
     use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
-    use crate::soundbank::basic_soundbank::modulator::DecodedModulator;
+    use crate::soundbank::basic_soundbank::modulator::{DecodedModulator, Modulator};
 use crate::soundbank::basic_soundbank::modulator_source::SF2Channel;
 
     // -----------------------------------------------------------------------
@@ -434,7 +418,7 @@ use crate::soundbank::basic_soundbank::modulator_source::SF2Channel;
     }
 
     struct MockVoice {
-        modulators: Vec<DecodedModulator>,
+        modulators: Vec<Modulator>,
         generators: Vec<i16>,
         modulator_values: Vec<i16>,
         midi_note: usize,
@@ -452,7 +436,7 @@ use crate::soundbank::basic_soundbank::modulator_source::SF2Channel;
                 fixed_mod_value: 0.0,
             }
         }
-        fn with_modulators(mut self, mods: Vec<DecodedModulator>, mod_val: f64) -> Self {
+        fn with_modulators(mut self, mods: Vec<Modulator>, mod_val: f64) -> Self {
             self.modulator_values = vec![0; mods.len()];
             self.modulators = mods;
             self.fixed_mod_value = mod_val;
@@ -461,7 +445,7 @@ use crate::soundbank::basic_soundbank::modulator_source::SF2Channel;
     }
 
     impl VoiceContext for MockVoice {
-        fn decoded_modulators(&self) -> &[DecodedModulator] {
+        fn modulators(&self) -> &[Modulator] {
             &self.modulators
         }
         fn generators(&self) -> &[i16] {
@@ -474,7 +458,6 @@ use crate::soundbank::basic_soundbank::modulator_source::SF2Channel;
             &mut self,
             _channel: &SF2Channel,
             _pitch: i16,
-            _modulation_depth: f64,
             index: usize,
         ) -> f64 {
             // Store as i16 (matching TS Int16Array truncation), return full f64 value
@@ -489,8 +472,8 @@ use crate::soundbank::basic_soundbank::modulator_source::SF2Channel;
     }
 
     /// Helper to create a decoded modulator
-    fn make_mod(dest: i16, source_enum: u16, secondary_source_enum: u16) -> DecodedModulator {
-        DecodedModulator::new(source_enum, secondary_source_enum, dest, 0, 0)
+    fn make_mod(dest: i16, source_enum: u16, secondary_source_enum: u16) -> Modulator {
+        DecodedModulator::new(source_enum, secondary_source_enum, dest, 0.0, 0)
     }
 
     // source_enum: CC flag bit7 = 1, index = 7 (CC7 = main volume)
@@ -770,26 +753,6 @@ use crate::soundbank::basic_soundbank::modulator_source::SF2Channel;
         assert_eq!(modulated[gt::PAN as usize], 105);
     }
 
-    // -----------------------------------------------------------------------
-    // source_is_cc / source_index helper tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_source_is_cc_false_for_bit7_zero() {
-        assert!(!source_is_cc(0b0000_0111)); // bit7=0
-    }
-
-    #[test]
-    fn test_source_is_cc_true_for_bit7_one() {
-        assert!(source_is_cc(0b1000_0111)); // bit7=1
-    }
-
-    #[test]
-    fn test_source_index_extracts_low_7_bits() {
-        assert_eq!(source_index(0b1001_0101), 0b001_0101); // = 21
-        assert_eq!(source_index(0b0111_1111), 0x7F); // max = 127
-        assert_eq!(source_index(0b1000_0000), 0);
-    }
 
     // -----------------------------------------------------------------------
     // effective_base helper tests

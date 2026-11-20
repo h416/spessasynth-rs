@@ -16,6 +16,7 @@
 //! - `soundBank.flush()` is called in `to_sf` to sort presets.
 
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
+use crate::soundbank::basic_soundbank::resonance_compensation::add_resonance_compensation;
 use crate::soundbank::downloadable_sounds::dls_verifier::{
     parsing_error, verify_and_read_list, verify_header, verify_text,
 };
@@ -480,6 +481,8 @@ impl DownloadableSounds {
         for instrument in &self.instruments {
             instrument.to_sf_preset(&mut sound_bank);
         }
+        // DLS has no gain, so CC 71 gets its compensation as modulators
+        add_resonance_compensation(&mut sound_bank);
         sound_bank.flush();
 
         SpessaLog::info("Conversion complete!");

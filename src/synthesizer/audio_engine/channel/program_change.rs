@@ -8,7 +8,8 @@ use crate::synthesizer::audio_engine::channel::midi_channel::{DrumLocks, MidiCha
 use crate::synthesizer::types::{ChannelPropertyChangeCallback, ProgramChangeCallback, SynthProcessorEvent};
 use crate::soundbank::types::MIDISystem;
 use crate::midi::drum_parameters::DrumParameterUtils;
-use crate::synthesizer::audio_engine::synth_constants::{GS_USER_DRUM_1, GS_USER_DRUM_2};
+use crate::synthesizer::audio_engine::synth_constants::{GS_USER_DRUM_1, GS_USER_DRUM_2, MIDI_DRUM_CHANNEL};
+use crate::utils::midi_hacks::BankSelectHacks;
 use crate::utils::loggin::{SpessaLog, spessa_synth_info};
 
 impl MidiChannel {
@@ -33,10 +34,23 @@ impl MidiChannel {
             return Vec::new();
         }
 
-        self.patch.program = program;
         let channel_system = self.channel_system(current_system);
+        // XG and GM2 choose drums by the bank alone, a set drum flag becomes the drum bank
+        if self.patch.is_gm_gs_drum && BankSelectHacks::is_system_xg(channel_system) {
+            self.set_is_gm_gs_drum(false);
+            self.set_bank_lsb(0);
+            if let Some(drum_bank) = BankSelectHacks::get_drum_bank(channel_system) {
+                self.set_bank_msb(drum_bank);
+            }
+        }
 
-        let result = sound_bank_manager.get_preset_and_bank_idx(self.patch, channel_system);
+        self.patch.program = program;
+
+        let result = sound_bank_manager.get_preset_and_bank_idx(
+            self.patch,
+            channel_system,
+            self.channel % 16 == MIDI_DRUM_CHANNEL,
+        );
         let Some((preset, bank_idx)) = result else {
             return Vec::new();
         };

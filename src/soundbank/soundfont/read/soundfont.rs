@@ -1,10 +1,11 @@
 //! soundfont.rs
-//! purpose: parses a SoundFont2 (.sf2 / .sf3 / .sf2pack) file into a BasicSoundBank.
+//! purpose: parses a soundfont2 and sfe 4 file into a BasicSoundBank.
 //! Ported from: src/soundbank/soundfont/read/soundfont.ts
 
 use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
-use crate::soundbank::basic_soundbank::modulator::{DecodedModulator, Modulator};
+use crate::soundbank::soundfont::read::curves::read_curves;
+use crate::soundbank::soundfont::sf2_compatibility::{from_sf2_default_modulators, upgrade_sf2_bank};
 use crate::soundbank::soundfont::read::generators::read_generators;
 use crate::soundbank::soundfont::read::instrument_zones::apply_instrument_zones;
 use crate::soundbank::soundfont::read::instruments::read_instruments;
@@ -87,26 +88,6 @@ fn verify_texts(text: &str, expected: &[&str]) {
 // Private helpers: type conversions
 // ---------------------------------------------------------------------------
 
-/// Converts one `DecodedModulator` (raw SF2 fields) into a fully-parsed `Modulator`.
-fn decoded_to_modulator(dm: &DecodedModulator) -> Modulator {
-    Modulator::new(
-        dm.primary_source(),
-        dm.secondary_source(),
-        dm.destination,
-        dm.transform_amount as f64,
-        dm.transform_type,
-        dm.is_effect_modulator,
-        dm.is_default_resonant_modulator,
-    )
-}
-
-/// Converts a `Vec<DecodedModulator>` into a `Vec<Modulator>`.
-/// Used to bridge `read_modulators` output (DecodedModulator) to the consumers
-/// (`apply_instrument_zones`, `apply_preset_zones`) that expect `Modulator`.
-fn decoded_mods_to_mods(decoded: Vec<DecodedModulator>) -> Vec<Modulator> {
-    decoded.iter().map(decoded_to_modulator).collect()
-}
-
 /// Converts a `SoundFontSample` into a `BasicSample`, transferring audio / compressed data.
 ///
 /// - SF3 (compressed): calls `get_raw_data(true)` → `set_compressed_data`
@@ -165,6 +146,8 @@ fn soundfont_sample_to_basic_sample(mut sfs: SoundFontSample) -> BasicSample {
 pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
     let mut main_file_array = IndexedByteArray::from_vec(data);
     let mut bank = BasicSoundBank::new();
+    // The default modulators are set once the file's own list is known
+    bank.default_modulators.clear();
 
     SpessaLog::group("Parsing a SoundFont2 file...");
 
@@ -183,8 +166,7 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
     let type_str = read_binary_string_indexed(&mut main_file_array, 4).to_lowercase();
     verify_texts(&type_str, &["sfbk", "sfpk", "sfen"]);
     let is_sf2_pack = type_str == "sfpk";
-    // Generators and modulator destinations above endOper are only read from SFE banks
-    let is_sfe = type_str == "sfen";
+    let is_sfe_type = type_str == "sfen";
 
     // ── INFO chunk ───────────────────────────────────────────────────────────
     let mut info_chunk = RIFFChunk::read(&mut main_file_array, rf64, true);
@@ -194,6 +176,9 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
 
     // Optional xdta chunk (Extended SF2 – extended sample / zone limits)
     let mut xdta_chunk: Option<RIFFChunk> = None;
+    let mut dmod_chunk: Option<RIFFChunk> = None;
+    let mut curve_chunk: Option<RIFFChunk> = None;
+    let mut xmod_chunk: Option<RIFFChunk> = None;
 
     while info_chunk.data.len() > info_chunk.data.current_index {
         let mut chunk = RIFFChunk::read(&mut info_chunk.data, rf64, true);
@@ -212,11 +197,16 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
                 let minor = read_little_endian_indexed(&mut chunk.data, 2) as u16;
                 bank.sound_bank_info.rom_version = Some(SF2VersionTag { major, minor });
             }
-            // DMOD: custom default modulators override
             "DMOD" => {
-                let raw_mods = read_modulators(&mut chunk, is_sfe);
-                bank.default_modulators = decoded_mods_to_mods(raw_mods);
-                bank.custom_default_modulators = true;
+                // Read after INFO, it depends on the version
+                dmod_chunk = Some(chunk);
+            }
+            // SFe custom curves and the extended DMOD records
+            "CURV" => {
+                curve_chunk = Some(chunk);
+            }
+            "XMOD" => {
+                xmod_chunk = Some(chunk);
             }
             // LIST: possible xdta extended SF2 chunk
             "LIST" => {
@@ -260,6 +250,40 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
         }
     }
     bank.print_info();
+    // Generators and modulator destinations above endOper are only read from SFe banks.
+    // SFe files below version 4 used other generator numbers, read them as SF2.
+    let version = &bank.sound_bank_info.version;
+    let is_sfe = is_sfe_type && version.major >= 4;
+    if is_sfe_type && version.major > 4 {
+        panic!(
+            "SF parsing error: SFe version {}.{} is not supported! The file may be corrupted.",
+            version.major, version.minor
+        );
+    }
+    if is_sfe_type && !is_sfe {
+        SpessaLog::warn(&format!(
+            "SFe version {}.{} is not supported, reading as SF2!",
+            version.major, version.minor
+        ));
+    }
+    // Modulators index the raw list (the bank's list of valid curves is not kept, see basic_soundbank.rs)
+    let curves = match (is_sfe, curve_chunk.as_mut()) {
+        (true, Some(chunk)) => read_curves(chunk),
+        _ => Vec::new(),
+    };
+    if let Some(mut chunk) = dmod_chunk {
+        let read = read_modulators(&mut chunk, is_sfe, &curves, xmod_chunk.as_mut());
+        bank.default_modulators = if is_sfe {
+            read
+        } else {
+            from_sf2_default_modulators(read)
+        };
+    } else if is_sfe {
+        // SFe banks always carry their list
+        panic!("Invalid SFe file: the default modulators (DMOD) are missing.");
+    } else {
+        bank.reset_default_modulators();
+    }
 
     // ── xdta extended hydra sub-chunks ───────────────────────────────────────
     // Equivalent to: if (xdtaChunk !== undefined) { xChunks.phdr = readRIFFChunk(...); … }
@@ -332,6 +356,27 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
     let mut shdr_chunk = RIFFChunk::read(&mut preset_chunk.data, rf64, true);
     verify_header(&shdr_chunk, "shdr");
 
+    if let Some(x) = &x_chunks {
+        let pairs: [(&RIFFChunk, &RIFFChunk, bool); 9] = [
+            (&x.phdr, &phdr_chunk, true),
+            (&x.pbag, &pbag_chunk, true),
+            (&x.pmod, &pmod_chunk, false),
+            (&x.pgen, &pgen_chunk, false),
+            (&x.inst, &inst_chunk, true),
+            (&x.ibag, &ibag_chunk, true),
+            (&x.imod, &imod_chunk, false),
+            (&x.igen, &igen_chunk, false),
+            (&x.shdr, &shdr_chunk, true),
+        ];
+        if !pairs.iter().all(|(x, p, same_size)| {
+            x.header.to_lowercase() == p.header.to_lowercase() && (!same_size || x.size == p.size)
+        }) {
+            SpessaLog::warn("The xdta chunk does not match the pdta chunk, ignoring it.");
+            xdta_chunk = None;
+            x_chunks = None;
+        }
+    }
+
     // ── Read samples ─────────────────────────────────────────────────────────
     SpessaLog::info("Parsing samples...");
     // Reset cursor to start of smpl audio data
@@ -370,7 +415,12 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
 
     // ── Read instruments ─────────────────────────────────────────────────────
     let instrument_generators = read_generators(&mut igen_chunk, is_sfe);
-    let instrument_modulators = decoded_mods_to_mods(read_modulators(&mut imod_chunk, is_sfe));
+    let instrument_modulators = read_modulators(
+        &mut imod_chunk,
+        is_sfe,
+        &curves,
+        x_chunks.as_mut().map(|x| &mut x.imod),
+    );
     // Keep the terminal record (EOI) when extending, the last zone count needs its index
     let extend_instruments = x_chunks.is_some();
     let mut instruments = read_instruments(&mut inst_chunk, extend_instruments);
@@ -433,7 +483,12 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
 
     // ── Read presets ─────────────────────────────────────────────────────────
     let preset_generators = read_generators(&mut pgen_chunk, is_sfe);
-    let preset_modulators = decoded_mods_to_mods(read_modulators(&mut pmod_chunk, is_sfe));
+    let preset_modulators = read_modulators(
+        &mut pmod_chunk,
+        is_sfe,
+        &curves,
+        x_chunks.as_mut().map(|x| &mut x.pmod),
+    );
     // Keep the terminal record (EOP) when extending, the last zone count needs its index
     let extend_presets = x_chunks.is_some();
     let mut presets = read_presets(&mut phdr_chunk, extend_presets);
@@ -492,6 +547,10 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
         bank.presets.push(pres.preset);
     }
 
+    // Convert to SFe
+    if !is_sfe {
+        upgrade_sf2_bank(&mut bank);
+    }
     // Sort presets and run parse_internal (XG bank detection)
     bank.flush();
 
@@ -679,39 +738,6 @@ mod tests {
     #[should_panic(expected = "Invalid FourCC")]
     fn test_verify_text_mismatch_panics() {
         verify_text("sfpk", "sfbk");
-    }
-
-    // -----------------------------------------------------------------------
-    // decoded_mods_to_mods
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_decoded_mods_to_mods_empty() {
-        let result = decoded_mods_to_mods(vec![]);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_decoded_mods_to_mods_preserves_count() {
-        let dm1 = DecodedModulator::new(0x0502, 0x0000, 0x000A, 960, 0);
-        let dm2 = DecodedModulator::new(0x0102, 0x0000, 0x0011, -960, 0);
-        let result = decoded_mods_to_mods(vec![dm1, dm2]);
-        assert_eq!(result.len(), 2);
-    }
-
-    #[test]
-    fn test_decoded_mods_to_mods_transform_amount_widened() {
-        // transform_amount i16 → i32
-        let dm = DecodedModulator::new(0, 0, 0, i16::MAX, 0);
-        let result = decoded_mods_to_mods(vec![dm]);
-        assert_eq!(result[0].transform_amount, i16::MAX as f64);
-    }
-
-    #[test]
-    fn test_decoded_mods_to_mods_negative_amount() {
-        let dm = DecodedModulator::new(0, 0, 0, -1, 0);
-        let result = decoded_mods_to_mods(vec![dm]);
-        assert_eq!(result[0].transform_amount, -1.0f64);
     }
 
     // -----------------------------------------------------------------------
