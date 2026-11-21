@@ -53,6 +53,7 @@ use crate::soundbank::types::{PresetsWithKeyCombinations, SF2VersionTag, SoundBa
 use crate::soundbank::types::MIDISystem;
 use crate::utils::loggin::SpessaLog;
 use crate::utils::midi_hacks::BankSelectHacks;
+use std::sync::OnceLock;
 
 // ---------------------------------------------------------------------------
 // BasicSoundBank
@@ -81,6 +82,10 @@ pub struct BasicSoundBank {
     /// Equivalent to: public defaultModulators: Modulator[]
     pub default_modulators: Vec<Modulator>,
 
+    /// The default modulators without the superseded identical ones, computed on first use.
+    /// Equivalent to: private latestDefaultModulators?: readonly Modulator[]
+    latest_default_modulators: OnceLock<Vec<Modulator>>,
+
     /// Whether the sound bank contains valid XG drum presets.
     /// Equivalent to: private _isXGBank = false
     _is_xg_bank: bool,
@@ -108,6 +113,7 @@ impl Default for BasicSoundBank {
             instruments: Vec::new(),
             // The default modulators get their own copies of the curves, like any other curves of the bank
             default_modulators: copy_default_modulators(),
+            latest_default_modulators: OnceLock::new(),
             _is_xg_bank: false,
         }
     }
@@ -144,6 +150,7 @@ impl BasicSoundBank {
             instruments: bank.instruments.clone(),
             samples: bank.samples.clone(),
             default_modulators: bank.default_modulators.clone(),
+            latest_default_modulators: OnceLock::new(),
             _is_xg_bank: bank._is_xg_bank,
         }
     }
@@ -193,6 +200,21 @@ impl BasicSoundBank {
     /// Equivalent to: resetDefaultModulators()
     pub fn reset_default_modulators(&mut self) {
         self.default_modulators = copy_default_modulators();
+        self.latest_default_modulators = OnceLock::new();
+    }
+
+    /// The default modulators that apply: of identical ones, only the last (SFe 4.0, sections 7.3 and 7.4).
+    /// Cached, as every voice lookup needs it. The cache is cleared when the list is replaced or the bank is flushed.
+    /// Equivalent to: get effectiveDefaultModulators
+    pub fn effective_default_modulators(&self) -> &[Modulator] {
+        self.latest_default_modulators
+            .get_or_init(|| Modulator::get_latest_only(&self.default_modulators))
+    }
+
+    /// Clears the cached [`Self::effective_default_modulators`], after a default modulator was edited in place.
+    /// Equivalent to: clearDefaultModulatorCache()
+    pub fn clear_default_modulator_cache(&mut self) {
+        self.latest_default_modulators = OnceLock::new();
     }
 
     // -----------------------------------------------------------------------
@@ -399,6 +421,8 @@ impl BasicSoundBank {
     /// Equivalent to: public flush()
     /// (TS: presets.sort(MIDIPatchTools.compare.bind(MIDIPatchTools)))
     pub fn flush(&mut self) {
+        // A modulator of the list may have been edited in place
+        self.latest_default_modulators = OnceLock::new();
         self.presets.sort_by(|a, b| {
             let pa = MidiPatch {
                 program: a.program,

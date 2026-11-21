@@ -57,7 +57,8 @@ impl MidiChannel {
         }
 
         // Mono mode overrides sustain.
-        let mono = !self.midi_parameters.poly_mode;
+        // A drum part ignores mono mode
+        let mono = !self.midi_parameters.poly_mode && !self.drum_channel;
         let sustain =
             self.midi_controllers[midi_controllers::SUSTAIN_PEDAL as usize] >= 8192 && !mono;
 
@@ -100,11 +101,11 @@ impl MidiChannel {
         // Mono mode: restore the highest still-pressed note (legato).
         let mut retrigger = None;
         if mono {
+            // With no key held, the last mono note is kept, so the next note of another key takes the voice over.
+            // That happens even while the voice is still in its release, like the Sound Canvas
+            // Testcase: Sound Canvas MIDI Collection_Nintendo_Mario_sm1_01.mid (ghost notes cut the long release)
             match self.playing_notes.iter().rposition(|&playing| playing) {
-                None => {
-                    // No note is playing.
-                    self.last_mono_note = -1;
-                }
+                None => {}
                 Some(highest) if self.last_mono_note == midi_note as i32 => {
                     // The guard above ensures that we don't retrigger a note that isn't
                     // this one. For example notes might go like this:

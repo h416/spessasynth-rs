@@ -1428,7 +1428,7 @@ impl SynthesizerCore {
             midi_note,
             velocity,
             &bank.instruments,
-            &bank.default_modulators,
+            bank.effective_default_modulators(),
         );
 
         let mut voices = CachedVoiceList::new();
@@ -1478,6 +1478,10 @@ impl SynthesizerCore {
     pub fn clear_cache(&mut self) {
         self.cached_voices.clear();
         self.user_drum_cached_voices.clear();
+        // A default modulator edited in place may change which ones are duplicates
+        for entry in self.sound_bank_manager.sound_bank_list.iter_mut() {
+            entry.sound_bank.clear_default_modulator_cache();
+        }
     }
 
     /// Destroys the synthesizer, releasing all resources.

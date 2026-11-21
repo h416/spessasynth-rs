@@ -63,9 +63,8 @@ pub struct Voice {
     pub modulators: Vec<Modulator>,
 
     /// Cached output values for each modulator (same order as `modulators`).
-    /// Stored as i16 to match TypeScript's `Int16Array(64)`.
-    /// Equivalent to: modulatorValues: Int16Array(64)
-    pub modulator_values: Vec<i16>,
+    /// Equivalent to: modulatorValues: Float64Array(64)
+    pub modulator_values: Vec<f64>,
 
     /// Modulation envelope (controls pitch/filter over time).
     /// Equivalent to: modEnv: ModulationEnvelope
@@ -408,16 +407,15 @@ impl VoiceContext for Voice {
                 computed_value
             }
         };
-        // Int16Array truncates the stored value, the full value is returned
         if let Some(v) = self.modulator_values.get_mut(index) {
-            *v = computed_value as i16;
+            *v = computed_value;
         }
         computed_value
     }
 
     /// Returns the cached modulator output values.
-    /// Equivalent to: voice.modulatorValues (Int16Array)
-    fn modulator_values(&self) -> &[i16] {
+    /// Equivalent to: voice.modulatorValues (Float64Array)
+    fn modulator_values(&self) -> &[f64] {
         &self.modulator_values
     }
 }
@@ -743,11 +741,11 @@ mod tests {
     fn test_compute_single_modulator_zero_amount_returns_zero() {
         let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.modulators = vec![make_no_controller_mod(gt::PAN, 0)];
-        v.modulator_values = vec![99];
+        v.modulator_values = vec![99.0];
         let midi_controllers = vec![0i16; CONTROLLER_TABLE_SIZE];
         let result = v.compute_single_modulator(&test_channel(&midi_controllers), 0, 0);
         assert!((result - 0.0).abs() < 1e-5);
-        assert_eq!(v.modulator_values[0], 0);
+        assert_eq!(v.modulator_values[0], 0.0);
     }
 
     #[test]
@@ -756,23 +754,22 @@ mod tests {
         // NO_CONTROLLER source → 1.0; secondary NO_CONTROLLER → 1.0;
         // amount = 100 → computed = 1.0 * 1.0 * 100.0 = 100.0
         v.modulators = vec![make_no_controller_mod(gt::PAN, 100)];
-        v.modulator_values = vec![0];
+        v.modulator_values = vec![0.0];
         let midi_controllers = vec![0i16; CONTROLLER_TABLE_SIZE];
         let result = v.compute_single_modulator(&test_channel(&midi_controllers), 0, 0);
         // result ≈ 100.0 (NO_CONTROLLER returns full scale)
         assert!(result.abs() > 0.0, "result should be nonzero, got {result}");
-        // modulatorValues stores as i16 (matches TS Int16Array)
-        assert_eq!(v.modulator_values[0], result as i16);
+        assert_eq!(v.modulator_values[0], result);
     }
 
     #[test]
     fn test_compute_single_modulator_writes_to_modulator_values() {
         let mut v = Voice::new(SAMPLE_RATE, SPESSA_BUFSIZE);
         v.modulators = vec![make_no_controller_mod(gt::PAN, 50)];
-        v.modulator_values = vec![0];
+        v.modulator_values = vec![0.0];
         let midi_controllers = vec![0i16; CONTROLLER_TABLE_SIZE];
         let result = v.compute_single_modulator(&test_channel(&midi_controllers), 0, 0);
-        assert_eq!(v.modulator_values[0], result as i16);
+        assert_eq!(v.modulator_values[0], result);
     }
 
     #[test]
@@ -782,7 +779,7 @@ mod tests {
         // But NO_CONTROLLER source → positive, amount negative → negative → |result| > 0
         let mod_ = DecodedModulator::new(0, 0, gt::PAN, -100.0, 2);
         v.modulators = vec![mod_];
-        v.modulator_values = vec![0];
+        v.modulator_values = vec![0.0];
         let midi_controllers = vec![0i16; CONTROLLER_TABLE_SIZE];
         let result = v.compute_single_modulator(&test_channel(&midi_controllers), 0, 0);
         assert!(

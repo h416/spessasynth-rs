@@ -75,7 +75,7 @@ fn print_usage() {
     println!("                       gsReverbLock, gsChorusLock, gsDelayLock, gsEqualizerLock,");
     println!("                       gsInsertionLock,");
     println!("                       xgReverbLock, xgChorusLock, xgVariationLock, xgInsertionLock,");
-    println!("                       pitchBasedKeyShift (true|false)");
+    println!("                       pitchBasedKeyShift, monophonicRetrigger (true|false)");
     println!("                       fineTune, keyShift, pan, gain, reverbGain, chorusGain (number)");
     println!("                       interpolationType (0 linear, 1 nearest, 2 hermite, 3 sinc32, 4 sinc128)");
 }
@@ -169,6 +169,9 @@ fn main() {
                         "xgChorusLock" => GlobalSystemParameterChange::XgChorusLock(b()?),
                         "xgVariationLock" => GlobalSystemParameterChange::XgVariationLock(b()?),
                         "xgInsertionLock" => GlobalSystemParameterChange::XgInsertionLock(b()?),
+                        "monophonicRetrigger" => {
+                            GlobalSystemParameterChange::MonophonicRetrigger(b()?)
+                        }
                         "pitchBasedKeyShift" => {
                             GlobalSystemParameterChange::PitchBasedKeyShift(b()?)
                         }

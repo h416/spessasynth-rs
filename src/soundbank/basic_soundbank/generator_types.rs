@@ -124,17 +124,21 @@ pub mod generator_types {
     pub const IGNORE_NOTE_OFF: i16 = 88;
     // Effect send - how much is sent to the variation effect (GS delay, XG variation) 0 - 1000
     pub const VARIATION_EFFECTS_SEND: i16 = 89;
+    // The top 16 bits of the instrument index of a preset zone, for instruments beyond the first 65536
+    pub const INSTRUMENT_MSB: i16 = 90;
+    // The top 16 bits of the sample index of an instrument zone, for samples beyond the first 65536
+    pub const SAMPLE_ID_MSB: i16 = 91;
 }
 
 /// Equivalent to: GeneratorType
 pub type GeneratorType = i16;
 
 /// Maximum valid generator index.
-/// Equivalent to: MAX_GENERATOR = Math.max(...Object.values(GeneratorTypes)) = 89
-pub const MAX_GENERATOR: i16 = 89;
+/// Equivalent to: MAX_GENERATOR = Math.max(...Object.values(GeneratorTypes)) = 91
+pub const MAX_GENERATOR: i16 = 91;
 
 /// Total number of generator slots.
-/// Equivalent to: GENERATORS_AMOUNT = MAX_GENERATOR + 1 = 90
+/// Equivalent to: GENERATORS_AMOUNT = MAX_GENERATOR + 1 = 92
 pub const GENERATORS_AMOUNT: usize = MAX_GENERATOR as usize + 1;
 
 /// Generators that are only valid at the instrument level.
@@ -167,6 +171,19 @@ pub const ENUMERATED_GENERATORS: [GeneratorType; 4] = [
     generator_types::MOD_LFO_WAVEFORM,
     generator_types::VIB_LFO_WAVEFORM,
     generator_types::IGNORE_NOTE_OFF,
+];
+
+/// Generators that no modulator can change, they act before the voice exists (SFe 4.0, section 7.1).
+/// Equivalent to: PRE_VOICE_GENERATORS
+pub const PRE_VOICE_GENERATORS: [GeneratorType; 8] = [
+    generator_types::KEY_RANGE,
+    generator_types::VEL_RANGE,
+    generator_types::KEY_NUM,
+    generator_types::VELOCITY,
+    generator_types::INSTRUMENT,
+    generator_types::SAMPLE_ID,
+    generator_types::INSTRUMENT_MSB,
+    generator_types::SAMPLE_ID_MSB,
 ];
 
 /// Equivalent to: INSTRUMENT_ONLY_GENERATORS.has(type)
@@ -204,22 +221,22 @@ const fn lim(min: i32, max: i32, def: i32, nrpn: u8) -> Option<GeneratorLimit> {
 /// Equivalent to: `[GeneratorTypes.invalid]: { min: 0, max: 0, def: 0, nrpn: 0 }`
 pub const INVALID_GENERATOR_LIMIT: GeneratorLimit = GeneratorLimit::new(0, 0, 0, 0);
 
-/// Generator limits indexed by generator index 0-89 (90 entries).
+/// Generator limits indexed by generator index 0-91 (92 entries).
 /// None means no limit is defined for that generator
 /// (indices absent from the TS `GeneratorLimits` record: 14, 18-20, 42, 49, 55, 59).
 /// The `invalid` (-1) entry of the TS record is [`INVALID_GENERATOR_LIMIT`].
 /// Equivalent to: GeneratorLimits
 pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; GENERATORS_AMOUNT] = [
     // 0  startAddrsOffset
-    lim(0, 32_768, 0, 1),
+    lim(-32_768, 32_767, 0, 1),
     // 1  endAddrOffset
-    lim(-32_768, 32_768, 0, 1),
+    lim(-32_768, 32_767, 0, 1),
     // 2  startloopAddrsOffset
-    lim(-32_768, 32_768, 0, 1),
+    lim(-32_768, 32_767, 0, 1),
     // 3  endloopAddrsOffset
-    lim(-32_768, 32_768, 0, 1),
+    lim(-32_768, 32_767, 0, 1),
     // 4  startAddrsCoarseOffset
-    lim(0, 32_768, 0, 1),
+    lim(-32_768, 32_767, 0, 1),
     // 5  modLfoToPitch
     lim(-12_000, 12_000, 0, 2),
     // 6  vibLfoToPitch
@@ -235,7 +252,7 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; GENERATORS_AMOUNT] = [
     // 11 modEnvToFilterFc
     lim(-12_000, 12_000, 0, 2),
     // 12 endAddrsCoarseOffset
-    lim(-32_768, 32_768, 0, 1),
+    lim(-32_768, 32_767, 0, 1),
     // 13 modLfoToVolume
     lim(-960, 960, 0, 1),
     // 14 (unused1, removed)
@@ -260,10 +277,10 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; GENERATORS_AMOUNT] = [
     lim(-32_768, 5_000, -12_000, 2),
     // 24 freqVibLFO
     lim(-16_000, 4_500, 0, 4),
-    // 25 delayModEnv (-32768 = instant, this is done to prevent click for lowpass)
-    lim(-32_768, 5_000, -32_768, 2),
+    // 25 delayModEnv
+    lim(-32_768, 5_000, -12_000, 2),
     // 26 attackModEnv
-    lim(-32_768, 8_000, -32_768, 2),
+    lim(-32_768, 8_000, -12_000, 2),
     // 27 holdModEnv
     lim(-32_768, 5_000, -12_000, 2),
     // 28 decayModEnv
@@ -301,7 +318,7 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; GENERATORS_AMOUNT] = [
     // 44 velRange (non-value generator)
     lim(0, 0, 0, 0),
     // 45 startloopAddrsCoarseOffset
-    lim(-32_768, 32_768, 0, 1),
+    lim(-32_768, 32_767, 0, 1),
     // 46 keyNum
     lim(-1, 127, -1, 1),
     // 47 velocity
@@ -311,7 +328,7 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; GENERATORS_AMOUNT] = [
     // 49 (reserved2, removed)
     None,
     // 50 endloopAddrsCoarseOffset
-    lim(-32_768, 32_768, 0, 1),
+    lim(-32_768, 32_767, 0, 1),
     // 51 coarseTune
     lim(-120, 120, 0, 1),
     // 52 fineTune
@@ -390,6 +407,10 @@ pub const GENERATOR_LIMITS: [Option<GeneratorLimit>; GENERATORS_AMOUNT] = [
     lim(0, 1, 0, 0),
     // 89 variationEffectsSend (SFe)
     lim(0, 1_000, 0, 1),
+    // 90 instrumentMSB (SFe, non-value generator)
+    lim(0, 65_535, 0, 0),
+    // 91 sampleIDMSB (SFe, non-value generator)
+    lim(0, 65_535, 0, 0),
 ];
 
 const fn compute_default_values() -> [i16; GENERATORS_AMOUNT] {
@@ -455,12 +476,12 @@ mod tests {
 
     #[test]
     fn test_generators_amount() {
-        assert_eq!(GENERATORS_AMOUNT, 90);
+        assert_eq!(GENERATORS_AMOUNT, 92);
     }
 
     #[test]
     fn test_max_generator() {
-        assert_eq!(MAX_GENERATOR, 89);
+        assert_eq!(MAX_GENERATOR, 91);
     }
 
     // --- GENERATOR_LIMITS ---
@@ -468,8 +489,8 @@ mod tests {
     #[test]
     fn test_limits_start_addrs_offset() {
         let lim = GENERATOR_LIMITS[0].unwrap();
-        assert_eq!(lim.min, 0);
-        assert_eq!(lim.max, 32_768);
+        assert_eq!(lim.min, -32_768);
+        assert_eq!(lim.max, 32_767);
         assert_eq!(lim.def, 0);
         assert_eq!(lim.nrpn, 1);
     }
@@ -491,7 +512,7 @@ mod tests {
     #[test]
     fn test_limits_delay_mod_env() {
         let lim = GENERATOR_LIMITS[25].unwrap();
-        assert_eq!(lim.def, -32_768);
+        assert_eq!(lim.def, -12_000);
         assert_eq!(lim.nrpn, 2);
     }
 
@@ -572,7 +593,7 @@ mod tests {
 
     #[test]
     fn test_limits_length() {
-        assert_eq!(GENERATOR_LIMITS.len(), 90);
+        assert_eq!(GENERATOR_LIMITS.len(), 92);
     }
 
     #[test]
@@ -599,7 +620,7 @@ mod tests {
 
     #[test]
     fn test_default_delay_mod_env() {
-        assert_eq!(DEFAULT_GENERATOR_VALUES[25], -32_768);
+        assert_eq!(DEFAULT_GENERATOR_VALUES[25], -12_000);
     }
 
     #[test]
@@ -629,6 +650,6 @@ mod tests {
 
     #[test]
     fn test_default_values_length() {
-        assert_eq!(DEFAULT_GENERATOR_VALUES.len(), 90);
+        assert_eq!(DEFAULT_GENERATOR_VALUES.len(), 92);
     }
 }

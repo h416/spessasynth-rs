@@ -17,7 +17,7 @@ use crate::synthesizer::audio_engine::sound_bank_manager::SoundBankManager;
 use crate::synthesizer::audio_engine::synthesizer_core::SynthesizerCore;
 use crate::synthesizer::audio_engine::user_drum_set::FALLBACK_PATCH;
 use crate::synthesizer::audio_engine::voice::unit_converter::timecents_to_seconds;
-use crate::synthesizer::types::{CachedVoiceList, NoteOnCallback, SynthProcessorEvent};
+use crate::synthesizer::types::{CachedVoiceList, NoteOnCallback, SampleLoopingMode, SynthProcessorEvent};
 use crate::utils::loggin::spessa_synth_warn;
 
 /// Clamps a value between min and max.
@@ -175,8 +175,10 @@ impl SynthesizerCore {
 
         ch.playing_notes[midi_note as usize] = true;
 
-        // Mono mode
-        if !self.midi_channels[channel].midi_parameters.poly_mode {
+        // Mono mode. A drum part ignores it, like on the Sound Canvas (SC-88Pro and SC-8850 manuals)
+        if !self.midi_channels[channel].midi_parameters.poly_mode
+            && !self.midi_channels[channel].drum_channel
+        {
             let last_mono_note = self.midi_channels[channel].last_mono_note;
             if last_mono_note >= 0 && last_mono_note != midi_note as i32 {
                 let current_time = self.current_time;
@@ -263,11 +265,9 @@ impl SynthesizerCore {
             self.midi_channels[channel].note_on_id[midi_note as usize]
         };
 
-        // Apply exclusive class before adding the voices, so the voices of this note on do not end each other
-        // In mono mode all voices have been killed already
-        if self.midi_channels[channel].midi_parameters.poly_mode
-            && self.midi_channels[channel].voice_count > 0
-        {
+        // Apply exclusive class before adding the voices, so the voices of this note on do not end each other.
+        // Mono mode chokes too, voices held by the pedal can survive a switch to mono
+        if self.midi_channels[channel].voice_count > 0 {
             let ch_channel = self.midi_channels[channel].channel;
             let current_time = self.current_time;
             for cached in cached_voices.iter() {
@@ -339,7 +339,6 @@ impl SynthesizerCore {
                 cached.exclusive_class as i32
             };
             self.voices[voice_idx].root_key = cached.root_key;
-            self.voices[voice_idx].looping_mode = cached.looping_mode;
 
             // Set sample data on the active oscillator
             let osc_idx = self.voices[voice_idx].oscillator_type as usize;
@@ -356,7 +355,7 @@ impl SynthesizerCore {
                     "{} modulators! Increasing modulatorValues table.",
                     mod_len
                 ));
-                self.voices[voice_idx].modulator_values = vec![0i16; mod_len];
+                self.voices[voice_idx].modulator_values = vec![0.0; mod_len];
             }
 
             // -----------------------------------------------------------------------
@@ -383,6 +382,10 @@ impl SynthesizerCore {
                 0,
             );
             self.voices[voice_idx].modulated_generators = modulated;
+            // SampleModes is read once, here. Its modulators are ignored (SFe 4.0, section 7.1),
+            // the generator overrides apply
+            self.voices[voice_idx].looping_mode =
+                modulated[gt::SAMPLE_MODES as usize] as SampleLoopingMode;
 
             // -----------------------------------------------------------------------
             // Initialize envelopes and filter
@@ -432,6 +435,8 @@ impl SynthesizerCore {
 
             // -----------------------------------------------------------------------
             // Compute sample offsets (from modulatedGenerators)
+            // The modulated values are truncated toward zero (SFe 4.0, section 7.1); they are
+            // already whole in the i16 table, like the TS Int16Array
             // -----------------------------------------------------------------------
             let start_offset = modulated_copy[gt::START_ADDRS_OFFSET as usize] as i32
                 + modulated_copy[gt::START_ADDRS_COARSE_OFFSET as usize] as i32 * 32_768;
@@ -557,7 +562,7 @@ impl SynthesizerCore {
             binding.source_note_number,
             velocity,
             &bank.instruments,
-            &bank.default_modulators,
+            bank.effective_default_modulators(),
         );
 
         // Ensure that the key sounds as intended, similarly to 'PGAL' DLS chunk alias
@@ -626,7 +631,7 @@ impl SynthesizerCore {
                         midi_note,
                         velocity,
                         &bank.instruments,
-                        &bank.default_modulators,
+                        bank.effective_default_modulators(),
                     ),
                     bank_idx,
                 )

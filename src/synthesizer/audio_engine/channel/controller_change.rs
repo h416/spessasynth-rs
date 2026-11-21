@@ -30,7 +30,7 @@ impl MidiChannel {
     pub fn controller_change(
         &mut self,
         controller: u8,
-        mut value: u8,
+        value: u8,
         voices: &mut [Voice],
         current_time: f64,
         current_system: MIDISystem,
@@ -43,43 +43,40 @@ impl MidiChannel {
 
         let mut events = Vec::new();
 
-        // A CC 10 message of 0 is 1, the GS and XG pan SysEx (random pan) never come here with 0
-        if controller == midi_controllers::PAN && value == 0 {
-            value = 1;
-        }
-
-        // LSB controllers (33–63): append them as the lower 7 bits of the 14-bit
-        // main controller value. Bank select is handled separately above the range.
-        if (midi_controllers::MODULATION_WHEEL_LSB..=midi_controllers::EFFECT_CONTROL2_LSB)
-            .contains(&controller)
-        {
-            let actual_cc = (controller - 32) as usize;
-            if self.locked_controllers[actual_cc] {
+        // The data entry LSB is the lower 7 bits of the data entry (CC 6).
+        // The other LSB controllers (CC 33 to 63) are independent 7-bit controllers (SFe 4.0, section 11.3),
+        // Bank select (CC 0 and 32) is handled separately
+        if controller == midi_controllers::DATA_ENTRY_LSB {
+            // A lock on either controller of the pair keeps the 14-bit value
+            if self.locked_controllers[midi_controllers::DATA_ENTRY_MSB as usize]
+                || self.locked_controllers[controller as usize]
+            {
                 return events;
             }
-            self.midi_controllers[actual_cc] =
-                (self.midi_controllers[actual_cc] & 0x3f_80) | (value as i16 & 0x7f);
-            self.compute_modulators_all_impl(voices, 1, actual_cc);
+            self.midi_controllers[midi_controllers::DATA_ENTRY_MSB as usize] =
+                (self.midi_controllers[midi_controllers::DATA_ENTRY_MSB as usize] & 0x3f_80)
+                    | (value as i16 & 0x7f);
         }
 
         if self.locked_controllers[controller as usize] {
             return events;
         }
 
-        // Apply the CC to the table (top 7 bits only, to not override the LSB).
-        // For consistency this is also technically applied to the LSB controllers,
-        // but they are unused (except Parameter Numbers).
+        // Apply the cc to the table as the top 7 bits. Only the data entry has lower bits, which it keeps
         self.midi_controllers[controller as usize] =
             ((value as i16) << 7) | (self.midi_controllers[controller as usize] & 0x7f);
 
         // Interpret special CCs
         match controller {
-            // Channel mode messages — stop all notes
+            // Channel mode messages
+            // Mono and Poly On act as All Notes Off too, as MIDI 1.0 asks (SFe 4.0, section 11.5)
             midi_controllers::OMNI_MODE_OFF
             | midi_controllers::OMNI_MODE_ON
+            | midi_controllers::MONO_MODE_ON
+            | midi_controllers::POLY_MODE_ON
             | midi_controllers::ALL_NOTES_OFF => {
                 if self.midi_controllers[midi_controllers::SUSTAIN_PEDAL as usize] >= 8192
-                    && self.midi_parameters.poly_mode
+                    && (self.midi_parameters.poly_mode || self.drum_channel)
                 {
                     // A note off for every voice: the pedal holds them, like GS and XG devices do.
                     // Voices that ignore note off are not held, so they get released
@@ -106,23 +103,17 @@ impl MidiChannel {
                     let mut sub = self.stop_all_notes(voices, current_time, false);
                     events.append(&mut sub);
                 }
+                // The mode changes after the notes off, so they follow the previous mode
+                if controller == midi_controllers::POLY_MODE_ON {
+                    self.set_midi_parameter(ChannelMidiParameterValue::PolyMode(true));
+                } else if controller == midi_controllers::MONO_MODE_ON {
+                    self.set_midi_parameter(ChannelMidiParameterValue::PolyMode(false));
+                }
             }
 
             midi_controllers::ALL_SOUND_OFF => {
                 let mut sub = self.stop_all_notes(voices, current_time, true);
                 events.append(&mut sub);
-            }
-
-            midi_controllers::POLY_MODE_ON => {
-                let mut sub = self.stop_all_notes(voices, current_time, true);
-                events.append(&mut sub);
-                self.set_midi_parameter(ChannelMidiParameterValue::PolyMode(true));
-            }
-
-            midi_controllers::MONO_MODE_ON => {
-                let mut sub = self.stop_all_notes(voices, current_time, true);
-                events.append(&mut sub);
-                self.set_midi_parameter(ChannelMidiParameterValue::PolyMode(false));
             }
 
             // Bank select MSB
@@ -131,12 +122,14 @@ impl MidiChannel {
                 // GM ignores bank selects
                 if ch_system != MIDISystem::Gm {
                     // This emulates the XG "DRUM PART PROTECT MODE", which is not implemented yet,
-                    // So it is always on: part 10 only receives the drum banks 126 and 127 and can never be melodic!
+                    // So it is always on: part 10 only receives the drum banks 120, 126 and 127 and can never be melodic!
+                    // 120 is the GM2 drum bank, SFe 4.0, section 11.2.2 accepts it too
                     // GM2 has no such rule, its channel 10 turns melodic with bank 121.
                     // Testcase
                     // Dave-Rodgers-D-j-Vu-Anonymous-20200419154845-nonstop2k.com.mid
                     let refused = self.channel % 16 == MIDI_DRUM_CHANNEL
                         && ch_system == MIDISystem::Xg
+                        && value != 120
                         && value != 126
                         && value != 127;
                     if !refused {
@@ -235,6 +228,8 @@ impl MidiChannel {
                         }
                     }
                 }
+                // The pedal is still a modulator source (SFe 4.0, section 7.4)
+                self.compute_modulators_all_impl(voices, 1, controller as usize);
             }
 
             // Portamento control: force portamento once (MIDI 1.0 spec, page 16),
@@ -242,6 +237,7 @@ impl MidiChannel {
             midi_controllers::PORTAMENTO_CONTROL => {
                 self.last_portamento_note = value as i32;
                 self.portamento_force = true;
+                self.compute_modulators_all_impl(voices, 1, controller as usize);
             }
 
             midi_controllers::PAN => {

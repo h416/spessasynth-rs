@@ -1,5 +1,6 @@
 //! The GS and XG controller matrix of one channel.
 //! Ported from: src/synthesizer/audio_engine/channel/controller_matrix.ts
+use crate::soundbank::basic_soundbank::modulator_curve::SOURCE_VALUE_14_BIT;
 use crate::midi::enums::midi_controllers;
 use crate::synthesizer::audio_engine::channel::enums::{
     MatrixDestination, MatrixSource, matrix_destinations as d, matrix_sources,
@@ -207,7 +208,9 @@ impl ControllerMatrix {
         }
         let v = &mut self.values;
         v[matrix_sources::MODULATION_WHEEL] = (controllers[1] >> 7) as f64 / 127.0;
-        v[matrix_sources::PITCH_WHEEL] = (pitch_wheel - 8192) as f64 / 8192.0;
+        // The pitch wheel maps like an SFe source (center-max), so 16383 is exactly +1
+        v[matrix_sources::PITCH_WHEEL] =
+            (SOURCE_VALUE_14_BIT[pitch_wheel as usize] as f64 - 8192.0) / 8192.0;
         v[matrix_sources::CHANNEL_PRESSURE] = pressure as f64 / 127.0;
         v[matrix_sources::POLY_PRESSURE] = 0.0;
         v[matrix_sources::CC1] = (controllers[cc1] >> 7) as f64 / 127.0;
@@ -226,7 +229,8 @@ impl ControllerMatrix {
         for key in 0..128 {
             let p = poly_pressures[key];
             if let (true, Some(pw)) = (per_note, pitch_wheels) {
-                self.values[matrix_sources::PITCH_WHEEL] = (pw[key] as f64 - 8192.0) / 8192.0;
+                self.values[matrix_sources::PITCH_WHEEL] =
+                    (SOURCE_VALUE_14_BIT[pw[key] as usize] as f64 - 8192.0) / 8192.0;
             } else if p == 0 {
                 continue;
             }

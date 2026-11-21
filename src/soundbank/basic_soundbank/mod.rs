@@ -14,4 +14,3 @@ pub mod modulator;
 pub mod modulator_curve;
 pub mod modulator_source;
 pub mod preset_resolver;
-pub mod resonance_compensation;

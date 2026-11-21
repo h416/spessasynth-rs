@@ -505,7 +505,8 @@ impl MidiChannel {
             }
             self.per_note_pitch = true;
 
-            self.pitch_wheels[midi_note as usize] = pitch;
+            // A whole 0 to 16383, it indexes the 14-bit source table
+            self.pitch_wheels[midi_note as usize] = pitch.clamp(0, 16_383);
 
             // Recompute only specific modulators
             self.compute_modulators_all_impl(voices, 0, modulator_sources::PITCH_WHEEL as usize);
@@ -642,8 +643,11 @@ impl MidiChannel {
     /// Immediately applies to all active voices on this channel.
     /// Equivalent to: setGeneratorOffset(gen, value)
     pub fn set_generator_offset(&mut self, r#gen: GeneratorType, value: i16, voices: &mut [Voice]) {
-        self.generator_offsets[r#gen as usize] =
-            (value as f64 * GENERATOR_LIMITS[r#gen as usize].map_or(0.0, |l| l.nrpn as f64)) as i16;
+        // An NRPN may name a generator that does not exist
+        let Some(Some(limit)) = GENERATOR_LIMITS.get(r#gen as usize) else {
+            return;
+        };
+        self.generator_offsets[r#gen as usize] = (value as f64 * limit.nrpn as f64) as i16;
         self.generator_offsets_enabled = true;
         let mut vc = 0u32;
         if self.voice_count > 0 {
@@ -713,6 +717,8 @@ impl MidiChannel {
         self.note_off_id.fill(0);
         self.playing_notes.fill(false);
         if force {
+            // Force stop all, so mono mode has no note left to take over
+            self.last_mono_note = -1;
             let mut vc = 0u32;
             if self.voice_count > 0 {
                 for v in voices.iter_mut() {
@@ -811,6 +817,8 @@ impl MidiChannel {
         }
 
         self.drum_channel = is_drum;
+        // Mono mode skips drum channels, so the tracked note would be stale after the switch
+        self.last_mono_note = -1;
         self.update_internal_params();
     }
 
@@ -1005,11 +1013,19 @@ impl MidiChannel {
         }
         match value {
             Pressure(v) => self.midi_parameters.pressure = v,
-            PitchWheel(v) => self.midi_parameters.pitch_wheel = v,
+            // The pitch wheel indexes the 14-bit source table, so it must be a whole 0 to 16383
+            PitchWheel(v) => self.midi_parameters.pitch_wheel = v.clamp(0, 16_383),
             PitchWheelRange(v) => self.midi_parameters.pitch_wheel_range = v,
             ModulationDepth(v) => self.midi_parameters.modulation_depth = v,
             RxChannel(v) => self.midi_parameters.rx_channel = v,
-            PolyMode(v) => self.midi_parameters.poly_mode = v,
+            PolyMode(v) => {
+                // A mode switch starts mono mode fresh, without a note to take over.
+                // GS and XG SysEx may send the same mode again while a key is held, that keeps the note
+                if self.midi_parameters.poly_mode != v {
+                    self.last_mono_note = -1;
+                }
+                self.midi_parameters.poly_mode = v;
+            }
             KeyShift(v) => self.midi_parameters.key_shift = v,
             FineTune(v) => self.midi_parameters.fine_tune = v,
             RandomPan(v) => self.midi_parameters.random_pan = v,

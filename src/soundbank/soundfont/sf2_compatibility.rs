@@ -4,15 +4,20 @@
 //!
 //! Not ported (writer only, no effect on the MIDI-to-WAV output): what an SF2 file can't store and the loss report
 //! (`sf2KeepsGenerator`, `sf2KeepsModulator`, `toSF2SendAmount`, `toSF2Generator`,
-//! `toSF2Modulators`, `sf2NeedsDefaultModulators`, `getSF2BankNumber`, `roundTripChanges`, `hasUnknownSourceType`,
+//! `toSF2Modulators`, `sf2NeedsDefaultModulators`, `getSF2BankNumber`, `roundTripChanges`,
 //! `getSF2LossesInternal`).
 use crate::midi::enums::midi_controllers;
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
-use crate::soundbank::basic_soundbank::generator_types::generator_types;
-use crate::soundbank::basic_soundbank::modulator::{Modulator, copy_default_modulators};
+use crate::soundbank::basic_soundbank::generator_types::{
+    GENERATOR_LIMITS, GeneratorType, INSTRUMENT_ONLY_GENERATORS, MAX_GENERATOR, PRE_VOICE_GENERATORS,
+    generator_types,
+};
+use crate::soundbank::basic_soundbank::modulator::{
+    DEFAULT_RESONANT_MOD_AMOUNT_SOURCE, DEFAULT_RESONANT_MOD_SOURCE, DecodedModulator, Modulator,
+    copy_default_modulators, is_illegal_source,
+};
 use crate::soundbank::basic_soundbank::modulator_source::ModulatorSource;
-use crate::soundbank::basic_soundbank::resonance_compensation::add_resonance_compensation;
-use crate::soundbank::enums::{modulator_curve_types, modulator_sources};
+use crate::soundbank::enums::{modulator_curve_types, modulator_sources, modulator_transform_types};
 
 /// `Math.round`: half-up, unlike `f64::round` (half away from zero).
 #[inline]
@@ -27,6 +32,57 @@ const SF2_SEND_SCALE: f64 = 5.0;
 /// The initial attenuation of an SF2 file is 2.5 times the centibels of the bank (the EMU8000 factor of 0.4).
 /// Equivalent to: SF2_ATTENUATION_SCALE
 const SF2_ATTENUATION_SCALE: f64 = 0.4;
+
+/// The amount 0 twin of the default CC 71 to filterQOffset modulator, it turns that one off in a zone
+/// (SFe 4.0, section 9.2).
+/// Equivalent to: resonanceTwin()
+fn resonance_twin() -> Modulator {
+    DecodedModulator::new(
+        DEFAULT_RESONANT_MOD_SOURCE,
+        DEFAULT_RESONANT_MOD_AMOUNT_SOURCE,
+        generator_types::FILTER_Q_OFFSET,
+        0.0,
+        0,
+    )
+}
+
+/// If an instrument zone of an SF2 file without DMOD gets the twin.
+/// It needs a CC 71 to initialFilterQ modulator with any SF2 curve. Ignored modulators don't count.
+/// Equivalent to: hasResonanceModulator(modulators)
+fn has_resonance_modulator(modulators: &[Modulator]) -> bool {
+    modulators.iter().any(|m| {
+        !is_ignored_modulator(m, false)
+            && m.destination == generator_types::INITIAL_FILTER_Q
+            && m.primary_source.is_controller(midi_controllers::FILTER_RESONANCE)
+            && m.primary_source.curve_type <= modulator_curve_types::SWITCH
+            && m.secondary_source.curve_type <= modulator_curve_types::SWITCH
+    })
+}
+
+/// Every generator a destination can be, the invalid one and endOper aside.
+/// Equivalent to: KNOWN_DESTINATIONS.has(destination)
+fn is_known_destination(destination: GeneratorType) -> bool {
+    // The defined generators are the ones with limits
+    (0..=MAX_GENERATOR).contains(&destination)
+        && destination != generator_types::END_OPER
+        && GENERATOR_LIMITS[destination as usize].is_some()
+}
+
+/// A modulator that SFe 4.0 ignores (section 7.4), the SF2 writer drops these (SFe 4.0, section 9.1).
+/// The reader gives most of them the invalid destination. The rest are an unknown transform or destination,
+/// a destination no modulator can change (or an instrument-only one in a preset zone),
+/// an unknown source type, or an illegal or reserved controller as a source.
+/// Equivalent to: isIgnoredModulator(m, preset = false)
+fn is_ignored_modulator(m: &Modulator, preset: bool) -> bool {
+    !is_known_destination(m.destination)
+        || PRE_VOICE_GENERATORS.contains(&m.destination)
+        || (preset && INSTRUMENT_ONLY_GENERATORS.contains(&m.destination))
+        || (m.transform_type != modulator_transform_types::LINEAR as u16
+            && m.transform_type != modulator_transform_types::ABSOLUTE as u16)
+        || [&m.primary_source, &m.secondary_source]
+            .iter()
+            .any(|s| s.curve_type > modulator_curve_types::CUSTOM || is_illegal_source(s))
+}
 
 /// Equivalent to: isEnvelopeTime(s)
 fn is_envelope_time(s: &ModulatorSource) -> bool {
@@ -141,11 +197,8 @@ fn restored_defaults(read: &[Modulator]) -> Vec<Modulator> {
         return Vec::new();
     }
     let defaults = copy_default_modulators();
-    // A modulator the reader ignored supersedes nothing
-    let valid: Vec<&Modulator> = read
-        .iter()
-        .filter(|m| m.destination != generator_types::INVALID)
-        .collect();
+    // A modulator that is ignored supersedes nothing (SFe 4.0, section 9.2)
+    let valid: Vec<&Modulator> = read.iter().filter(|m| !is_ignored_modulator(m, false)).collect();
     // The envelope times come back unless the list has a CC 72, 73 or 75 modulator of its own (even with amount 0)
     let has_envelope_time = valid
         .iter()
@@ -168,7 +221,6 @@ fn restored_defaults(read: &[Modulator]) -> Vec<Modulator> {
 }
 
 /// Turns the default modulators read from the DMOD chunk of an SF2 file into the list of the bank.
-/// The resonance compensation is added later, by [`upgrade_sf2_bank`].
 /// Equivalent to: fromSF2DefaultModulators(bank, read)
 pub fn from_sf2_default_modulators(mut read: Vec<Modulator>) -> Vec<Modulator> {
     from_sf2_modulators(&mut read);
@@ -178,8 +230,11 @@ pub fn from_sf2_default_modulators(mut read: Vec<Modulator>) -> Vec<Modulator> {
 }
 
 /// Updates SF2 bank to SFe format as the spec describes.
-/// Equivalent to: upgradeSF2Bank(bank)
-pub fn upgrade_sf2_bank(bank: &mut BasicSoundBank) {
+/// The zone modulators to initialFilterQ stay as they are, they lower the level with the resonance as in SF2
+/// (SFe 4.0, section 9.2).
+/// `has_dmod`: if the file had a DMOD chunk. Its list has no CC 71 to filterQOffset, so the zones get no twin.
+/// Equivalent to: upgradeSF2Bank(bank, hasDMOD)
+pub fn upgrade_sf2_bank(bank: &mut BasicSoundBank, has_dmod: bool) {
     for preset in bank.presets.iter_mut() {
         from_sf2_modulators(&mut preset.global_zone.modulators);
         for zone in preset.zones.iter_mut() {
@@ -192,8 +247,21 @@ pub fn upgrade_sf2_bank(bank: &mut BasicSoundBank) {
             from_sf2_modulators(&mut zone.zone.modulators);
         }
     }
-    // Banks from before gain get the CC 71 compensation as modulators
-    add_resonance_compensation(bank);
+    if has_dmod {
+        return;
+    }
+    // Resonance (the last step): a zone with its own CC 71 to Q turns the default CC 71 to filterQOffset off.
+    // That way the resonance is not doubled. Instrument zones only, a global zone covers its local zones
+    for instrument in bank.instruments.iter_mut() {
+        if has_resonance_modulator(&instrument.global_zone.modulators) {
+            instrument.global_zone.modulators.push(resonance_twin());
+        }
+        for zone in instrument.zones.iter_mut() {
+            if has_resonance_modulator(&zone.zone.modulators) {
+                zone.zone.modulators.push(resonance_twin());
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -25,6 +25,7 @@ use crate::soundbank::basic_soundbank::basic_zone::BasicZone;
 use crate::soundbank::basic_soundbank::generator::Generator;
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 use crate::soundbank::basic_soundbank::modulator::Modulator;
+use crate::soundbank::soundfont::read::generators::{known_generators, read_zone_index};
 use crate::soundbank::soundfont::read::zones::ZoneIndexes;
 use crate::utils::loggin::SpessaLog;
 
@@ -61,18 +62,18 @@ impl SoundFontInstrumentZone {
     ) -> Result<Self, String> {
         // Search for the sampleID generator
         // Equivalent to: generators.find(g => g.generatorType === generatorTypes.sampleID)
-        let sample_id_gen = generators
+        let sample_id_pos = generators
             .iter()
-            .find(|g| g.generator_type == gt::SAMPLE_ID)
+            .position(|g| g.generator_type == gt::SAMPLE_ID)
             .ok_or_else(|| "No sample ID found in instrument zone.".to_string())?;
 
-        // generator_value is i16, but SF2 sample indices are always non-negative, so cast via u16
-        // Equivalent to: samples[sampleID.generatorValue]
-        let sample_idx = sample_id_gen.generator_value as u16 as usize;
+        // Unsigned, with sampleIDMSB as the top 16 bits (SFe 4.0, section 7.1.1)
+        let sample_idx = read_zone_index(generators, sample_id_pos, gt::SAMPLE_ID_MSB);
 
+        // A zone whose index refers past the samples is ignored (SFe 4.0, section 7.1.1)
         if sample_idx >= sample_count {
             return Err(format!(
-                "Invalid sample ID: {}, available samples: {}",
+                "Invalid sample ID: {}, available samples: {}. Ignoring the zone.",
                 sample_idx, sample_count
             ));
         }
@@ -81,8 +82,8 @@ impl SoundFontInstrumentZone {
         // use_count = 0 (presets are not yet linked at SF2 read time)
         let mut zone = BasicInstrumentZone::new(instrument_idx, 0, sample_idx);
 
-        // Equivalent to: this.addGenerators(...generators)
-        zone.zone.add_generators(generators);
+        // Unknown generators are ignored, and so is everything after the index, as in SF2 (SFe 4.0, section 7.1.1)
+        zone.zone.add_generators(&known_generators(&generators[..=sample_id_pos]));
         // Equivalent to: this.addModulators(...modulators)
         zone.zone.add_modulators(modulators);
 
@@ -151,7 +152,9 @@ pub fn apply_instrument_zones<I: SoundFontInstrumentZoneSink>(
             let gens_start = indexes.gen_ndx[gen_index] as usize;
             gen_index += 1;
             let gens_end = indexes.gen_ndx[gen_index] as usize;
-            let gens = &instrument_generators[gens_start..gens_end];
+            let read_gens = &instrument_generators[gens_start..gens_end];
+            // Unknown generators are ignored
+            let gens = known_generators(read_gens);
 
             // Extract the modulators slice
             // Equivalent to: instrumentModulators.slice(modsStart, modsEnd)
@@ -164,7 +167,7 @@ pub fn apply_instrument_zones<I: SoundFontInstrumentZoneSink>(
             // Equivalent to: if (gens.some(g => g.generatorType === generatorTypes.sampleID))
             if gens.iter().any(|g| g.generator_type == gt::SAMPLE_ID) {
                 // Equivalent to: instrument.createSoundFontZone(mods, gens, samples)
-                match SoundFontInstrumentZone::new(instrument_idx, mods, gens, sample_count) {
+                match SoundFontInstrumentZone::new(instrument_idx, mods, read_gens, sample_count) {
                     Ok(zone) => instrument.push_zone(zone.0),
                     Err(e) => SpessaLog::warn(&e),
                 }
@@ -173,7 +176,7 @@ pub fn apply_instrument_zones<I: SoundFontInstrumentZoneSink>(
                 // Equivalent to: instrument.globalZone.addGenerators(...gens)
                 //                instrument.globalZone.addModulators(...mods)
                 let global = instrument.global_zone_mut();
-                global.add_generators(gens);
+                global.add_generators(&gens);
                 global.add_modulators(mods);
             }
         }
@@ -230,7 +233,8 @@ mod tests {
 
     #[test]
     fn test_new_ok_adds_generators_to_zone() {
-        let gens = vec![gen_with_sample_id(1), gen_pan(50.0)];
+        // The generators after the index are ignored, so PAN comes first
+        let gens = vec![gen_pan(50.0), gen_with_sample_id(1)];
         let zone = SoundFontInstrumentZone::new(0, &[], &gens, 5).unwrap();
         // sampleID is ignored by BasicZone::add_generators so it does not remain in generators
         assert!(

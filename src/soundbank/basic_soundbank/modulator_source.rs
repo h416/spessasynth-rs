@@ -13,7 +13,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::soundbank::basic_soundbank::custom_curve::CustomCurve;
-use crate::soundbank::basic_soundbank::modulator_curve::{built_in_table, curve_type_name};
+use crate::soundbank::basic_soundbank::modulator_curve::{
+    SOURCE_VALUE_14_BIT, SOURCE_VALUE_7_BIT, built_in_table, curve_type_name,
+};
 use crate::soundbank::enums::{ModulatorCurveType, modulator_curve_types, modulator_sources};
 use crate::soundbank::types::ModulatorSourceIndex;
 use crate::utils::byte_functions::bit_mask::{bit_mask_to_bool, to_numeric_bool};
@@ -222,42 +224,44 @@ impl ModulatorSource {
         pitch_wheel: i32,
         voice: &VoiceModInputs,
     ) -> f32 {
-        // The raw 14-bit value (0 - 16,383)
-        let raw_value: i32 = if self.is_cc {
-            channel.midi_controllers[self.index as usize] as i32
+        // The source value x, 0 to 16,384 (SFe 4.0, section 7.2): 7-bit and 14-bit values are mapped center-max,
+        // So the center and the maximum are exact
+        let v7 = &*SOURCE_VALUE_7_BIT;
+        let v14 = &*SOURCE_VALUE_14_BIT;
+        let x: usize = if self.is_cc {
+            // A controller is its 7-bit value alone, the LSB controllers are sources of their own
+            v7[(channel.midi_controllers[self.index as usize] >> 7) as usize] as usize
         } else {
             match self.index {
-                modulator_sources::NOTE_ON_VELOCITY => (voice.velocity as i32) << 7,
-                modulator_sources::NOTE_ON_KEY_NUM => (voice.target_key as i32) << 7,
+                modulator_sources::NOTE_ON_VELOCITY => v7[voice.velocity as usize] as usize,
+                modulator_sources::NOTE_ON_KEY_NUM => v7[voice.target_key as usize] as usize,
                 // Use MIDI Note here as key shift is internal
-                modulator_sources::POLY_PRESSURE => (voice.pressure as i32) << 7,
-                modulator_sources::CHANNEL_PRESSURE => channel.pressure << 7,
-                modulator_sources::PITCH_WHEEL => pitch_wheel,
-                // Pitch wheel range may be a floating point number!
-                // Therefore, something like "0.5 << 7" won't work,
-                // So we multiply it by 128 which is essentially the same here
-                // But it allows for fractional pitch wheel range!
-                // Ranges of 128 semitones and more would read past the curve tables
+                modulator_sources::POLY_PRESSURE => v7[voice.pressure as usize] as usize,
+                modulator_sources::CHANNEL_PRESSURE => v7[channel.pressure as usize] as usize,
+                modulator_sources::PITCH_WHEEL => v14[pitch_wheel as usize] as usize,
+                // The range in 1/128 semitones, it may be fractional.
+                // Ranges of 128 semitones and more would read past the table
                 modulator_sources::PITCH_WHEEL_RANGE => {
-                    16_383.min((channel.pitch_wheel_range * 128.0).floor() as i32)
+                    v14[16_383.min((channel.pitch_wheel_range * 128.0).floor() as i32) as usize] as usize
                 }
                 // The parameter is in cents, RPN 5 value is cents * 1.28 (100/128 cents per step)
                 // The source is full at 16 semitones, so it is 8 times that value
                 modulator_sources::MODULATION_DEPTH_RANGE => {
-                    16_383.min(js_round(channel.modulation_depth * 1.28) as i32 * 8)
+                    v14[16_383.min(js_round(channel.modulation_depth * 1.28) as i32 * 8) as usize] as usize
                 }
-                // `default:` falls through to noController
-                _ => 16_383, // Equals to 1
+                // No Controller is the end of the range.
+                // An unknown source makes the modulator ignored when it is read, this is only a fallback
+                _ => 16_384,
             }
         };
 
         if let Some(curve) = &self.custom_curve {
-            return curve.get_value(raw_value, self.is_bipolar, self.is_negative);
+            return curve.get_value(x, self.is_bipolar, self.is_negative);
         }
         // 2-bit transform as in 0bPD
         let transform = (if self.is_bipolar { 0b10 } else { 0 }) | (if self.is_negative { 1 } else { 0 });
         match built_in_table(self.curve_type, transform) {
-            Some(table) => table[raw_value as usize],
+            Some(table) => table[x],
             // An unresolved curve outputs 0
             None => 0.0,
         }
@@ -609,13 +613,13 @@ mod tests {
     #[test]
     fn test_get_value_cc_main_volume_default() {
         // main_volume default = 100 (from DEFAULT_MIDI_CONTROLLERS),
-        // stored as 100 << 7 = 12800; 12800/16384 ≈ 0.78125 (linear)
+        // stored as 100 << 7 = 12800, mapped center-max (linear)
         let s = ModulatorSource::new(7, modulator_curve_types::LINEAR, true, false, false);
         let cc = make_controllers();
         let v = voice(60, 100, 0);
         let val = s.get_value(&chan(&cc), 0, &v);
-        // Main volume default is 100, stored as 100 << 7 = 12800
-        let expected = 12800.0f32 / 16_384.0;
+        // Main volume default is 100, at the source value round(8192 + 8192 * 36 / 63) = 12873
+        let expected = 12873.0f32 / 16_384.0;
         assert!(
             approx_eq(val, expected),
             "expected {}, got {}",

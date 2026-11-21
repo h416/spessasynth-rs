@@ -20,7 +20,9 @@
 //! TypeScript: creates an offset-applied copy (`OFFSET_GENERATORS`), clamping each sum to the i16 range.
 //! Rust: uses the helper function `effective_base` to compute offsets per index.
 
-use crate::soundbank::basic_soundbank::generator_types::GENERATOR_LIMITS;
+use crate::soundbank::basic_soundbank::generator_types::{
+    GENERATOR_LIMITS, GENERATORS_AMOUNT, generator_types,
+};
 use crate::soundbank::basic_soundbank::modulator::Modulator;
 use crate::soundbank::basic_soundbank::modulator_source::SF2Channel;
 use crate::soundbank::enums::modulator_sources;
@@ -127,9 +129,8 @@ pub trait VoiceContext {
     ) -> f64;
 
     /// Cached modulator values (same size as the number of modulators).
-    /// Stored as i16 to match TypeScript's `Int16Array`.
-    /// Equivalent to: `voice.modulatorValues`
-    fn modulator_values(&self) -> &[i16];
+    /// Equivalent to: `voice.modulatorValues` (Float64Array)
+    fn modulator_values(&self) -> &[f64];
 
     /// Sets the poly pressure the polyPressure modulator source reads.
     /// TS reads `channel.polyPressures[voice.midiNote]` directly; Rust copies it
@@ -155,6 +156,24 @@ fn effective_base(gens: &[i16], offsets: &[i16], i: usize, offsets_enabled: bool
     }
 }
 
+/// The final value of a generator after its modulators.
+/// sampleModes is truncated toward zero and any value other than 0 to 4 means 0 (SFe 4.0, section 7.1),
+/// every other generator saturates at its limits.
+/// The result is stored in an Int16Array, which truncates toward zero.
+/// Equivalent to: finalGeneratorValue(generator, sum)
+fn final_generator_value(generator: usize, sum: f64) -> i16 {
+    if generator == generator_types::SAMPLE_MODES as usize {
+        let mode = sum.trunc();
+        return if (0.0..=4.0).contains(&mode) { mode as i16 } else { 0 };
+    }
+    let value = match GENERATOR_LIMITS.get(generator) {
+        Some(Some(limit)) => (limit.max as f64).min((limit.min as f64).max(sum)),
+        // Unused generator, only prevent the overflow
+        _ => 32_767f64.min((-32_768f64).max(sum)),
+    };
+    // `as` truncates toward zero like the Int16Array store
+    value as i16
+}
 
 // ---------------------------------------------------------------------------
 // compute_modulators
@@ -209,58 +228,38 @@ pub fn compute_modulators<C: ChannelContext, V: VoiceContext>(
         // All mode: compute all modulators
         // ---------------------------------------------------------------
         SourceFilter::All => {
-            // Step 1: Copy generators → modulated_generators (with offsets applied)
-            // Equivalent to:
-            //   if (this.generators.offsetsEnabled) { generators[i] = clamp(generators[i] + g[i]) }
-            //   modulatedGenerators.set(generators);
+            // Sum without limits first, only the final sum saturates (SFe 4.0, section 7.1).
+            // A float buffer, so the fractions are only cut once
+            // Equivalent to: GENERATOR_SUMS.set(generators) (with offsets applied)
+            let mut generator_sums = [0f64; GENERATORS_AMOUNT];
             {
                 let base = voice.generators();
                 let offsets = channel.generator_offsets();
                 let offsets_enabled = channel.generator_offsets_enabled();
-                let len = base.len().min(modulated_generators.len());
-                for (i, mg) in modulated_generators.iter_mut().enumerate().take(len) {
-                    *mg = effective_base(base, offsets, i, offsets_enabled);
+                let len = base.len().min(GENERATORS_AMOUNT);
+                for (i, sum) in generator_sums.iter_mut().enumerate().take(len) {
+                    *sum = effective_base(base, offsets, i, offsets_enabled) as f64;
                 }
             }
 
-            // Step 2: Compute each modulator and add to destination
             // Equivalent to:
             //   for (let i = 0; i < modulators.length; i++) {
-            //     modulatedGenerators[mod.destination] = clamp(
-            //         modulatedGenerators[mod.destination] + voice.computeModulator(...))
+            //     GENERATOR_SUMS[modulators[i].destination] += this.computeModulator(voice, pitch, i)
             let num_mods = voice.modulators().len();
             for i in 0..num_mods {
-                // Get destination (limiting borrow scope)
                 let dest_raw = { voice.modulators()[i].destination };
-                if dest_raw < 0 || (dest_raw as usize) >= modulated_generators.len() {
-                    continue; // Skip invalid destination
-                }
-                let dest = dest_raw as usize;
-
-                // Compute modulator value (separate borrow needed for &mut self)
                 let mod_val = voice.compute_single_modulator(&sf2_channel, pitch, i);
-
-                // Clamp and add (prevent i16 overflow)
-                // TS: modulatedGenerators[mod.destination] + voice.computeModulator(...)
-                // TS does f64 addition first, then Int16Array truncates to i16.
-                // Use f64 to match TypeScript's number type precision.
-                let current = modulated_generators[dest] as f64;
-                let new_val = (current + mod_val) as i32;
-                let new_val = new_val.clamp(-32_768, 32_767);
-                modulated_generators[dest] = new_val as i16;
+                // TS writes an invalid index of a Float64Array, which does nothing
+                if dest_raw < 0 || (dest_raw as usize) >= GENERATORS_AMOUNT {
+                    continue;
+                }
+                generator_sums[dest_raw as usize] += mod_val;
             }
 
-            // Step 3: Clamp to GENERATOR_LIMITS
-            // Equivalent to:
-            //   for (let gen = 0; gen < modulatedGenerators.length; gen++) {
-            //     const limit = generatorLimits[gen];
-            //     if (!limit) continue;
-            //     modulatedGenerators[gen] = Math.min(limit.max, Math.max(limit.min, ...))
+            // Apply limits, an unused generator only saturates
+            // Testcase: gm.dls polysynth
             for (g, mg) in modulated_generators.iter_mut().enumerate() {
-                if let Some(Some(limit)) = GENERATOR_LIMITS.get(g) {
-                    let clamped = (*mg as i32).clamp(limit.min, limit.max);
-                    *mg = clamped as i16;
-                }
+                *mg = final_generator_value(g, generator_sums[g]);
             }
         }
 
@@ -306,45 +305,35 @@ pub fn compute_modulators<C: ChannelContext, V: VoiceContext>(
                     let gens = voice.generators();
                     let offsets = channel.generator_offsets();
                     let offsets_enabled = channel.generator_offsets_enabled();
-                    effective_base(gens, offsets, dest, offsets_enabled) as i32
+                    effective_base(gens, offsets, dest, offsets_enabled) as f64
                 };
 
                 // Compute modulator (also writes to voice.modulatorValues[i])
-                // Equivalent to: voice.computeModulator(this.midiControllers, pitch, i)
+                // Equivalent to: this.computeModulator(voice, pitch, i)
                 voice.compute_single_modulator(&sf2_channel, pitch, i);
 
-                // Sum all modulator values for this destination
+                // Sum the values of all modulators for this destination
                 // Equivalent to:
                 //   for (let j = 0; j < modulators.length; j++) {
                 //     if (modulators[j].destination === destination) {
                 //       outputValue += voice.modulatorValues[j];
                 //     }
                 //   }
-                // Sum all modulator values (i16, matching TS Int16Array) for this destination.
-                // TS: outputValue += voice.modulatorValues[j]; (Int16Array → integer sum)
                 let output = {
                     let mods = voice.modulators();
                     let vals = voice.modulator_values();
                     let mut sum = base_val;
                     for (j, mod_) in mods.iter().enumerate() {
                         if mod_.destination == dest_raw {
-                            sum += vals.get(j).copied().unwrap_or(0) as i32;
+                            sum += vals.get(j).copied().unwrap_or(0.0);
                         }
                     }
                     sum
                 };
 
-                // Apply limits
-                // Equivalent to:
-                //   modulatedGenerators[destination] = Math.max(limits.min,
-                //       Math.min(outputValue, limits.max))
                 // Apply the limits instantly to prevent -32k overflow
                 // Testcase: gm.dls polysynth
-                modulated_generators[dest] = match GENERATOR_LIMITS.get(dest) {
-                    Some(Some(limit)) => output.min(limit.max).max(limit.min) as i16,
-                    // Unused generator, only prevent the overflow
-                    _ => output.min(32_767).max(-32_768) as i16,
-                };
+                modulated_generators[dest] = final_generator_value(dest, output);
             }
         }
     }
@@ -420,7 +409,7 @@ use crate::soundbank::basic_soundbank::modulator_source::SF2Channel;
     struct MockVoice {
         modulators: Vec<Modulator>,
         generators: Vec<i16>,
-        modulator_values: Vec<i16>,
+        modulator_values: Vec<f64>,
         midi_note: usize,
         /// Simple mock that returns a fixed value without using closures
         fixed_mod_value: f64,
@@ -437,7 +426,7 @@ use crate::soundbank::basic_soundbank::modulator_source::SF2Channel;
             }
         }
         fn with_modulators(mut self, mods: Vec<Modulator>, mod_val: f64) -> Self {
-            self.modulator_values = vec![0; mods.len()];
+            self.modulator_values = vec![0.0; mods.len()];
             self.modulators = mods;
             self.fixed_mod_value = mod_val;
             self
@@ -460,13 +449,12 @@ use crate::soundbank::basic_soundbank::modulator_source::SF2Channel;
             _pitch: i16,
             index: usize,
         ) -> f64 {
-            // Store as i16 (matching TS Int16Array truncation), return full f64 value
             if let Some(v) = self.modulator_values.get_mut(index) {
-                *v = self.fixed_mod_value as i16;
+                *v = self.fixed_mod_value;
             }
             self.fixed_mod_value
         }
-        fn modulator_values(&self) -> &[i16] {
+        fn modulator_values(&self) -> &[f64] {
             &self.modulator_values
         }
     }

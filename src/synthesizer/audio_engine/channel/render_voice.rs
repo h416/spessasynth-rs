@@ -55,6 +55,20 @@ fn pan_tables() -> &'static ([f32; 1001], [f32; 1001]) {
     })
 }
 
+/// The resonance gain reduction 10^(-q / 400) for every initialFilterQ (0 to 960 cB, always whole).
+/// Equivalent to: resonanceGainTable (Float32Array of 961)
+static RESONANCE_GAIN_TABLE: OnceLock<[f32; 961]> = OnceLock::new();
+
+fn resonance_gain_table() -> &'static [f32; 961] {
+    RESONANCE_GAIN_TABLE.get_or_init(|| {
+        let mut table = [0f32; 961];
+        for (q, e) in table.iter_mut().enumerate() {
+            *e = 10f64.powf(-(q as f64) / 400.0) as f32;
+        }
+        table
+    })
+}
+
 /// A mono sum of the voices of a channel that share the pan and the effect send levels.
 /// This allows to group voices and have them mixed only once, where the group is then
 /// mixed with sends, which is faster.
@@ -258,6 +272,12 @@ impl MidiChannel {
         let gain_cb = modulated[gt::GAIN as usize];
         if gain_cb != 0 {
             voice_gain *= cb_attenuation_to_gain(-(gain_cb as i32));
+        }
+        // The filter's gain reduction of half the resonance, from initialFilterQ only (0 to 960 cB).
+        // FilterQOffset changes the Q but not the level (SFe 4.0, section 7.1.1)
+        let q_cb = modulated[gt::INITIAL_FILTER_Q as usize];
+        if q_cb != 0 {
+            voice_gain *= resonance_gain_table()[q_cb as usize] as f64;
         }
 
         // Controller matrix (GS / XG)

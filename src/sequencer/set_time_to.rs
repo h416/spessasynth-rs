@@ -68,6 +68,13 @@ impl ChannelStatus {
     }
 }
 
+/// Stores a controller value in the saved 14-bit table, like playback does.
+/// The LSB controllers are independent, so every controller is stored alone (SFe 4.0, section 11.3).
+/// Equivalent to: storeController(controllers, controller, value)
+fn store_controller(controllers: &mut [i16], controller: MidiController, value: u8) {
+    controllers[controller as usize] = (value as i16) << 7;
+}
+
 /// Ensures that the channel status exists (ports may be added during the seek).
 /// Equivalent to: `channels[channel] ??= createChannelStatus(channel)`
 fn ensure_channel_status(channels: &mut Vec<ChannelStatus>, channel: usize) {
@@ -86,8 +93,13 @@ impl SpessaSynthSequencer {
         // Reset pitch wheel
         ch.pitch_wheel = 8192;
         ch.param.reset_all_controllers();
+        // Like playback, the LSB controllers in the list (CC 33 and 43) are reset on their own
         for &reset_cc in RP_15_RESET_CC_NUMS.iter() {
-            ch.controllers[reset_cc as usize] = DEFAULT_MIDI_CONTROLLERS[reset_cc as usize];
+            store_controller(
+                &mut ch.controllers,
+                reset_cc,
+                (DEFAULT_MIDI_CONTROLLERS[reset_cc as usize] >> 7) as u8,
+            );
         }
         // Forward it, so the synth's parameter selection matches the following data entries
         self.synth
@@ -222,8 +234,7 @@ impl SpessaSynthSequencer {
                                 if is_cc_non_skippable(controller) {
                                     self.synth.controller_change(channel, controller, value);
                                 } else {
-                                    channels[channel].controllers[controller as usize] =
-                                        (value as i16) << 7;
+                                    store_controller(&mut channels[channel].controllers, controller, value);
                                 }
                             }
 
@@ -281,8 +292,7 @@ impl SpessaSynthSequencer {
                                     if is_cc_non_skippable(ac) {
                                         self.synth.controller_change(channel, ac, av);
                                     } else {
-                                        channels[channel].controllers[ac as usize] =
-                                            (av as i16) << 7;
+                                        store_controller(&mut channels[channel].controllers, ac, av);
                                     }
                                 }
                             }
@@ -293,8 +303,7 @@ impl SpessaSynthSequencer {
                                 } else if is_cc_non_skippable(controller) {
                                     self.synth.controller_change(channel, controller, value);
                                 } else {
-                                    channels[channel].controllers[controller as usize] =
-                                        (value as i16) << 7;
+                                    store_controller(&mut channels[channel].controllers, controller, value);
                                 }
                             }
                         }
@@ -515,7 +524,7 @@ mod tests {
     #[test]
     fn test_rp15_reset_cc_nums_contains_sustain_pedal() {
         assert!(RP_15_RESET_CC_NUMS.contains(&midi_controllers::SUSTAIN_PEDAL));
-        assert_eq!(RP_15_RESET_CC_NUMS.len(), 10);
+        assert_eq!(RP_15_RESET_CC_NUMS.len(), 12);
     }
 
     // -- set_time_to --

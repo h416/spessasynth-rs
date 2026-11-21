@@ -10,9 +10,47 @@ use std::sync::LazyLock;
 
 use crate::soundbank::enums::{ModulatorCurveType, modulator_curve_types};
 
-/// The length of the precomputed curve tables.
+/// The source value range, 0 to 16384 (SFe 4.0, section 7.2).
+/// The precomputed tables have one more entry, so 16384 is a real index.
 /// Equivalent to: MODULATOR_RESOLUTION
 pub const MODULATOR_RESOLUTION: usize = 16_384;
+
+/// Equivalent to: Math.round (half-up)
+fn js_round(x: f64) -> f64 {
+    (x + 0.5).floor()
+}
+
+/// The source value of a 7-bit value (velocity, key, pressures, controllers), center-max (SFe 4.0, section 7.2).
+/// 64 is exactly the center (8192) and 127 exactly the end (16384).
+/// Equivalent to: SOURCE_VALUE_7_BIT (Uint16Array of 128)
+pub static SOURCE_VALUE_7_BIT: LazyLock<[u16; 128]> = LazyLock::new(|| {
+    let mut t = [0u16; 128];
+    for (v, e) in t.iter_mut().enumerate() {
+        // v <= 64 ? v * 128 : Math.round(8192 + (8192 * (v - 64)) / 63)
+        *e = if v <= 64 {
+            (v * 128) as u16
+        } else {
+            js_round(8192.0 + (8192.0 * (v as f64 - 64.0)) / 63.0) as u16
+        };
+    }
+    t
+});
+
+/// The source value of a 14-bit value (the pitch wheel and the computed ranges), center-max (SFe 4.0, section 7.2).
+/// 8192 stays the center and 16383 is exactly the end (16384).
+/// Equivalent to: SOURCE_VALUE_14_BIT (Uint16Array of 16384)
+pub static SOURCE_VALUE_14_BIT: LazyLock<Vec<u16>> = LazyLock::new(|| {
+    (0..16_384usize)
+        .map(|w| {
+            // w <= 8192 ? w : Math.round(8192 + (8192 * (w - 8192)) / 8191)
+            if w <= 8192 {
+                w as u16
+            } else {
+                js_round(8192.0 + (8192.0 * (w as f64 - 8192.0)) / 8191.0) as u16
+            }
+        })
+        .collect()
+});
 
 /// Precalculate lookup tables for concave and convex curves.
 /// Equivalent to: const concave / const convex (Float32Array of MODULATOR_RESOLUTION + 1)
@@ -74,13 +112,13 @@ fn evaluate(curve_type: ModulatorCurveType, mut value: f64, is_bipolar: bool) ->
 }
 
 /// Computes the four tables of a built-in curve, one per transform (0bPD: polarity, direction),
-/// indexed by the 14-bit source value.
+/// indexed by the source value (0 to 16,384).
 /// Equivalent to: buildTables()
 fn build_tables(curve_type: ModulatorCurveType) -> [Vec<f32>; 4] {
     std::array::from_fn(|transform| {
         let is_bipolar = (transform & 0b10) != 0;
         let is_negative = (transform & 1) != 0;
-        let mut table = vec![0.0f32; MODULATOR_RESOLUTION];
+        let mut table = vec![0.0f32; MODULATOR_RESOLUTION + 1];
         for (v, entry) in table.iter_mut().enumerate() {
             let value = if curve_type == modulator_curve_types::SWITCH {
                 // SF2 switches on after half of the maximum, so the center (8192, CC value 64) is already on.

@@ -143,8 +143,13 @@ impl BasicZone {
     pub fn add_generators(&mut self, generators: &[Generator]) {
         for g in generators {
             match g.generator_type {
-                gt::INVALID | gt::SAMPLE_ID | gt::INSTRUMENT => {
-                    // Don't add these; they have their own properties on subclasses
+                gt::INVALID
+                | gt::SAMPLE_ID
+                | gt::INSTRUMENT
+                | gt::SAMPLE_ID_MSB
+                | gt::INSTRUMENT_MSB => {
+                    // Don't add these; they have their own properties on subclasses.
+                    // An index MSB anywhere but next to its index is ignored (SFe 4.0, section 7.1.1)
                 }
                 gt::VEL_RANGE => {
                     self.vel_range.min = (g.generator_value & 0x7f) as f64;

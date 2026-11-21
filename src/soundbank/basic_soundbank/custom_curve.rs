@@ -5,12 +5,41 @@
 //! (`linkedTo`, `useCount`, `linkTo`, `unlinkFrom`) and `setPoints`. They keep the curves of an edited bank
 //! consistent. A Rust curve is shared by the sources that use it (`Arc`) and never changes after loading.
 
+use std::sync::LazyLock;
+
+use crate::soundbank::basic_soundbank::modulator_curve::SOURCE_VALUE_7_BIT;
+
+/// The source values a 7-bit value reaches, in either direction (x and 16384 - x).
+/// Equivalent to: GRID_POSITIONS
+static GRID_POSITIONS: LazyLock<Vec<i32>> = LazyLock::new(|| {
+    let mut positions: Vec<i32> = Vec::new();
+    let forward = SOURCE_VALUE_7_BIT.iter().map(|&x| x as i32);
+    let reversed = SOURCE_VALUE_7_BIT.iter().map(|&x| 16_384 - x as i32);
+    for x in forward.chain(reversed) {
+        if !positions.contains(&x) {
+            positions.push(x);
+        }
+    }
+    positions
+});
+
+/// Maps a value of [`GRID_POSITIONS`] to its slot in the grids of a curve, -1 for any other value.
+/// Equivalent to: GRID_SLOT
+static GRID_SLOT: LazyLock<Vec<i16>> = LazyLock::new(|| {
+    let mut slots = vec![-1i16; 16_385];
+    for (slot, &x) in GRID_POSITIONS.iter().enumerate() {
+        slots[x as usize] = slot as i16;
+    }
+    slots
+});
+
 /// A single point of a [`CustomCurve`].
 /// Equivalent to: CustomCurvePoint
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CustomCurvePoint {
-    /// The source value, 0 to 16,384. A 14-bit source value is 0 to 16,383, and a 7-bit source value `v` is at
-    /// `v << 7`. The value 16,384 is the end of the range, so a curve can be defined up to exactly 1.
+    /// The source value, 0 to 16,384, after the center-max mapping of SFe 4.0, section 7.2.
+    /// A 7-bit value `v` up to 64 is at `v * 128`, above it at `round(8192 + 8192 * (v - 64) / 63)`, so 127 is 16,384.
+    /// A 14-bit value `w` up to 8192 is at `w`, above it at `round(8192 + 8192 * (w - 8192) / 8191)`.
     pub x: i32,
     /// The output, 0 to 16,384. A unipolar source outputs `y / 16384`, a bipolar source `(y - 8192) / 8192`.
     pub y: i32,
@@ -32,9 +61,9 @@ pub struct CustomCurve {
     py: Vec<f64>,
     // For each x >> 7 (0 to 128): the last point with x <= (x >> 7) * 128, -1 if there is none
     start: [i32; 129],
-    // The unipolar and bipolar outputs at every multiple of 128, so 7-bit sources are a single read
-    grid_unipolar: [f32; 129],
-    grid_bipolar: [f32; 129],
+    // The unipolar and bipolar outputs at every value a 7-bit source reaches, so they are a single read
+    grid_unipolar: Vec<f32>,
+    grid_bipolar: Vec<f32>,
 }
 
 /// Custom curves are the same only if their points are.
@@ -57,8 +86,8 @@ impl CustomCurve {
             px: Vec::new(),
             py: Vec::new(),
             start: [0; 129],
-            grid_unipolar: [0.0; 129],
-            grid_bipolar: [0.0; 129],
+            grid_unipolar: vec![0.0; GRID_POSITIONS.len()],
+            grid_bipolar: vec![0.0; GRID_POSITIONS.len()],
         };
         curve.precompute();
         Ok(curve)
@@ -121,18 +150,20 @@ impl CustomCurve {
     }
 
     /// Gets the output of a source using this curve.
-    /// `raw` is the 14-bit source value, 0 to 16,383.
+    /// `raw` is the source value, 0 to 16,384.
     /// Returns 0 to 1, or -1 to 1 when bipolar.
     /// Equivalent to: getValue(raw, isBipolar, isNegative)
-    pub fn get_value(&self, raw: i32, is_bipolar: bool, is_negative: bool) -> f32 {
+    pub fn get_value(&self, raw: usize, is_bipolar: bool, is_negative: bool) -> f32 {
+        let raw = raw as i32;
         // The reversed value is 16384 - x like the SF2 curves, so 64 stays the center
         let x = if is_negative { 16_384 - raw } else { raw };
         // 7-bit sources always land on the grid
-        if (x & 127) == 0 {
+        let slot = GRID_SLOT[x as usize];
+        if slot >= 0 {
             return if is_bipolar {
-                self.grid_bipolar[(x >> 7) as usize]
+                self.grid_bipolar[slot as usize]
             } else {
-                self.grid_unipolar[(x >> 7) as usize]
+                self.grid_unipolar[slot as usize]
             };
         }
         let y = self.get_y(x);
@@ -157,9 +188,11 @@ impl CustomCurve {
                 i += 1;
             }
             self.start[c as usize] = i;
+        }
+        for (slot, &x) in GRID_POSITIONS.iter().enumerate() {
             let y = self.get_y(x);
-            self.grid_unipolar[c as usize] = (y / 16_384.0) as f32;
-            self.grid_bipolar[c as usize] = ((y - 8192.0) / 8192.0) as f32;
+            self.grid_unipolar[slot] = (y / 16_384.0) as f32;
+            self.grid_bipolar[slot] = ((y - 8192.0) / 8192.0) as f32;
         }
     }
 }

@@ -339,8 +339,11 @@ impl ConnectionBlock {
         {
             return;
         }
-        // The CC 71 to gain twins are added back when the file is loaded, DLS has no gain to store them
-        if m.destination == gt::GAIN && m.primary_source.is_controller(midi_controllers::FILTER_RESONANCE) {
+        // The amount 0 CC 71 twin only turns off a default that DLS does not have (SFe 4.0, section 9.2)
+        if m.transform_amount == 0.0
+            && m.destination == gt::FILTER_Q_OFFSET
+            && m.primary_source.is_controller(midi_controllers::FILTER_RESONANCE)
+        {
             return;
         }
 

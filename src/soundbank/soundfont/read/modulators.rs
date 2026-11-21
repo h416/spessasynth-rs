@@ -212,8 +212,8 @@ mod tests {
     #[test]
     fn test_known_destinations_match_typescript() {
         // Object.values(GeneratorTypes) without endOper, from TS
-        let unknown = [14, 18, 19, 20, 42, 49, 55, 59, 60, 90];
-        for d in 0..=90i16 {
+        let unknown = [14, 18, 19, 20, 42, 49, 55, 59, 60, 92];
+        for d in 0..=92i16 {
             assert_eq!(is_known_destination(d), !unknown.contains(&d), "destination {d}");
         }
     }
