@@ -4,6 +4,7 @@
 
 use crate::soundbank::basic_soundbank::basic_sample::BasicSample;
 use crate::soundbank::basic_soundbank::basic_soundbank::BasicSoundBank;
+use crate::soundbank::basic_soundbank::modulator::MOD_BYTE_SIZE;
 use crate::soundbank::soundfont::read::curves::read_curves;
 use crate::soundbank::soundfont::sf2_compatibility::{from_sf2_default_modulators, upgrade_sf2_bank};
 use crate::soundbank::soundfont::read::generators::read_generators;
@@ -165,6 +166,10 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
 
     let type_str = read_binary_string_indexed(&mut main_file_array, 4).to_lowercase();
     verify_texts(&type_str, &["sfbk", "sfpk", "sfen"]);
+    // 64-bit chunk sizes (RIFS) are only defined for SFe (SFe 4.0, section 3.1)
+    if rf64 && type_str != "sfen" {
+        panic!("Expected 'sfen' in a 'RIFS' file, got '{}'", type_str);
+    }
     let is_sf2_pack = type_str == "sfpk";
     let is_sfe_type = type_str == "sfen";
 
@@ -179,6 +184,9 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
     let mut dmod_chunk: Option<RIFFChunk> = None;
     let mut curve_chunk: Option<RIFFChunk> = None;
     let mut xmod_chunk: Option<RIFFChunk> = None;
+    // A second DMOD, XMOD, CURV or xdta makes an SFe file invalid (SFe 4.0, section 4.2),
+    // In an SF2 file the last one wins as before
+    let mut duplicates: Vec<&str> = Vec::new();
 
     while info_chunk.data.len() > info_chunk.data.current_index {
         let mut chunk = RIFFChunk::read(&mut info_chunk.data, rf64, true);
@@ -199,19 +207,31 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
             }
             "DMOD" => {
                 // Read after INFO, it depends on the version
+                if dmod_chunk.is_some() {
+                    duplicates.push("DMOD");
+                }
                 dmod_chunk = Some(chunk);
             }
             // SFe custom curves and the extended DMOD records
             "CURV" => {
+                if curve_chunk.is_some() {
+                    duplicates.push("CURV");
+                }
                 curve_chunk = Some(chunk);
             }
             "XMOD" => {
+                if xmod_chunk.is_some() {
+                    duplicates.push("XMOD");
+                }
                 xmod_chunk = Some(chunk);
             }
             // LIST: possible xdta extended SF2 chunk
             "LIST" => {
                 let list_type = read_binary_string_indexed(&mut chunk.data, 4);
                 if list_type == "xdta" {
+                    if xdta_chunk.is_some() {
+                        duplicates.push("xdta");
+                    }
                     SpessaLog::info("Extended SF2 found!");
                     xdta_chunk = Some(chunk);
                 }
@@ -254,6 +274,9 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
     // SFe files below version 4 used other generator numbers, read them as SF2.
     let version = &bank.sound_bank_info.version;
     let is_sfe = is_sfe_type && version.major >= 4;
+    if is_sfe && !duplicates.is_empty() {
+        panic!("Invalid SFe file: more than one {} chunk.", duplicates[0]);
+    }
     if is_sfe_type && version.major > 4 {
         panic!(
             "SF parsing error: SFe version {}.{} is not supported! The file may be corrupted.",
@@ -271,6 +294,25 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
         (true, Some(chunk)) => read_curves(chunk),
         _ => Vec::new(),
     };
+    // A DMOD that is not a whole number of 10-byte records is malformed.
+    // An SFe file is rejected (SFe 4.0, section 7.3), an SF2 file is read as if it had no DMOD
+    // (the section 7.3 list, as section 9.2 says)
+    if let Some(chunk) = dmod_chunk.as_ref()
+        && chunk.data.len() % MOD_BYTE_SIZE != 0
+    {
+        if is_sfe {
+            panic!(
+                "Invalid DMOD chunk: its size ({}) is not a multiple of 10 bytes.",
+                chunk.data.len()
+            );
+        }
+        SpessaLog::warn(&format!(
+            "Ignoring the DMOD chunk: its size ({}) is not a multiple of 10 bytes.",
+            chunk.data.len()
+        ));
+        dmod_chunk = None;
+    }
+    let has_dmod = dmod_chunk.is_some();
     if let Some(mut chunk) = dmod_chunk {
         let read = read_modulators(&mut chunk, is_sfe, &curves, xmod_chunk.as_mut());
         bank.default_modulators = if is_sfe {
@@ -401,7 +443,10 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
         let x_samples = read_samples(&mut x.shdr, &x_smpl_data, false);
         if x_samples.len() == sf_samples.len() {
             for (i, s) in sf_samples.iter_mut().enumerate() {
-                s.name.push_str(&x_samples[i].name);
+                // The xdta half continues only a full name, a zero byte ends it (SFe 4.0, section 5.5)
+                if s.name.chars().count() == 20 {
+                    s.name.push_str(&x_samples[i].name);
+                }
                 s.linked_sample_index |= x_samples[i].linked_sample_index << 16;
             }
         }
@@ -430,9 +475,11 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
         let x_instruments = read_instruments(&mut x.inst, true);
         if x_instruments.len() == instruments.len() {
             for (i, inst) in instruments.iter_mut().enumerate() {
-                inst.instrument
-                    .name
-                    .push_str(&x_instruments[i].instrument.name);
+                if inst.instrument.name.chars().count() == 20 {
+                    inst.instrument
+                        .name
+                        .push_str(&x_instruments[i].instrument.name);
+                }
                 // Shift the extended zone_start_index into the upper 16 bits before OR-ing.
                 inst.zone_start_index |= x_instruments[i].zone_start_index << 16;
             }
@@ -498,7 +545,9 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
         let x_presets = read_presets(&mut x.phdr, true);
         if x_presets.len() == presets.len() {
             for (i, pres) in presets.iter_mut().enumerate() {
-                pres.preset.name.push_str(&x_presets[i].preset.name);
+                if pres.preset.name.chars().count() == 20 {
+                    pres.preset.name.push_str(&x_presets[i].preset.name);
+                }
                 // Shift the extended zone_start_index into the upper 16 bits before OR-ing.
                 pres.zone_start_index |= x_presets[i].zone_start_index << 16;
             }
@@ -549,7 +598,7 @@ pub fn parse_sound_font2(data: Vec<u8>) -> BasicSoundBank {
 
     // Convert to SFe
     if !is_sfe {
-        upgrade_sf2_bank(&mut bank);
+        upgrade_sf2_bank(&mut bank, has_dmod);
     }
     // Sort presets and run parse_internal (XG bank detection)
     bank.flush();

@@ -195,9 +195,10 @@ impl WaveSample {
 
         let looping_mode = zone.zone.get_generator(gt::SAMPLE_MODES, 0) as SampleLoopingMode;
 
-        // Don't add loops unless needed
-        // DLS has no alternating loop (SFe sampleModes 4), it is dropped like in SF2
-        if looping_mode != 0 && looping_mode != 4 {
+        // Don't add loops unless needed: 1 and 3 loop, 2 (start on release) and unknown values do not.
+        // DLS has no alternating loop (SFe sampleModes 4), so it becomes a forward loop like in SF2
+        // (SFe 4.0, section 9.1)
+        if looping_mode == 1 || looping_mode == 3 || looping_mode == 4 {
             // Make sure to apply startloop / endloop address offsets
             let loop_start = (sample.loop_start as i32)
                 + zone.zone.get_generator(gt::STARTLOOP_ADDRS_OFFSET, 0)
@@ -210,7 +211,9 @@ impl WaveSample {
                 + zone.zone.get_generator(gt::ENDLOOP_ADDRS_COARSE_OFFSET, 0) * 32_768;
 
             let dls_loop_type = match looping_mode {
+                // Loop until release
                 3 => dls_loop_types::LOOP_AND_RELEASE,
+                // Forward loop, for 1 and 4
                 _ => dls_loop_types::FORWARD,
             };
 

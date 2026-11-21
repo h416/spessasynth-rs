@@ -26,6 +26,7 @@ use crate::soundbank::basic_soundbank::basic_zone::BasicZone;
 use crate::soundbank::basic_soundbank::generator::Generator;
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
 use crate::soundbank::basic_soundbank::modulator::Modulator;
+use crate::soundbank::soundfont::read::generators::{known_generators, read_zone_index};
 use crate::soundbank::soundfont::read::zones::ZoneIndexes;
 use crate::utils::loggin::SpessaLog;
 
@@ -58,18 +59,18 @@ impl SoundFontPresetZone {
     ) -> Result<Self, String> {
         // Search for the instrument generator
         // Equivalent to: generators.find(g => g.generatorType === generatorTypes.instrument)
-        let instrument_id_gen = generators
+        let instrument_id_pos = generators
             .iter()
-            .find(|g| g.generator_type == gt::INSTRUMENT)
+            .position(|g| g.generator_type == gt::INSTRUMENT)
             .ok_or_else(|| "No instrument ID found in preset zone.".to_string())?;
 
-        // generator_value is i16, but SF2 indices are always non-negative, so cast via u16
-        // Equivalent to: instruments[instrumentID.generatorValue]
-        let instrument_idx = instrument_id_gen.generator_value as u16 as usize;
+        // Unsigned, with instrumentMSB as the top 16 bits (SFe 4.0, section 7.1.1)
+        let instrument_idx = read_zone_index(generators, instrument_id_pos, gt::INSTRUMENT_MSB);
 
+        // A zone whose index refers past the instruments is ignored (SFe 4.0, section 7.1.1)
         if instrument_idx >= instrument_count {
             return Err(format!(
-                "Invalid instrument ID: {}, available instruments: {}",
+                "Invalid instrument ID: {}, available instruments: {}. Ignoring the zone.",
                 instrument_idx, instrument_count
             ));
         }
@@ -77,8 +78,8 @@ impl SoundFontPresetZone {
         // Equivalent to: super(preset, instrument)
         let mut zone = BasicPresetZone::new(preset_idx, instrument_idx);
 
-        // Equivalent to: this.addGenerators(...generators)
-        zone.zone.add_generators(generators);
+        // Unknown generators are ignored, and so is everything after the index, as in SF2 (SFe 4.0, section 7.1.1)
+        zone.zone.add_generators(&known_generators(&generators[..=instrument_id_pos]));
         // Equivalent to: this.addModulators(...modulators)
         zone.zone.add_modulators(modulators);
 
@@ -147,7 +148,9 @@ pub fn apply_preset_zones<P: SoundFontPresetZoneSink>(
             let gens_start = indexes.gen_ndx[gen_index] as usize;
             gen_index += 1;
             let gens_end = indexes.gen_ndx[gen_index] as usize;
-            let gens = &preset_gens[gens_start..gens_end];
+            let read_gens = &preset_gens[gens_start..gens_end];
+            // Unknown generators are ignored
+            let gens = known_generators(read_gens);
 
             // Extract the modulators slice
             // Equivalent to: presetMods.slice(modsStart, modsEnd)
@@ -160,7 +163,7 @@ pub fn apply_preset_zones<P: SoundFontPresetZoneSink>(
             // Equivalent to: if (gens.some(g => g.generatorType === generatorTypes.instrument))
             if gens.iter().any(|g| g.generator_type == gt::INSTRUMENT) {
                 // Equivalent to: preset.createSoundFontZone(mods, gens, instruments)
-                match SoundFontPresetZone::new(preset_idx, mods, gens, instrument_count) {
+                match SoundFontPresetZone::new(preset_idx, mods, read_gens, instrument_count) {
                     Ok(zone) => preset.push_zone(zone.0),
                     Err(e) => SpessaLog::warn(&e),
                 }
@@ -169,7 +172,7 @@ pub fn apply_preset_zones<P: SoundFontPresetZoneSink>(
                 // Equivalent to: preset.globalZone.addGenerators(...gens)
                 //                preset.globalZone.addModulators(...mods)
                 let global = preset.global_zone_mut();
-                global.add_generators(gens);
+                global.add_generators(&gens);
                 global.add_modulators(mods);
             }
         }
@@ -220,7 +223,8 @@ mod tests {
 
     #[test]
     fn test_new_ok_adds_generators_to_zone() {
-        let gens = vec![gen_instrument(1), gen_pan(50.0)];
+        // The generators after the index are ignored, so PAN comes first
+        let gens = vec![gen_pan(50.0), gen_instrument(1)];
         let zone = SoundFontPresetZone::new(0, &[], &gens, 5).unwrap();
         // PAN goes into zone.generators as a regular generator
         assert!(

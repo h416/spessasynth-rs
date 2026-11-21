@@ -282,8 +282,12 @@ pub fn select_patch<'a>(
             return &patches[i];
         }
 
-        // No match, pick any matching drum
-        if let Some(i) = (0..patches.len()).find(|&i| is_drum[i] && patches[i].program == program) {
+        // No match, pick any matching drum (rule 3.1.3).
+        // Below program 49 GS and XG kits still mean the same.
+        // A kit at bank MSB 120 (GM2) numbers its kits like GS, so it counts at any program
+        if let Some(i) = (0..patches.len()).find(|&i| {
+            is_drum[i] && patches[i].program == program && (program < 49 || patches[i].bank_msb == 120)
+        }) {
             return_replacement(i);
             return &patches[i];
         }
@@ -309,8 +313,9 @@ pub fn select_patch<'a>(
         // For example,
         // XG MU2000 and similar have regular drums on program 56, while GS has the SFX kit.
         // So avoid selecting it and pick any XG drums.
+        // GM2 numbers its kits like GS, so there any program is fine (SFe 4.0, section 11.2.3 rule 3.2.2)
         if let Some(i) = p
-            && patches[i].program < 49
+            && (patches[i].program < 49 || system == MIDISystem::Gm2)
         {
             return_replacement(i);
             return &patches[i];

@@ -720,7 +720,8 @@ impl MidiUtils {
         if a2 >> 4 == 4 {
             let channel = Self::syx_to_channel(a2 & 0x0f) + channel_offset;
             return vec![match a3 {
-                0x00 | 0x01 => {
+                // TONE MAP-0 NUMBER (01) is not handled, like in the synth
+                0x00 => {
                     // Tone map number (cc#32)
                     AnalyzedMidiMessage::ControllerChange {
                         channel,

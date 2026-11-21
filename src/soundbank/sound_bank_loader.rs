@@ -33,6 +33,10 @@ pub fn load_sound_bank(data: Vec<u8>) -> BasicSoundBank {
     // Equivalent to: const check = rf64 ? buffer.slice(12, 16) : buffer.slice(8, 12);
     let check_offset = if rf64 { 12 } else { 8 };
     let id = read_binary_string(&data, 4, check_offset).to_lowercase();
+    // 64-bit chunk sizes are only defined for SFe (SFe 4.0, section 3.1)
+    if rf64 && id != "sfen" {
+        panic!("Expected 'sfen' in a 'RIFS' file, got '{id}'");
+    }
     if id == "dls " {
         // The magic happens here!
         return load_dls(&data);

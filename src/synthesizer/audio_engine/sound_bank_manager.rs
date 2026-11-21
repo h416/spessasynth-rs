@@ -261,13 +261,18 @@ impl SoundBankManager {
             .iter()
             .position(|p| std::ptr::eq(p, preset))?;
         let bank_idx = self.selectable_bank_idxs[idx];
-        // The GS user drum sets are only found by an exact request the sound banks can't answer,
-        // Never by a fallback
-        if BankSelectHacks::is_system_xg(system) || matches(&patch_of(preset), &patch) {
+        // The GS user drum sets exist in every map except the SC-55 map (bank LSB 1),
+        // And drum parts ignore the bank MSB (measured on the SC-88 and SC-88Pro).
+        // A kit of the sound banks at the same program hides them
+        if BankSelectHacks::is_system_xg(system)
+            || !patch.is_gm_gs_drum
+            || patch.bank_lsb == 1
+            || (preset.is_gm_gs_drum && preset.program == patch.program)
+        {
             return Some((preset, bank_idx));
         }
         for (i, placeholder) in self.user_drum_placeholders.iter().enumerate() {
-            if matches(&patch_of(placeholder), &patch) {
+            if placeholder.program == patch.program {
                 return Some((placeholder, Self::user_drum_bank_idx(i)));
             }
         }

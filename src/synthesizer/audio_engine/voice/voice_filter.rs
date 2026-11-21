@@ -184,10 +184,8 @@ impl VoiceFilter {
         // -1 because it's attenuation, and we don't want attenuation
         let resonance_gain = cb_attenuation_to_gain_f64(-(q_cb - 30.1));
 
-        // The sf spec asks for a reduction in gain based on the Q value.
-        // Note that we calculate it again,
-        // Without the 30.1 cB offset as it only applies to the coefficients, not the gain.
-        let q_gain = 1.0 / cb_attenuation_to_gain_f64(-q_cb).sqrt();
+        // The gain reduction of half the resonance is not part of the coefficients. It comes from initialFilterQ
+        // Alone, so the voice applies it (SFe 4.0, section 7.1.1), and the response here is unscaled
 
         // Note: no sin or cos tables are used here as the coefficients are cached
         let w = (2.0 * std::f64::consts::PI * cutoff_hz) / self.sample_rate;
@@ -197,26 +195,26 @@ impl VoiceFilter {
         let (b0, b1, b2) = match self.filter_type {
             1 => {
                 // Highpass, s^2 / D
-                let b0 = ((1.0 + cosw) / 2.0) * q_gain;
-                (b0, -(1.0 + cosw) * q_gain, b0)
+                let b0 = (1.0 + cosw) / 2.0;
+                (b0, -(1.0 + cosw), b0)
             }
             2 => {
                 // Bandpass with constant skirt gain, w * s / D peaks at Q
-                let b0 = (w.sin() / 2.0) * q_gain;
+                let b0 = w.sin() / 2.0;
                 (b0, 0.0, -b0)
             }
             3 => {
                 // Peak, (w^2 - s^2) / D is the lowpass minus the highpass: 2 * Q at the cutoff, 1 at both ends
-                let b0 = -cosw * q_gain;
-                (b0, 2.0 * q_gain, b0)
+                let b0 = -cosw;
+                (b0, 2.0, b0)
             }
             4 => {
                 // Notch, (w^2 + s^2) / D
-                (q_gain, -2.0 * cosw * q_gain, q_gain)
+                (1.0, -2.0 * cosw, 1.0)
             }
             _ => {
                 // SF2 lowpass, w^2 / D
-                let b1 = (1.0 - cosw) * q_gain;
+                let b1 = 1.0 - cosw;
                 let b0 = b1 / 2.0;
                 (b0, b1, b0)
             }

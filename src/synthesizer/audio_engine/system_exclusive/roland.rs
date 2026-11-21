@@ -838,7 +838,11 @@ impl SynthesizerCore {
                         let channel =
                             channel_table[(syx[5] & 0x0f) as usize] as usize + channel_offset;
                         match syx[6] {
-                            0x00 | 0x01 => {
+                            0x01 => {
+                                // TONE MAP-0 NUMBER is not handled
+                                // But known
+                            }
+                            0x00 => {
                                 // Tone map number (bank select LSB)
                                 let voices = &mut self.voices;
                                 let evs = self.midi_channels[channel].controller_change(

@@ -7,11 +7,38 @@
 //! as a private `read_generator()` function that returns a `Generator` directly.
 
 use crate::soundbank::basic_soundbank::generator::Generator;
-use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
+use crate::soundbank::basic_soundbank::generator_types::{GeneratorType, MAX_GENERATOR, generator_types as gt};
 use crate::utils::indexed_array::IndexedByteArray;
 use crate::utils::byte_functions::little_endian::read_little_endian_indexed;
 use crate::soundbank::soundfont::sf2_compatibility::from_sf2_attenuation;
 use crate::utils::riff_chunk::RIFFChunk;
+
+/// The full index of a zone's instrument or sample: the MSB generator holds the top 16 bits
+/// (SFe 4.0, section 7.1.1). Both are read unsigned.
+/// `generators`: the generators of the zone as the file stores them, unknown ones included.
+/// `index`: the position of the instrument or sampleID generator in `generators`.
+/// `msb`: the matching MSB generator type.
+/// Equivalent to: readZoneIndex(generators, index, msb)
+pub fn read_zone_index(generators: &[Generator], index: usize, msb: GeneratorType) -> usize {
+    // The MSB only counts right before the generator it extends, as the file stores them
+    let top = match index.checked_sub(1).map(|i| &generators[i]) {
+        Some(before) if before.generator_type == msb => before.generator_value as u16 as usize,
+        _ => 0,
+    };
+    top * 65_536 + generators[index].generator_value as u16 as usize
+}
+
+/// The generators a zone keeps: unknown ones (above the last defined generator) are ignored.
+/// TS reads the type unsigned, so a stored type above 32767 (negative here) is unknown too.
+/// The invalid type is kept, the zone ignores it.
+/// Equivalent to: knownGenerators(generators)
+pub fn known_generators(generators: &[Generator]) -> Vec<Generator> {
+    generators
+        .iter()
+        .filter(|g| g.generator_type == gt::INVALID || (0..=MAX_GENERATOR).contains(&g.generator_type))
+        .cloned()
+        .collect()
+}
 
 /// Reads one 4-byte generator record from `data_array`, advancing the cursor by 4.
 /// Layout: [type_lo, type_hi, value_lo, value_hi] (all little-endian).

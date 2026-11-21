@@ -71,7 +71,12 @@ pub fn parse_rmidi_internal(
             let chunk_type =
                 read_binary_string_indexed(&mut current_chunk.data, 4).to_lowercase();
 
-            if chunk_type == "sfbk" || chunk_type == "sfpk" || chunk_type == "dls " {
+            // An SFe bank in a RIFF form is "sfen" (the tracker modules embed one)
+            if chunk_type == "sfbk"
+                || chunk_type == "sfpk"
+                || chunk_type == "sfen"
+                || chunk_type == "dls "
+            {
                 SpessaLog::info("Found embedded soundbank!");
                 // Extract the complete embedded RIFF chunk bytes (header included).
                 let end = (start_index + current_chunk.header_size + current_chunk.size as usize)

@@ -14,6 +14,7 @@ use crate::soundbank::basic_soundbank::custom_curve::{CustomCurve, CustomCurvePo
 use crate::soundbank::basic_soundbank::generator_types::{
     GeneratorType, MAX_GENERATOR, generator_types,
 };
+use crate::soundbank::basic_soundbank::modulator_curve::SOURCE_VALUE_7_BIT;
 use crate::soundbank::basic_soundbank::modulator_source::ModulatorSource;
 use crate::soundbank::enums::{modulator_curve_types, modulator_sources};
 use crate::utils::byte_functions::little_endian::write_word;
@@ -57,10 +58,10 @@ pub fn get_mod_source_enum(
 /// Equivalent to: DEFAULT_RESONANT_MOD_SOURCE
 pub const DEFAULT_RESONANT_MOD_SOURCE: u16 = 711;
 
-/// Switch unipolar positive cc 71: on from 64.
-/// = (3<<10) | (0<<9) | (0<<8) | (1<<7) | 71 = 3271
-/// Equivalent to: RESONANT_COMPENSATOR_AMOUNT_SOURCE
-pub const RESONANT_COMPENSATOR_AMOUNT_SOURCE: u16 = 3271;
+/// The amount source of the default CC 71 modulator, a switch on CC 71, so only values above 64 raise the resonance.
+/// Switch unipolar positive cc 71 = (3<<10) | (0<<9) | (0<<8) | (1<<7) | 71 = 3271
+/// Equivalent to: DEFAULT_RESONANT_MOD_AMOUNT_SOURCE
+pub const DEFAULT_RESONANT_MOD_AMOUNT_SOURCE: u16 = 3271;
 
 /// An SF2 Modulator with fully-parsed source objects.
 /// Equivalent to: class Modulator
@@ -135,6 +136,23 @@ impl Modulator {
             && mod1.destination == mod2.destination
             && mod1.transform_type == mod2.transform_type
             && (!check_amount || mod1.transform_amount == mod2.transform_amount)
+    }
+
+    /// Of identical modulators in one list, only the last one applies and the earlier ones are ignored
+    /// (SF2 section 7.4, SFe 4.0, sections 7.3 and 7.4). Identity is the one of [`Modulator::is_identical`].
+    /// Returns the list without the superseded modulators, in their original order.
+    /// Equivalent to: static getLatestOnly(list)
+    pub fn get_latest_only(list: &[Modulator]) -> Vec<Modulator> {
+        list.iter()
+            .enumerate()
+            .filter(|&(i, m)| {
+                !list
+                    .iter()
+                    .enumerate()
+                    .any(|(j, later)| j > i && Modulator::is_identical(m, later, false))
+            })
+            .map(|(_, m)| m.clone())
+            .collect()
     }
 
     /// Copies a modulator, with the same curves.
@@ -346,6 +364,8 @@ fn generator_type_name(gt: GeneratorType) -> String {
         generator_types::DELAY_VOICE => "delayVoice".to_string(),
         generator_types::IGNORE_NOTE_OFF => "ignoreNoteOff".to_string(),
         generator_types::VARIATION_EFFECTS_SEND => "variationEffectsSend".to_string(),
+        generator_types::INSTRUMENT_MSB => "instrumentMSB".to_string(),
+        generator_types::SAMPLE_ID_MSB => "sampleIDMSB".to_string(),
         generator_types::END_OPER => "endOper".to_string(),
         v => v.to_string(),
     }
@@ -355,11 +375,12 @@ fn generator_type_name(gt: GeneratorType) -> String {
 // SPESSASYNTH_DEFAULT_MODULATORS
 // ---------------------------------------------------------------------------
 
+/// The points are (CC value, y), each CC value at its source value (SFe 4.0, section 7.3).
 /// Equivalent to: getCurve(name, points)
 fn get_curve(name: &str, points: &[(i32, i32)]) -> Arc<CustomCurve> {
     let points: Vec<CustomCurvePoint> = points
         .iter()
-        .map(|&(cc, y)| CustomCurvePoint { x: cc << 7, y })
+        .map(|&(cc, y)| CustomCurvePoint { x: SOURCE_VALUE_7_BIT[cc as usize] as i32, y })
         .collect();
     Arc::new(CustomCurve::new(&points, name).expect("valid default curve"))
 }
@@ -503,21 +524,14 @@ pub static SPESSASYNTH_DEFAULT_MODULATORS: LazyLock<Vec<Modulator>> = LazyLock::
             4800.0,
             0,
         ),
-        // Cc 71 (filter Q) to filter Q (default resonant modulator)
+        // Cc 71 (filter Q) to the resonance offset (default resonant modulator).
+        // FilterQOffset changes the Q without the gain reduction, so the part keeps its level, as on GS and XG.
+        // The switch keeps values below 64 from lowering the resonance (SFe 4.0, section 7.3)
         DecodedModulator::new(
             DEFAULT_RESONANT_MOD_SOURCE,
-            0x0, // No controller
-            generator_types::INITIAL_FILTER_Q,
+            DEFAULT_RESONANT_MOD_AMOUNT_SOURCE,
+            generator_types::FILTER_Q_OFFSET,
             250.0,
-            0,
-        ),
-        // Cc 71 to gain: cancels the filter's gain reduction for the resonance cc 71 adds, as GS and XG don't get quieter
-        // Half of the amount above, only above 64 (where the resonance goes up)
-        DecodedModulator::new(
-            DEFAULT_RESONANT_MOD_SOURCE,
-            RESONANT_COMPENSATOR_AMOUNT_SOURCE,
-            generator_types::GAIN,
-            125.0,
             0,
         ),
         // Cc 67 (soft pedal) to filter fc
@@ -570,8 +584,7 @@ mod tests {
             "75,1,1,0,4|0,0,0,0,0|36|9600|0",
             "72,1,1,0,4|0,0,0,0,0|38|9600|0",
             "74,1,1,0,0|0,0,0,0,0|8|4800|0",
-            "71,1,1,0,0|0,0,0,0,0|9|250|0",
-            "71,1,1,0,0|71,1,0,0,3|86|125|0",
+            "71,1,1,0,0|71,1,0,0,3|63|250|0",
             "67,1,0,0,3|0,0,0,0,0|8|-1200|0",
             "94,1,0,0,0|0,0,0,0,0|89|1000|0",
         ];
@@ -608,7 +621,7 @@ mod tests {
         );
         assert_eq!(
             get_mod_source_enum(modulator_curve_types::SWITCH, false, false, true, 71),
-            RESONANT_COMPENSATOR_AMOUNT_SOURCE
+            DEFAULT_RESONANT_MOD_AMOUNT_SOURCE
         );
     }
 
@@ -619,7 +632,7 @@ mod tests {
         // CC 6 (data entry)
         assert_eq!(DecodedModulator::new(0x0086, 0, 48, 1.0, 0).destination, generator_types::INVALID);
         // Destination above the last generator
-        assert_eq!(DecodedModulator::new(0x0081, 0, 90, 1.0, 0).destination, generator_types::INVALID);
+        assert_eq!(DecodedModulator::new(0x0081, 0, 92, 1.0, 0).destination, generator_types::INVALID);
         // Modulation depth range is a general source
         assert_eq!(DecodedModulator::new(0x0011, 0, 48, 1.0, 0).destination, 48);
     }

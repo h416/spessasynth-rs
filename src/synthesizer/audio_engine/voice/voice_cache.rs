@@ -3,10 +3,30 @@
 //! Ported from: src/synthesizer/audio_engine/voice/voice_cache.ts
 
 use crate::soundbank::basic_soundbank::generator_types::generator_types as gt;
-use crate::soundbank::basic_soundbank::generator_types::GENERATORS_AMOUNT;
+use crate::soundbank::basic_soundbank::generator_types::{GENERATORS_AMOUNT, GeneratorType, PRE_VOICE_GENERATORS};
 pub use crate::soundbank::basic_soundbank::modulator::Modulator;
 use crate::soundbank::types::VoiceParameters as BankVoiceParameters;
-use crate::synthesizer::types::SampleLoopingMode;
+
+/// Generators whose modulators are ignored (SFe 4.0, section 7.1).
+/// The first ones act before the voice exists. The rest are not plain values: the spec allows modulating them,
+/// but does not recommend it, so they keep the values the bank stores. The sample offsets are not plain values
+/// either, but they are modulated, as they always were.
+/// Equivalent to: UNMODULATED_GENERATORS.has(destination)
+fn is_unmodulated_generator(destination: GeneratorType) -> bool {
+    PRE_VOICE_GENERATORS.contains(&destination)
+        || destination == gt::OVERRIDING_ROOT_KEY
+        || destination == gt::EXCLUSIVE_CLASS
+        || destination == gt::SAMPLE_MODES
+}
+
+/// Modulators on the generators that are not plain values are ignored (SFe 4.0, section 7.1).
+/// Equivalent to: voiceParams.modulators.filter((m) => !UNMODULATED_GENERATORS.has(m.destination))
+fn modulated_only(modulators: Vec<Modulator>) -> Vec<Modulator> {
+    modulators
+        .into_iter()
+        .filter(|m| !is_unmodulated_generator(m.destination))
+        .collect()
+}
 
 /// Minimal sample data needed by CachedVoice construction.
 /// The caller copies these out of the sound bank's `BasicSample` so the cache does not
@@ -71,8 +91,6 @@ pub struct CachedVoice {
     pub loop_end: u32,
     /// Playback step (rate) for sample pitch correction.
     pub playback_step: f64,
-    /// Sample looping mode.
-    pub looping_mode: SampleLoopingMode,
 }
 
 impl CachedVoice {
@@ -119,9 +137,7 @@ impl CachedVoice {
         let sample_data = sample.get_audio_data();
         let playback_step =
             (sample.sample_rate / sample_rate) * (2.0_f64).powf(sample.pitch_correction / 1200.0); // Cent tuning
-        // Unknown modes do not loop
-        let mode = generators[gt::SAMPLE_MODES as usize];
-        let looping_mode = if (0..=4).contains(&mode) { mode as SampleLoopingMode } else { 0 };
+        // SampleModes is read at note on, after the modulators
 
         // Borrows of voice_params fields end here; move owned fields into CachedVoice.
         let VoiceParameters {
@@ -133,7 +149,7 @@ impl CachedVoice {
         Self {
             sample_data,
             generators,
-            modulators,
+            modulators: modulated_only(modulators),
             exclusive_class,
             target_key,
             velocity: effective_velocity,
@@ -141,7 +157,6 @@ impl CachedVoice {
             loop_start,
             loop_end,
             playback_step,
-            looping_mode,
         }
     }
 
@@ -199,16 +214,15 @@ impl CachedVoice {
         };
 
         let exclusive_class = generators[gt::EXCLUSIVE_CLASS as usize];
-        // Unknown modes do not loop
-        let mode = generators[gt::SAMPLE_MODES as usize];
-        let looping_mode = if (0..=4).contains(&mode) { mode as SampleLoopingMode } else { 0 };
+        // SampleModes is read at note on, after the modulators
         let playback_step = (sample_rate_hz / playback_rate_hz)
             * (2.0_f64).powf(pitch_correction_cents / 1200.0);
 
         Self {
             sample_data: audio_data,
             generators: vp.generators.to_vec(),
-            modulators: vp.modulators,
+            // Modulators on the generators that are not plain values are ignored (SFe 4.0, section 7.1)
+            modulators: modulated_only(vp.modulators),
             exclusive_class,
             target_key,
             velocity: effective_velocity,
@@ -216,7 +230,6 @@ impl CachedVoice {
             loop_start,
             loop_end,
             playback_step,
-            looping_mode,
         }
     }
 }
@@ -395,27 +408,22 @@ mod tests {
         assert!((cv.playback_step - 0.5).abs() < 1e-9);
     }
 
-    // --- looping_mode ---
+    // --- modulators ---
 
     #[test]
-    fn test_looping_mode_default_is_no_loop() {
-        // sampleModes default is 0 (no loop)
-        let vp = default_voice_params(make_sample(60, 0, 99, 44_100.0, 0.0));
-        let cv = CachedVoice::new(vp, 60, 100, 44_100.0);
-        assert_eq!(cv.looping_mode, 0);
-    }
-
-    #[test]
-    fn test_looping_mode_loop_from_generator() {
-        let mut gens = default_generators();
-        gens[gt::SAMPLE_MODES as usize] = 1;
+    fn test_modulators_on_unmodulated_generators_are_ignored() {
+        use crate::soundbank::basic_soundbank::modulator::DecodedModulator;
         let vp = VoiceParameters {
-            generators: gens,
-            modulators: vec![],
+            generators: default_generators(),
+            modulators: vec![
+                DecodedModulator::new(0x0081, 0, gt::SAMPLE_MODES, 1.0, 0),
+                DecodedModulator::new(0x0081, 0, gt::PAN, 1.0, 0),
+            ],
             sample: make_sample(60, 0, 99, 44_100.0, 0.0),
         };
         let cv = CachedVoice::new(vp, 60, 100, 44_100.0);
-        assert_eq!(cv.looping_mode, 1);
+        assert_eq!(cv.modulators.len(), 1);
+        assert_eq!(cv.modulators[0].destination, gt::PAN);
     }
 
     // --- sample_data ---

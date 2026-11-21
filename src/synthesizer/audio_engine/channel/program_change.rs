@@ -51,8 +51,17 @@ impl MidiChannel {
             channel_system,
             self.channel % 16 == MIDI_DRUM_CHANNEL,
         );
+        // Rust has no `onMissingPreset` callback (API only), so a missing preset is final
         let Some((preset, bank_idx)) = result else {
-            return Vec::new();
+            // A channel without a selected preset plays nothing until a later selection finds one
+            // (SFe 4.0, section 11.2.3)
+            self.preset = None;
+            self.preset_bank_idx = None;
+            // The empty name tells the host there is no preset; the event carries the requested patch
+            return vec![SynthProcessorEvent::ProgramChange(ProgramChangeCallback {
+                patch: self.patch,
+                channel: self.channel,
+            })];
         };
 
         let is_drum = sound_bank_manager.is_drum(preset, bank_idx);

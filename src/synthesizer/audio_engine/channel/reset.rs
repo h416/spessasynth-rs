@@ -13,7 +13,7 @@ use crate::synthesizer::audio_engine::synth_constants::{
     CONTROLLER_TABLE_SIZE, DEFAULT_NRPN, DEFAULT_RPN, MIDI_DRUM_CHANNEL,
 };
 use crate::synthesizer::audio_engine::voice::voice::Voice;
-use crate::synthesizer::types::SynthProcessorEvent;
+use crate::synthesizer::types::{ControllerChangeCallback, SynthProcessorEvent};
 use crate::soundbank::types::MIDISystem;
 use crate::utils::midi_hacks::BankSelectHacks;
 
@@ -56,9 +56,11 @@ pub const DEFAULT_MIDI_CONTROLLERS: [i16; CONTROLLER_TABLE_SIZE] = build_default
 
 /// The CCs reset by the RP-15 Recommended Practice.
 /// Equivalent to: RP_15_RESET_CC_NUMS
-pub const RP_15_RESET_CC_NUMS: [MidiController; 10] = [
+pub const RP_15_RESET_CC_NUMS: [MidiController; 12] = [
     midi_controllers::MODULATION_WHEEL,
+    midi_controllers::MODULATION_WHEEL_LSB,
     midi_controllers::EXPRESSION,
+    midi_controllers::EXPRESSION_LSB,
     midi_controllers::SUSTAIN_PEDAL,
     midi_controllers::PORTAMENTO_ON_OFF,
     midi_controllers::SOSTENUTO_PEDAL,
@@ -110,6 +112,23 @@ impl MidiChannel {
                 continue;
             }
             let reset_value = DEFAULT_MIDI_CONTROLLERS[cc];
+            // The channel mode messages (CC 120 to 127) are not replayed, that would release notes or flip the mono
+            // mode. The mode itself is reset below
+            if (midi_controllers::ALL_SOUND_OFF as usize..=midi_controllers::POLY_MODE_ON as usize).contains(&cc) {
+                if self.midi_controllers[cc] == reset_value {
+                    continue;
+                }
+                self.midi_controllers[cc] = reset_value;
+                // Still tell the host, so it does not keep showing the old value
+                if send_event && enable_event_system {
+                    events.push(SynthProcessorEvent::ControllerChange(ControllerChangeCallback {
+                        channel: self.channel,
+                        controller_number: cc as u8,
+                        controller_value: (reset_value >> 7) as u8,
+                    }));
+                }
+                continue;
+            }
             if self.midi_controllers[cc] != reset_value {
                 // Skip controllers handled separately
                 if cc != midi_controllers::PORTAMENTO_CONTROL as usize
@@ -205,9 +224,12 @@ impl MidiChannel {
             voices,
         );
         self.reset_parameters();
+        self.midi_controllers[midi_controllers::DATA_ENTRY_MSB as usize] = 0;
+        self.midi_controllers[midi_controllers::DATA_ENTRY_LSB as usize] = 0;
 
         // Reset note-tracking state (TS: this.playingNotes.fill(false)).
         self.playing_notes.fill(false);
+        self.last_mono_note = -1;
 
         // Reset drum parameters (SC-88 standard reverb values, etc.)
         self.reset_drum_params(locks.drum, current_system);
@@ -273,8 +295,7 @@ impl MidiChannel {
         for &cc in RP_15_RESET_CC_NUMS.iter() {
             let reset_value = DEFAULT_MIDI_CONTROLLERS[cc as usize];
             if reset_value != self.midi_controllers[cc as usize] && !self.locked_controllers[cc as usize] {
-                // Clear the LSB too, controllerChange only sets the upper 7 bits
-                self.midi_controllers[cc as usize] &= 0x3f80;
+                // The LSB controllers in the list (CC 33 and 43) are independent, so they are reset on their own
                 let mut sub = self.controller_change(
                     cc,
                     (reset_value >> 7) as u8,

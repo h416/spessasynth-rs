@@ -322,13 +322,14 @@ impl BasicPreset {
 
             // ── Preset modulators (local + unique globals) ────────────────
             // The ones that target an instrument-only generator are ignored, so they supersede nothing
-            let mut preset_modulators: Vec<Modulator> = preset_zone
+            let preset_zone_modulators: Vec<Modulator> = preset_zone
                 .zone
                 .modulators
                 .iter()
                 .filter(|m| applies_to_preset(m))
                 .map(Modulator::copy_from)
                 .collect();
+            let mut preset_modulators = Modulator::get_latest_only(&preset_zone_modulators);
             let global_modulators: Vec<Modulator> = self
                 .global_zone
                 .modulators
@@ -336,7 +337,12 @@ impl BasicPreset {
                 .filter(|m| applies_to_preset(m))
                 .cloned()
                 .collect();
-            add_unique_modulators(&mut preset_modulators, &global_modulators);
+            add_unique_modulators(
+                &mut preset_modulators,
+                &Modulator::get_latest_only(&global_modulators),
+            );
+
+            let global_inst_modulators = Modulator::get_latest_only(&instrument.global_zone.modulators);
 
             // ── Instrument zone loop ──────────────────────────────────────
             for inst_zone in &instrument.zones {
@@ -360,13 +366,9 @@ impl BasicPreset {
                 // ── Build modulator list ──────────────────────────────────
                 // Start with local zone modulators, add unique from inst global zone,
                 // then add unique default modulators.
-                let mut modulators: Vec<Modulator> = inst_zone
-                    .zone
-                    .modulators
-                    .iter()
-                    .map(Modulator::copy_from)
-                    .collect();
-                add_unique_modulators(&mut modulators, &instrument.global_zone.modulators);
+                // Modulators, the latter of two identical ones in a list wins
+                let mut modulators = Modulator::get_latest_only(&inst_zone.zone.modulators);
+                add_unique_modulators(&mut modulators, &global_inst_modulators);
                 add_unique_modulators(&mut modulators, default_modulators);
 
                 // Sum preset modulators into instrument modulators (SF2 spec §9.5).
@@ -446,13 +448,16 @@ impl BasicPreset {
         let global_preset_generators: Vec<Generator> =
             self.global_zone.generators.to_vec();
         // Modulators to instrument-only generators are ignored in preset zones
-        let global_preset_modulators: Vec<Modulator> = self
-            .global_zone
-            .modulators
-            .iter()
-            .filter(|m| applies_to_preset(m))
-            .cloned()
-            .collect();
+        // The later of two identical modulators in a zone wins, like in getVoiceParameters
+        let global_preset_modulators: Vec<Modulator> = Modulator::get_latest_only(
+            &self
+                .global_zone
+                .modulators
+                .iter()
+                .filter(|m| applies_to_preset(m))
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
         let global_preset_key_range = self.global_zone.key_range.clone();
         let global_preset_vel_range = self.global_zone.vel_range.clone();
 
@@ -483,20 +488,22 @@ impl BasicPreset {
             add_unique_generators(&mut preset_generators, &global_preset_generators);
 
             // Build preset modulators (local + unique globals).
-            let mut preset_modulators: Vec<Modulator> = preset_zone
-                .zone
-                .modulators
-                .iter()
-                .filter(|m| applies_to_preset(m))
-                .cloned()
-                .collect();
+            let mut preset_modulators: Vec<Modulator> = Modulator::get_latest_only(
+                &preset_zone
+                    .zone
+                    .modulators
+                    .iter()
+                    .filter(|m| applies_to_preset(m))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            );
             add_unique_modulators(&mut preset_modulators, &global_preset_modulators);
 
             // Collect global instrument generators / modulators / ranges.
             let global_inst_generators: Vec<Generator> =
                 instrument.global_zone.generators.to_vec();
             let global_inst_modulators: Vec<Modulator> =
-                instrument.global_zone.modulators.to_vec();
+                Modulator::get_latest_only(&instrument.global_zone.modulators);
             let global_inst_key_range = instrument.global_zone.key_range.clone();
             let global_inst_vel_range = instrument.global_zone.vel_range.clone();
 
@@ -531,7 +538,7 @@ impl BasicPreset {
 
                 // Build instrument modulators (local + unique globals).
                 let mut inst_modulators: Vec<Modulator> =
-                    inst_zone.zone.modulators.to_vec();
+                    Modulator::get_latest_only(&inst_zone.zone.modulators);
                 add_unique_modulators(&mut inst_modulators, &global_inst_modulators);
 
                 // Sum preset modulators (amounts) into the final modulator list.
